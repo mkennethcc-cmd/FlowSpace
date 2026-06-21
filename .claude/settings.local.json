@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem \"C:\\\\Claude Files Download\" -Recurse -Depth 2)",
+      "Bash(Select-Object FullName, PSIsContainer)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(ls \"C:/Claude Files Download/\" 2>/dev/null || echo \"empty or not found\")",
+      "Bash(npm --version)",
+      "Bash(unzip -l files.zip)",
+      "Bash(unzip -o files.zip -d ./extracted/)"
+    ]
+  }
+}
