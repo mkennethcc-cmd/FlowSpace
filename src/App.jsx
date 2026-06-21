@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { supabase } from "./supabase";
+import { db, fromDbTask } from "./db";
+import AuthScreen from "./AuthScreen";
 
 const FontLink = () => (
   <style>{`
@@ -138,10 +141,15 @@ export default function FlowSpace() {
   const [dark, setDark] = useState(true);
   const T = mkT(dark);
   const [view, setView] = useState("myday");
-  const [tasks, setTasks] = useState(mkSeed);
-  const [matrix, setMatrix] = useState(SEED_MATRIX);
-  const [canvasNotes, setCanvasNotes] = useState(SEED_CANVAS);
-  const [notes, setNotes] = useState(SEED_NOTES);
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const isLoadingData = useRef(false);
+  const syncTimers = useRef({});
+  const [tasks, setTasks] = useState([]);
+  const [matrix, setMatrix] = useState([]);
+  const [canvasNotes, setCanvasNotes] = useState([]);
+  const [notes, setNotes] = useState([]);
   const [cats, setCats] = useState(DEFAULT_CATS);
   const [sideOpen, setSideOpen] = useState(true);
   const [selTask, setSelTask] = useState(null);
@@ -172,23 +180,69 @@ export default function FlowSpace() {
     return ()=>window.removeEventListener("keydown",fn);
   },[]);
 
+  useEffect(()=>{
+    supabase.auth.getSession().then(({data:{session}})=>{setUser(session?.user??null);setAuthLoading(false);});
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((_,session)=>setUser(session?.user??null));
+    return ()=>subscription.unsubscribe();
+  },[]);
+
+  useEffect(()=>{
+    if(!user){setTasks([]);setMatrix([]);setCanvasNotes([]);setNotes([]);setCats(DEFAULT_CATS);return;}
+    isLoadingData.current=true; setSyncing(true);
+    Promise.all([db.loadTasks(user.id),db.loadMatrix(user.id),db.loadCanvas(user.id),db.loadNotes(user.id),db.loadCats(user.id)])
+      .then(([t,m,c,n,cats])=>{
+        setTasks(t); setMatrix(m); setCanvasNotes(c); setNotes(n);
+        if(cats) setCats(cats);
+        setSyncing(false);
+        setTimeout(()=>{isLoadingData.current=false;},200);
+      }).catch(()=>setSyncing(false));
+  },[user]);
+
+  useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.m);syncTimers.current.m=setTimeout(()=>db.syncMatrix(matrix,user.id).catch(console.error),1500);},[matrix]);
+  useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.c);syncTimers.current.c=setTimeout(()=>db.syncCanvas(canvasNotes,user.id).catch(console.error),1500);},[canvasNotes]);
+  useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.n);syncTimers.current.n=setTimeout(()=>db.syncNotes(notes,user.id).catch(console.error),1500);},[notes]);
+  useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.k);syncTimers.current.k=setTimeout(()=>db.syncCats(cats,user.id).catch(console.error),1500);},[cats]);
+
+  useEffect(()=>{
+    if(!user) return;
+    const ch=supabase.channel("fs-tasks")
+      .on("postgres_changes",{event:"*",schema:"public",table:"tasks",filter:`user_id=eq.${user.id}`},({eventType,new:n,old:o})=>{
+        if(eventType==="INSERT") setTasks(ts=>ts.some(t=>t.id===n.id)?ts:[fromDbTask(n),...ts]);
+        if(eventType==="UPDATE") setTasks(ts=>ts.map(t=>t.id===n.id?fromDbTask(n):t));
+        if(eventType==="DELETE") setTasks(ts=>ts.filter(t=>t.id!==o.id));
+      }).subscribe();
+    const onVisible=()=>{
+      if(!document.hidden){
+        isLoadingData.current=true;
+        Promise.all([db.loadMatrix(user.id),db.loadCanvas(user.id),db.loadNotes(user.id)])
+          .then(([m,c,n])=>{setMatrix(m);setCanvasNotes(c);setNotes(n);setTimeout(()=>{isLoadingData.current=false;},200);});
+      }
+    };
+    document.addEventListener("visibilitychange",onVisible);
+    return ()=>{supabase.removeChannel(ch);document.removeEventListener("visibilitychange",onVisible);};
+  },[user]);
+
   const addTask = useCallback(()=>{
     if (!input.trim()) return;
     const {title,due:parsed}=parseNL(input);
     const due=parsed||(view==="myday"?tod():null);
-    const t={id:Date.now(),title,done:false,priority:"medium",tag:"work",due,starred:view==="myday",notes:"",color:null,subtasks:[],recurring:null};
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:"work",due,starred:view==="myday",notes:"",color:null,subtasks:[],recurring:null};
     setTasks(ts=>[t,...ts]);
     setInput(""); setXp(x=>x+10); setNewAnim(t.id);
     setTimeout(()=>setNewAnim(null),600);
-  },[input,view]);
+    if(user) db.insertTask(t,user.id).catch(console.error);
+  },[input,view,user]);
 
   const toggleTask = id=>{
-    const was=tasks.find(t=>t.id===id)?.done;
-    setTasks(ts=>ts.map(t=>t.id===id?{...t,done:!t.done}:t));
-    if(!was) setXp(x=>x+20);
+    const task=tasks.find(t=>t.id===id);
+    if(!task) return;
+    const newDone=!task.done;
+    setTasks(ts=>ts.map(t=>t.id===id?{...t,done:newDone}:t));
+    if(newDone) setXp(x=>x+20);
+    if(user) db.updateTask(id,{done:newDone}).catch(console.error);
   };
-  const deleteTask = id=>{setTasks(ts=>ts.filter(t=>t.id!==id));if(selTask?.id===id)setSelTask(null);};
-  const updateTask = (id,patch)=>{setTasks(ts=>ts.map(t=>t.id===id?{...t,...patch}:t));if(selTask?.id===id)setSelTask(s=>({...s,...patch}));};
+  const deleteTask = id=>{setTasks(ts=>ts.filter(t=>t.id!==id));if(selTask?.id===id)setSelTask(null);if(user)db.deleteTask(id).catch(console.error);};
+  const updateTask = (id,patch)=>{setTasks(ts=>ts.map(t=>t.id===id?{...t,...patch}:t));if(selTask?.id===id)setSelTask(s=>({...s,...patch}));if(user)db.updateTask(id,patch).catch(console.error);};
   const reorderTasks = (fromId,toId)=>{
     setTasks(prev=>{
       const arr=[...prev];
@@ -227,6 +281,9 @@ export default function FlowSpace() {
     {id:"analytics",label:"Analytics",icon:"bar",badge:null},
     {id:"settings",label:"Settings",icon:"cog",badge:null},
   ];
+
+  if(authLoading) return <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0c0e16",color:"#7a85a3",fontFamily:"'DM Sans',sans-serif"}}>Loading…</div>;
+  if(!user) return <AuthScreen/>;
 
   return (
     <div style={{fontFamily:"'DM Sans',sans-serif",background:T.bg,color:T.text,height:"100vh",display:"flex",overflow:"hidden",transition:"background .3s,color .3s"}}>
@@ -279,10 +336,17 @@ export default function FlowSpace() {
             </div>
           </div>
         )}
-        <div style={{padding:"10px 6px",borderTop:`1px solid ${T.border}`,display:"flex",gap:4,justifyContent:"center"}}>
-          <SB T={T} onClick={()=>setShowSearch(s=>!s)}><Ico n="search" s={14}/></SB>
-          <SB T={T} onClick={()=>setDark(d=>!d)}><Ico n={dark?"sun":"moon"} s={14}/></SB>
-          <SB T={T} onClick={()=>setSideOpen(s=>!s)}><Ico n="menu" s={14}/></SB>
+        <div style={{padding:"10px 6px",borderTop:`1px solid ${T.border}`,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+          {sideOpen&&<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",width:"100%",padding:"0 4px",marginBottom:2}}>
+            <span style={{fontSize:9,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:130}}>{user?.email}</span>
+            <button onClick={()=>supabase.auth.signOut()} style={{fontSize:9,color:T.danger,background:"none",border:"none",cursor:"pointer",padding:"1px 4px",borderRadius:3,whiteSpace:"nowrap",fontFamily:"'DM Sans',sans-serif"}}>Sign out</button>
+          </div>}
+          <div style={{display:"flex",gap:4}}>
+            {syncing&&<div style={{width:30,height:30,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{width:6,height:6,borderRadius:"50%",background:T.accent,animation:"pulse 1s infinite"}}/></div>}
+            <SB T={T} onClick={()=>setShowSearch(s=>!s)}><Ico n="search" s={14}/></SB>
+            <SB T={T} onClick={()=>setDark(d=>!d)}><Ico n={dark?"sun":"moon"} s={14}/></SB>
+            <SB T={T} onClick={()=>setSideOpen(s=>!s)}><Ico n="menu" s={14}/></SB>
+          </div>
         </div>
       </aside>
       <main style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
