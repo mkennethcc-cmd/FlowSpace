@@ -47,6 +47,7 @@ const Ico = ({ n, s=16, c="currentColor", st={} }) => {
     grip:<><circle cx="9" cy="6" r="1" fill="currentColor"/><circle cx="15" cy="6" r="1" fill="currentColor"/><circle cx="9" cy="12" r="1" fill="currentColor"/><circle cx="15" cy="12" r="1" fill="currentColor"/><circle cx="9" cy="18" r="1" fill="currentColor"/><circle cx="15" cy="18" r="1" fill="currentColor"/></>,
     tag:<><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></>,
     target:<><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></>,
+    edit:<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></>,
     brain:<><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2z"/></>,
     paint:<><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></>,
   };
@@ -60,6 +61,14 @@ const Ico = ({ n, s=16, c="currentColor", st={} }) => {
 const NOTE_COLS = ["#ef4444","#f97316","#f59e0b","#22c55e","#3b82f6","#a855f7","#ec4899","#14b8a6"];
 const CAT_COLORS = ["#0ea5e9","#6366f1","#10b981","#f59e0b","#a855f7","#ef4444","#ec4899","#14b8a6","#f97316","#84cc16"];
 const PRIORITY_COLOR = { high:"#ef4444", medium:"#f59e0b", low:"#22c55e" };
+// Unified priority = Eisenhower quadrant, ranked urgent+important → neither. (#24)
+const QUAD = {
+  q1:{label:"Urgent & Important", short:"Do First",  color:"#ef4444", icon:"🔥"},
+  q3:{label:"Urgent · Not Important", short:"Delegate", color:"#f97316", icon:"📋"},
+  q2:{label:"Important · Not Urgent", short:"Schedule", color:"#facc15", icon:"📅"},
+  q4:{label:"Not Urgent · Not Important", short:"Whenever", color:"#2dd4bf", icon:"🌿"},
+};
+const QUAD_ORDER = ["q1","q3","q2","q4"];
 const MONTHS = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
 const WEEKDAYS = {sun:0,mon:1,tue:2,wed:3,thu:4,fri:5,sat:6};
 
@@ -336,7 +345,7 @@ export default function FlowSpace() {
     const {title,due:parsed}=parseNL(input);
     const due=parsed||(view==="myday"?tod():null);
     const inCat=view.startsWith("cat:")?view.slice(4):null;
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:inCat||guessCat(title,cats),due,starred:view==="myday",notes:"",color:null,subtasks:[],recurring:null};
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:inCat||guessCat(title,cats),due,starred:view==="myday",notes:"",color:null,subtasks:[],recurring:null,quadrant:null};
     setTasks(ts=>[t,...ts]);
     setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
     if(view==="myday"||t.starred) markActiveDay();
@@ -373,6 +382,13 @@ export default function FlowSpace() {
     navigator.vibrate?.(15);
     overdueTasks.forEach(t=>updateTask(t.id,{due:todStr}));
   };
+  const addMatrixTask=(quadrant,text)=>{
+    const title=(text||"").trim(); if(!title) return;
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:guessCat(title,cats),due:null,starred:false,notes:"",color:null,subtasks:[],recurring:null,quadrant};
+    setTasks(ts=>[t,...ts]); awardXp("add-"+t.id,10);
+    if(user) db.insertTask(t,user.id).catch(console.error);
+  };
+  const sendToMyDay=id=>{ navigator.vibrate?.(15); updateTask(id,{starred:true,due:todStr}); markActiveDay(); };
   const level=Math.floor(xp/100)+1, xpLvl=xp%100;
   const pmm=String(Math.floor(pomSecs/60)).padStart(2,"0"), pms=String(pomSecs%60).padStart(2,"0");
 
@@ -501,7 +517,7 @@ export default function FlowSpace() {
           </div>
         )}
         <div style={{flex:1,overflow:"hidden",display:"flex"}}>
-          {view==="matrix"&&<MatrixView T={T} matrix={matrix} setMatrix={setMatrix} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} setTasks={setTasks} cats={cats}/>}
+          {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} sendToMyDay={sendToMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} setTasks={setTasks}/>}
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats}/>}
@@ -661,6 +677,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
   const ov=task.due&&task.due<tod()&&!task.done;
   const catMeta=cats[task.tag];
   const catColor=catMeta?.color||"#6b7280";
+  const qColor=QUAD[task.quadrant]?.color;
   return (
     <div className={entering?"te":""} data-task-id={task.id}
       onPointerDown={onDown?e=>onDown(e,task.id):undefined}
@@ -668,7 +685,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
       style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent",border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:"all .12s",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:dragging?"scale(.98)":"scale(1)",userSelect:"none",WebkitUserSelect:"none",touchAction:"pan-y"}}>
       {task.color&&<div style={{position:"absolute",left:0,top:8,bottom:8,width:3,borderRadius:2,background:task.color}}/>}
       <div style={{color:T.textMuted,opacity:hov?.6:0,transition:"opacity .15s",flexShrink:0,marginTop:1,cursor:"grab",paddingLeft:task.color?4:0}}><Ico n="grip" s={14} c={T.textMuted}/></div>
-      <button onClick={e=>{e.stopPropagation();onToggle(task.id);}} style={{width:19,height:19,borderRadius:5,border:`2px solid ${task.done?T.success:PRIORITY_COLOR[task.priority]||T.border}`,background:task.done?T.success:"transparent",cursor:"pointer",flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s"}}>
+      <button onClick={e=>{e.stopPropagation();onToggle(task.id);}} style={{width:19,height:19,borderRadius:5,border:`2px solid ${task.done?T.success:qColor||T.border}`,background:task.done?T.success:"transparent",cursor:"pointer",flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s"}}>
         {task.done&&<Ico n="check" s={10} c="#fff" st={{animation:"checkB .25s ease"}}/>}
       </button>
       <div style={{flex:1,minWidth:0}}>
@@ -683,7 +700,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
           {task.subtasks?.length>0&&<span style={{fontSize:10,color:T.textMuted}}>{task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</span>}
         </div>
       </div>
-      <div style={{width:6,height:6,borderRadius:"50%",background:PRIORITY_COLOR[task.priority]||T.border,flexShrink:0,marginTop:6}}/>
+      {qColor&&<div title={QUAD[task.quadrant]?.label} style={{width:6,height:6,borderRadius:"50%",background:qColor,flexShrink:0,marginTop:6}}/>}
       {hov&&<button onClick={e=>{e.stopPropagation();onDelete(task.id);}} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",width:24,height:24,borderRadius:6,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",animation:"fadeIn .1s"}}><Ico n="trash" s={11}/></button>}
     </div>
   );
@@ -706,11 +723,15 @@ function TDetail({task,T,cats,onUpdate,onDelete,onClose}) {
           {COLS.map(c=><div key={c||"none"} onClick={()=>onUpdate(task.id,{color:c})} style={{width:18,height:18,borderRadius:4,background:c||T.surface3,border:`2px solid ${task.color===c?T.text:"transparent"}`,cursor:"pointer"}}/>)}
         </div>
       </DL>
-      <DL label="Priority" T={T}>
-        <div style={{display:"flex",gap:4,marginTop:5}}>
-          {["low","medium","high"].map(p=>(
-            <button key={p} onClick={()=>onUpdate(task.id,{priority:p})} style={{flex:1,padding:"5px 0",borderRadius:6,border:`1px solid ${task.priority===p?PRIORITY_COLOR[p]:T.border}`,background:task.priority===p?PRIORITY_COLOR[p]+"22":"transparent",color:task.priority===p?PRIORITY_COLOR[p]:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif",textTransform:"capitalize"}}>{p}</button>
-          ))}
+      <DL label="Priority (Eisenhower)" T={T}>
+        <div style={{display:"flex",flexDirection:"column",gap:4,marginTop:5}}>
+          {QUAD_ORDER.map(q=>{const m=QUAD[q],on=task.quadrant===q;return(
+            <button key={q} onClick={()=>onUpdate(task.id,{quadrant:on?null:q})} style={{display:"flex",alignItems:"center",gap:7,padding:"6px 9px",borderRadius:7,border:`1px solid ${on?m.color:T.border}`,background:on?m.color+"22":"transparent",color:on?m.color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:on?700:500,fontFamily:"'DM Sans',sans-serif",textAlign:"left"}}>
+              <span style={{width:8,height:8,borderRadius:"50%",background:m.color,flexShrink:0}}/>
+              <span style={{flex:1}}>{m.label}</span>
+              <span style={{fontSize:9,opacity:.7}}>{m.short}</span>
+            </button>
+          );})}
         </div>
       </DL>
       <DL label="Due Date" T={T}>
@@ -763,7 +784,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onClose}) {
 }
 const DL=({label,T,children})=><div><span style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>{label}</span>{children}</div>;
 
-function MatrixView({T,matrix,setMatrix,canvasNotes,setCanvasNotes,setTasks,cats}) {
+function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,sendToMyDay,canvasNotes,setCanvasNotes,setTasks}) {
   const [tab,setTab]=useState("matrix");
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
@@ -771,7 +792,7 @@ function MatrixView({T,matrix,setMatrix,canvasNotes,setCanvasNotes,setTasks,cats
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
           <div>
             <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:19,fontWeight:700,letterSpacing:"-.4px"}}>{tab==="matrix"?"Priority Matrix":"Freeform Canvas"}</h1>
-            <p style={{fontSize:11,color:T.textMuted,marginTop:1}}>{tab==="matrix"?"Eisenhower Matrix · drag notes between quadrants · N = new note":"Double-click to create note · drag freely · purple + converts to task"}</p>
+            <p style={{fontSize:11,color:T.textMuted,marginTop:1}}>{tab==="matrix"?"Real tasks · drag between quadrants to set priority · also shown in All Tasks":"Double-click to create note · drag freely · purple → converts to task"}</p>
           </div>
           <div style={{display:"flex",gap:4,paddingBottom:2}}>
             {["matrix","canvas"].map(t=>(
@@ -783,91 +804,88 @@ function MatrixView({T,matrix,setMatrix,canvasNotes,setCanvasNotes,setTasks,cats
         </div>
       </div>
       {tab==="matrix"
-        ?<EisenhowerMatrix T={T} notes={matrix} setNotes={setMatrix} setTasks={setTasks} cats={cats}/>
+        ?<EisenhowerMatrix T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} sendToMyDay={sendToMyDay}/>
         :<FreeformCanvas T={T} notes={canvasNotes} setNotes={setCanvasNotes} setTasks={setTasks}/>}
     </div>
   );
 }
 
-function EisenhowerMatrix({T,notes,setNotes,setTasks,cats}) {
+function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,sendToMyDay}) {
   const [addingIn,setAddingIn]=useState(null);
   const [newText,setNewText]=useState("");
   const [dragOver,setDragOver]=useState(null);
-  const [dragNoteId,setDragNoteId]=useState(null);
+  const [dragId,setDragId]=useState(null);
   const [editId,setEditId]=useState(null);
   const dragOverRef=useRef(null);
   useEffect(()=>{
     const fn=e=>{if(e.key==="n"&&!e.metaKey&&!e.ctrlKey&&document.activeElement.tagName!=="INPUT"&&document.activeElement.tagName!=="TEXTAREA")setAddingIn("q1");};
     window.addEventListener("keydown",fn); return ()=>window.removeEventListener("keydown",fn);
   },[]);
-  const QUADS=[
-    {id:"q1",label:"Urgent + Important",sub:"Do First",color:"#ef4444",icon:"🔥"},
-    {id:"q2",label:"Not Urgent + Important",sub:"Schedule",color:"#3b82f6",icon:"📌"},
-    {id:"q3",label:"Urgent + Not Important",sub:"Delegate",color:"#f59e0b",icon:"📋"},
-    {id:"q4",label:"Not Urgent + Not Important",sub:"Eliminate",color:"#6b7280",icon:"🗑️"},
-  ];
-  const addNote=qid=>{if(!newText.trim())return;setNotes(n=>[...n,{id:Date.now(),q:qid,text:newText.trim(),color:NOTE_COLS[Math.floor(Math.random()*NOTE_COLS.length)]}]);setNewText("");setAddingIn(null);};
-  const convertToTask=note=>{setTasks(ts=>[{id:Date.now(),title:note.text,done:false,priority:note.q==="q1"?"high":note.q==="q2"?"medium":"low",tag:"work",due:tod(),starred:note.q==="q1",notes:"From Matrix",color:note.color,subtasks:[],recurring:null},...ts]);setNotes(n=>n.filter(x=>x.id!==note.id));};
-  const onNoteDown=(e,note)=>{
+  const addNote=qid=>{const txt=newText.trim();if(!txt)return;addMatrixTask(qid,txt);setNewText("");setAddingIn(null);};
+  const onNoteDown=(e,task)=>{
     if(e.target.closest("button")||e.target.tagName==="TEXTAREA") return;
     startPressDrag(e,()=>{
-      setDragNoteId(note.id); navigator.vibrate?.(20);
+      setDragId(task.id); navigator.vibrate?.(20);
       runDrag(
         ev=>{ const el=document.elementFromPoint(ev.clientX,ev.clientY); const qd=el&&el.closest("[data-quadrant]"); dragOverRef.current=qd?qd.getAttribute("data-quadrant"):null; setDragOver(dragOverRef.current); },
-        ()=>{ const q=dragOverRef.current; if(q) setNotes(n=>n.map(x=>x.id===note.id?{...x,q}:x)); dragOverRef.current=null; setDragNoteId(null); setDragOver(null); }
+        ()=>{ const q=dragOverRef.current; if(q&&q!==task.quadrant) updateTask(task.id,{quadrant:q}); dragOverRef.current=null; setDragId(null); setDragOver(null); }
       );
     });
   };
   return (
     <div style={{flex:1,display:"grid",gridTemplateColumns:"1fr 1fr",gridTemplateRows:"1fr 1fr",gap:1,background:T.border,overflow:"hidden"}}>
-      {QUADS.map(q=>(
-        <div key={q.id} data-quadrant={q.id}
-          style={{background:dragOver===q.id?q.color+"12":T.bg,transition:"background .15s",display:"flex",flexDirection:"column",overflow:"hidden",outline:dragOver===q.id?`2px dashed ${q.color}44`:"none",outlineOffset:"-2px"}}>
-          <div style={{padding:"9px 14px 7px",borderBottom:`1px solid ${T.border}`,background:q.color+"09",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+      {QUAD_ORDER.map(qid=>{const q=QUAD[qid];return(
+        <div key={qid} data-quadrant={qid}
+          style={{background:dragOver===qid?q.color+"12":T.bg,transition:"background .15s",display:"flex",flexDirection:"column",overflow:"hidden",outline:dragOver===qid?`2px dashed ${q.color}66`:"none",outlineOffset:"-2px"}}>
+          <div style={{padding:"9px 14px 7px",borderBottom:`1px solid ${T.border}`,background:q.color+"12",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
             <div style={{display:"flex",alignItems:"center",gap:6}}>
               <span style={{fontSize:11,fontWeight:700,color:q.color}}>{q.icon} {q.label}</span>
-              <span style={{fontSize:9,color:T.textMuted,background:T.surface2,padding:"1px 6px",borderRadius:20,border:`1px solid ${T.border}`}}>{q.sub}</span>
+              <span style={{fontSize:9,color:T.textMuted,background:T.surface2,padding:"1px 6px",borderRadius:20,border:`1px solid ${T.border}`}}>{q.short}</span>
             </div>
-            <button onClick={()=>{setAddingIn(q.id);setNewText("");}} style={{width:22,height:22,borderRadius:5,border:"none",cursor:"pointer",background:q.color+"22",color:q.color,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="plus" s={12} c={q.color}/></button>
+            <button onClick={()=>{setAddingIn(qid);setNewText("");}} style={{width:22,height:22,borderRadius:5,border:"none",cursor:"pointer",background:q.color+"22",color:q.color,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="plus" s={12} c={q.color}/></button>
           </div>
           <div style={{flex:1,padding:10,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:7,alignContent:"flex-start"}}>
-            {notes.filter(n=>n.q===q.id).map(note=>(
-              <MNote key={note.id} note={note} T={T} onDown={onNoteDown} dragging={dragNoteId===note.id} onDelete={id=>setNotes(n=>n.filter(x=>x.id!==id))} onConvert={()=>convertToTask(note)} editing={editId===note.id} onEdit={()=>setEditId(note.id)} onSave={txt=>{setNotes(n=>n.map(x=>x.id===note.id?{...x,text:txt}:x));setEditId(null);}}/>
+            {tasks.filter(t=>t.quadrant===qid&&!t.done).map(task=>(
+              <MNote key={task.id} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} dragging={dragId===task.id} onRemove={()=>updateTask(task.id,{quadrant:null})} onDelete={()=>deleteTask(task.id)} onToMyDay={()=>sendToMyDay(task.id)} editing={editId===task.id} onEdit={()=>setEditId(task.id)} onSave={txt=>{const t=txt.trim();if(t)updateTask(task.id,{title:t});setEditId(null);}}/>
             ))}
-            {addingIn===q.id&&(
+            {addingIn===qid&&(
               <div style={{width:"100%",animation:"slideIn .2s ease"}}>
-                <textarea autoFocus value={newText} onChange={e=>setNewText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();addNote(q.id);}if(e.key==="Escape")setAddingIn(null);}} placeholder="Note… Enter to save" style={{width:"100%",minHeight:58,padding:"7px",borderRadius:7,border:`1px solid ${q.color}88`,background:q.color+"11",color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"none"}}/>
+                <textarea autoFocus value={newText} onChange={e=>setNewText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();addNote(qid);}if(e.key==="Escape")setAddingIn(null);}} placeholder="New task… Enter to save" style={{width:"100%",minHeight:58,padding:"7px",borderRadius:7,border:`1px solid ${q.color}88`,background:q.color+"11",color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"none"}}/>
                 <div style={{display:"flex",gap:5,marginTop:4}}>
-                  <button onClick={()=>addNote(q.id)} style={{flex:1,padding:"5px",borderRadius:6,border:"none",cursor:"pointer",background:q.color,color:"#fff",fontSize:11,fontWeight:700}}>Save</button>
+                  <button onClick={()=>addNote(qid)} style={{flex:1,padding:"5px",borderRadius:6,border:"none",cursor:"pointer",background:q.color,color:"#fff",fontSize:11,fontWeight:700}}>Save</button>
                   <button onClick={()=>setAddingIn(null)} style={{flex:1,padding:"5px",borderRadius:6,border:`1px solid ${T.border}`,cursor:"pointer",background:"transparent",color:T.textMuted,fontSize:11}}>Cancel</button>
                 </div>
               </div>
             )}
+            {tasks.filter(t=>t.quadrant===qid&&!t.done).length===0&&addingIn!==qid&&(
+              <div style={{width:"100%",textAlign:"center",color:T.textMuted,fontSize:11,padding:"14px 0",opacity:.6}}>Drag tasks here or tap +</div>
+            )}
           </div>
         </div>
-      ))}
+      );})}
     </div>
   );
 }
 
-function MNote({note,T,onDelete,onConvert,editing,onEdit,onSave,onDown,dragging}) {
+function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit,onSave,onDown,dragging}) {
   const [hov,setHov]=useState(false);
-  const [et,setEt]=useState(note.text);
+  const [et,setEt]=useState(task.title);
   if (editing) return (
     <div style={{width:"100%"}}>
-      <textarea autoFocus value={et} onChange={e=>setEt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();onSave(et);}if(e.key==="Escape")onSave(note.text);}} style={{width:"100%",minHeight:58,padding:"7px",borderRadius:7,border:`1px solid ${note.color}88`,background:note.color+"11",color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"none"}}/>
+      <textarea autoFocus value={et} onChange={e=>setEt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();onSave(et);}if(e.key==="Escape")onSave(task.title);}} onBlur={()=>onSave(et)} style={{width:"100%",minHeight:58,padding:"7px",borderRadius:7,border:`1px solid ${qColor}88`,background:qColor+"11",color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"none"}}/>
     </div>
   );
   return (
-    <div onPointerDown={e=>onDown?.(e,note)}
+    <div onPointerDown={e=>onDown?.(e,task)}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
-      style={{padding:"7px 9px",borderRadius:8,background:note.color+"1a",border:`1px solid ${note.color}44`,fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:150,cursor:"grab",transition:"transform .15s,box-shadow .15s",transform:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",boxShadow:dragging?`0 10px 22px ${note.color}55`:hov?`0 6px 14px ${note.color}33`:"none",opacity:dragging?.85:1,animation:"slideIn .2s ease",userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
-      <div style={{borderLeft:`3px solid ${note.color}`,paddingLeft:6}}>{note.text}</div>
+      style={{padding:"7px 9px",borderRadius:8,background:qColor+"1a",border:`1px solid ${qColor}44`,fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:160,cursor:"grab",transition:"transform .15s,box-shadow .15s",transform:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",boxShadow:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",opacity:dragging?.85:1,animation:"slideIn .2s ease",userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
+      <div style={{borderLeft:`3px solid ${qColor}`,paddingLeft:6}}>{task.title}</div>
+      {catMeta&&<div style={{marginTop:4,fontSize:9,color:catMeta.color,fontWeight:600}}>{catMeta.icon} {task.tag}</div>}
       {hov&&(
         <div style={{position:"absolute",top:-10,right:-4,display:"flex",gap:2,zIndex:10,animation:"fadeIn .1s"}}>
-          <button title="Edit" onClick={onEdit} style={{width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:T.surface,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="zap" s={9}/></button>
-          <button title="To Task" onClick={onConvert} style={{width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:"#818cf8",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="plus" s={9} c="#fff"/></button>
-          <button title="Delete" onClick={()=>onDelete(note.id)} style={{width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:T.surface,color:T.danger,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="x" s={9}/></button>
+          <button title="Edit" onClick={onEdit} style={{width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:T.surface,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="edit" s={9}/></button>
+          <button title="Add to My Day" onClick={onToMyDay} style={{width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:"#f59e0b",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="sun" s={9} c="#fff"/></button>
+          <button title="Remove from board" onClick={onRemove} style={{width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:T.surface,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="x" s={9}/></button>
         </div>
       )}
     </div>

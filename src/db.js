@@ -4,6 +4,7 @@ export const fromDbTask = r => ({
   id: r.id, title: r.title, done: r.done, priority: r.priority,
   tag: r.tag, due: r.due, starred: r.starred, notes: r.notes || "",
   color: r.color, subtasks: r.subtasks || [], recurring: r.recurring,
+  quadrant: r.quadrant || null,
 });
 
 const fromDbMatrix = r => ({ id: r.id, q: r.quadrant, text: r.text, color: r.color });
@@ -21,11 +22,12 @@ export const db = {
       priority: t.priority, tag: t.tag, due: t.due || null,
       starred: t.starred, notes: t.notes || "", color: t.color || null,
       subtasks: t.subtasks || [], recurring: t.recurring || null,
+      quadrant: t.quadrant || null,
     });
   },
   async updateTask(id, p) {
     const u = {};
-    ["title", "done", "priority", "tag", "starred", "notes", "recurring"].forEach(k => { if (p[k] !== undefined) u[k] = p[k]; });
+    ["title", "done", "priority", "tag", "starred", "notes", "recurring", "quadrant"].forEach(k => { if (p[k] !== undefined) u[k] = p[k]; });
     if (p.due !== undefined) u.due = p.due || null;
     if (p.color !== undefined) u.color = p.color || null;
     if (p.subtasks !== undefined) u.subtasks = p.subtasks;
