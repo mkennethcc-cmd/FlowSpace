@@ -227,6 +227,29 @@ const mkT = (d, p=PALETTES.lavender) => ({
   danger:"#ef4444", success:"#22c55e", warning:"#f59e0b", info:"#3b82f6",
 });
 
+// Confetti burst (no library) — used when My Day hits 100%.
+function fireConfetti(){
+  const colors=["#c084fc","#818cf8","#fda4af","#6ee7b7","#fcd34d","#93c5fd","#fb7185"];
+  for(let i=0;i<40;i++){
+    const d=document.createElement("div");
+    const sz=6+Math.random()*8;
+    d.style.cssText=`position:fixed;left:50%;top:16%;width:${sz}px;height:${sz}px;background:${colors[i%colors.length]};border-radius:${Math.random()<.5?"50%":"2px"};pointer-events:none;z-index:3000;`;
+    document.body.appendChild(d);
+    const x=(Math.random()-0.5)*640, y=280+Math.random()*340, rot=Math.random()*720;
+    d.animate([{transform:"translate(-50%,0) rotate(0)",opacity:1},{transform:`translate(calc(-50% + ${x}px),${y}px) rotate(${rot}deg)`,opacity:0}],{duration:1100+Math.random()*800,easing:"cubic-bezier(.2,.6,.3,1)"}).onfinish=()=>d.remove();
+  }
+}
+
+// Next due date for a recurring task.
+function nextDue(due, rec){
+  const base = due ? new Date(due+"T12:00:00") : new Date();
+  if(rec==="daily") base.setDate(base.getDate()+1);
+  else if(rec==="weekly") base.setDate(base.getDate()+7);
+  else if(rec==="monthly") base.setMonth(base.getMonth()+1);
+  else return null;
+  return base.toISOString().split("T")[0];
+}
+
 // Joyful little major-arpeggio chime via Web Audio (no asset). (#29)
 let _actx=null;
 function playComplete(){
@@ -248,6 +271,9 @@ export default function FlowSpace() {
   useEffect(()=>{ try{localStorage.setItem("fs_scheme",scheme);}catch{} },[scheme]);
   const T = mkT(dark, PALETTES[scheme]||PALETTES.lavender);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
+  const showToast = (msg, undo) => { setToast({msg, undo}); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(()=>setToast(null), 5000); };
   const [view, setView] = useState("myday");
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -387,10 +413,45 @@ export default function FlowSpace() {
     if(!task) return;
     const newDone=!task.done;
     setTasks(ts=>ts.map(t=>t.id===id?{...t,done:newDone}:t));
-    if(newDone){ awardXp("done-"+id,20); markActiveDay(); navigator.vibrate?.(30); playComplete(); }
+    if(newDone){
+      awardXp("done-"+id,20); markActiveDay(); navigator.vibrate?.(30); playComplete();
+      if(task.recurring && !awardedRef.current.has("recur-"+id)){
+        awardedRef.current.add("recur-"+id);
+        const nd=nextDue(task.due,task.recurring);
+        if(nd){ const clone={...task,id:crypto.randomUUID(),done:false,due:nd,quadrant:task.quadrant||null,subtasks:(task.subtasks||[]).map(s=>({...s,done:false}))};
+          setTasks(ts=>[clone,...ts]); if(user) db.insertTask(clone,user.id).catch(console.error);
+          showToast(`↻ Next "${task.title}" scheduled for ${fmtDate(nd)}`);
+        }
+      }
+    }
     if(user) db.updateTask(id,{done:newDone}).catch(console.error);
   };
-  const deleteTask = id=>{setTasks(ts=>ts.filter(t=>t.id!==id));if(selTask?.id===id)setSelTask(null);if(user)db.deleteTask(id).catch(console.error);};
+  const deleteTask = id=>{
+    const t=tasks.find(x=>x.id===id);
+    setTasks(ts=>ts.filter(x=>x.id!==id)); if(selTask?.id===id)setSelTask(null);
+    if(user)db.deleteTask(id).catch(console.error);
+    if(t) showToast("Task deleted", ()=>{ setTasks(ts=>[t,...ts]); if(user) db.insertTask(t,user.id).catch(console.error); setToast(null); });
+  };
+  const duplicateTask = task=>{ const c={...task,id:crypto.randomUUID(),done:false,title:task.title+" (copy)"}; setTasks(ts=>[c,...ts]); if(user) db.insertTask(c,user.id).catch(console.error); showToast("Task duplicated"); };
+  const clearCompleted = ()=>{ const done=tasks.filter(t=>t.done); if(!done.length){showToast("No completed tasks");return;} setTasks(ts=>ts.filter(t=>!t.done)); if(user) done.forEach(t=>db.deleteTask(t.id).catch(()=>{})); showToast(`Cleared ${done.length} completed`); };
+  const exportData = ()=>{
+    const data={app:"FlowSpace",exportedAt:new Date().toISOString(),tasks,notes,cats,canvasNotes};
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="flowspace-backup.json"; a.click(); URL.revokeObjectURL(url);
+    showToast("Backup downloaded");
+  };
+  const importData = file=>{
+    const reader=new FileReader();
+    reader.onload=()=>{ try{
+      const d=JSON.parse(reader.result);
+      if(Array.isArray(d.tasks)){ const have=new Set(tasks.map(t=>t.id)); const inc=d.tasks.filter(t=>!have.has(t.id)); setTasks(ts=>[...inc,...ts]); if(user) inc.forEach(t=>db.insertTask(t,user.id).catch(()=>{})); }
+      if(Array.isArray(d.notes)){ const have=new Set(notes.map(n=>n.id)); setNotes(ns=>[...d.notes.filter(n=>!have.has(n.id)),...ns]); }
+      if(Array.isArray(d.canvasNotes)){ const have=new Set(canvasNotes.map(n=>n.id)); setCanvasNotes(ns=>[...d.canvasNotes.filter(n=>!have.has(n.id)),...ns]); }
+      if(d.cats&&typeof d.cats==="object"){ setCats(c=>({...c,...d.cats})); }
+      showToast("Data imported ✓");
+    }catch{ showToast("Import failed — invalid file"); } };
+    reader.readAsText(file);
+  };
   const updateTask = (id,patch)=>{setTasks(ts=>ts.map(t=>t.id===id?{...t,...patch}:t));if(selTask?.id===id)setSelTask(s=>({...s,...patch}));if(user)db.updateTask(id,patch).catch(console.error);};
   const reorderTasks = (fromId,toId)=>{
     setTasks(prev=>{
@@ -406,6 +467,9 @@ export default function FlowSpace() {
   const upcoming=tasks.filter(t=>t.due&&t.due>todStr);
   const completed=tasks.filter(t=>t.done);
   const overdueTasks=tasks.filter(t=>!t.done&&t.due&&t.due<todStr);
+  const myDayAllDone=myDay.length>0&&myDay.every(t=>t.done);
+  const prevMyDayDone=useRef(false);
+  useEffect(()=>{ if(myDayAllDone&&!prevMyDayDone.current) fireConfetti(); prevMyDayDone.current=myDayAllDone; },[myDayAllDone]);
   const carryOver=()=>{
     if(!overdueTasks.length) return;
     navigator.vibrate?.(15);
@@ -454,6 +518,13 @@ export default function FlowSpace() {
   return (
     <div style={{fontFamily:"'DM Sans',sans-serif",background:T.bg,color:T.text,height:"100%",display:"flex",overflow:"hidden",transition:"background .3s,color .3s"}}>
       <FontLink/>
+      {toast&&(
+        <div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",zIndex:2000,display:"flex",alignItems:"center",gap:12,background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"10px 14px",boxShadow:"0 10px 30px rgba(0,0,0,.4)",animation:"slideIn .2s ease",maxWidth:"90vw"}}>
+          <span style={{fontSize:13,color:T.text}}>{toast.msg}</span>
+          {toast.undo&&<button onClick={toast.undo} style={{background:T.accentGlow,color:T.accent,border:"none",borderRadius:7,padding:"4px 12px",cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Undo</button>}
+          <button onClick={()=>setToast(null)} style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex"}}><Ico n="x" s={13}/></button>
+        </div>
+      )}
       {aboutOpen&&<AboutModal T={T} onClose={()=>setAboutOpen(false)}/>}
       {cmdOpen&&<CmdPalette T={T} tasks={tasks} onClose={()=>setCmdOpen(false)} onGo={v=>{setView(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}}/>}
       <aside style={{width:sideOpen?224:60,transition:"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:30}}>
@@ -550,9 +621,9 @@ export default function FlowSpace() {
           {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} sendToMyDay={sendToMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} setTasks={setTasks}/>}
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
-          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme}/>}
+          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted}/>}
           {(["myday","upcoming","all","completed"].includes(view)||view.startsWith("cat:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length}/>
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length}/>
           )}
         </div>
       </main>
@@ -645,9 +716,10 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,selTask,setSelTask,newAnim,cats,onCarryOver,overdueCount}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onCarryOver,overdueCount}) {
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
+  const [sort,setSort]=useState("smart");
   const [dragId,setDragId]=useState(null);
   const [dropId,setDropId]=useState(null);
   const dragIdRef=useRef(null);
@@ -658,6 +730,17 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const titleLabel=catKey?`${cats[catKey]?.icon||"📁"} ${catKey.charAt(0).toUpperCase()+catKey.slice(1)}`:labels[view];
   let show=filter==="active"?tasks.filter(t=>!t.done):filter==="done"?tasks.filter(t=>t.done):tasks;
   if(view==="all"&&catFilter) show=show.filter(t=>t.tag===catFilter);
+  const QRANK={q1:0,q3:1,q2:2,q4:3};
+  const sortList=arr=>{
+    const a=[...arr];
+    if(sort==="priority") a.sort((x,y)=>(QRANK[x.quadrant]??9)-(QRANK[y.quadrant]??9));
+    else if(sort==="az") a.sort((x,y)=>x.title.localeCompare(y.title));
+    else if(sort==="due") a.sort((x,y)=>{if(!x.due&&!y.due)return 0;if(!x.due)return 1;if(!y.due)return -1;return x.due.localeCompare(y.due);});
+    return a;
+  };
+  const dayTotal=view==="myday"?tasks.length:0;
+  const dayDone=view==="myday"?tasks.filter(t=>t.done).length:0;
+  const dayPct=dayTotal?Math.round(dayDone/dayTotal*100):0;
 
   const onCardDown=(e,id)=>{
     if(e.target.closest("button")) return;
@@ -677,9 +760,27 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
       <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
         <div style={{marginBottom:18}}>
           {view==="myday"&&<div style={{fontSize:12,color:T.textMuted,fontWeight:500,marginBottom:3}}>{new Date().getHours()<12?"Good morning 🌤":new Date().getHours()<17?"Keep it up 💪":"Good evening 🌙"}</div>}
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
-            <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:22,fontWeight:700,letterSpacing:"-.5px"}}>{titleLabel}</h1>
-            <span style={{fontSize:11,color:T.textMuted}}>Sorted by date · drag ⠿ to reorder</span>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{display:"flex",alignItems:"center",gap:12}}>
+              <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:22,fontWeight:700,letterSpacing:"-.5px"}}>{titleLabel}</h1>
+              {view==="myday"&&dayTotal>0&&(
+                <div style={{position:"relative",width:34,height:34}} title={`${dayDone}/${dayTotal} done`}>
+                  <svg width="34" height="34" style={{transform:"rotate(-90deg)"}}>
+                    <circle cx="17" cy="17" r="14" fill="none" stroke={T.surface3} strokeWidth="4"/>
+                    <circle cx="17" cy="17" r="14" fill="none" stroke={T.accent} strokeWidth="4" strokeLinecap="round" strokeDasharray={2*Math.PI*14} strokeDashoffset={2*Math.PI*14*(1-dayPct/100)} style={{transition:"stroke-dashoffset .5s ease"}}/>
+                  </svg>
+                  <span style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:700,color:T.accent}}>{dayPct}%</span>
+                </div>
+              )}
+            </div>
+            {view!=="completed"&&(
+              <select value={sort} onChange={e=>setSort(e.target.value)} style={{fontSize:11,color:T.textMuted,background:T.surface2,border:`1px solid ${T.border}`,borderRadius:8,padding:"4px 8px",fontFamily:"'DM Sans',sans-serif",outline:"none",cursor:"pointer"}}>
+                <option value="smart">Smart sort</option>
+                <option value="due">By due date</option>
+                <option value="priority">By priority</option>
+                <option value="az">A → Z</option>
+              </select>
+            )}
           </div>
           <div style={{fontSize:12,color:T.textMuted,marginTop:2}}>{new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}{view==="myday"&&` · ${tasks.filter(t=>!t.done).length} remaining`}</div>
         </div>
@@ -713,9 +814,9 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           </div>
         )}
         <div style={{display:"flex",flexDirection:"column",gap:4}}>
-          {show.filter(t=>!t.done).map(task=>(
+          {sortList(show.filter(t=>!t.done)).map(task=>(
             <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id} dropTarget={dropId===task.id}
-              onDown={onCardDown}/>
+              onDown={sort==="smart"?onCardDown:undefined}/>
           ))}
           {show.filter(t=>t.done).length>0&&<>
             <div style={{fontSize:10,color:T.textMuted,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",padding:"10px 2px 4px",display:"flex",alignItems:"center",gap:5}}>
@@ -734,7 +835,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           )}
         </div>
       </div>
-      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onClose={()=>setSelTask(null)}/>}
+      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onClose={()=>setSelTask(null)}/>}
     </div>
   );
 }
@@ -773,7 +874,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
   );
 }
 
-function TDetail({task,T,cats,onUpdate,onDelete,onClose}) {
+function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onClose}) {
   const [nts,setNts]=useState(task.notes||"");
   const [ns,setNs]=useState("");
   useEffect(()=>setNts(task.notes||""),[task.id]);
@@ -802,7 +903,12 @@ function TDetail({task,T,cats,onUpdate,onDelete,onClose}) {
         </div>
       </DL>
       <DL label="Due Date" T={T}>
-        <input type="date" value={task.due||""} onChange={e=>onUpdate(task.id,{due:e.target.value})} style={{marginTop:5,width:"100%",padding:"7px 9px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+        <div style={{display:"flex",gap:4,marginTop:5,marginBottom:5,flexWrap:"wrap"}}>
+          {[["Today",tod()],["Tomorrow",addDays(1)],["+1 week",addDays(7)],["Clear",""]].map(([lbl,val])=>(
+            <button key={lbl} onClick={()=>onUpdate(task.id,{due:val||null})} style={{padding:"3px 9px",borderRadius:7,border:`1px solid ${task.due===val&&val?T.accent:T.border}`,background:task.due===val&&val?T.accentGlow:"transparent",color:task.due===val&&val?T.accent:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{lbl}</button>
+          ))}
+        </div>
+        <input type="date" value={task.due||""} onChange={e=>onUpdate(task.id,{due:e.target.value})} style={{width:"100%",padding:"7px 9px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
       </DL>
       <DL label="Recurring" T={T}>
         <select value={task.recurring||""} onChange={e=>onUpdate(task.id,{recurring:e.target.value||null})} style={{marginTop:5,width:"100%",padding:"7px 9px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",cursor:"pointer"}}>
@@ -841,6 +947,9 @@ function TDetail({task,T,cats,onUpdate,onDelete,onClose}) {
       <div style={{display:"flex",gap:6}}>
         <button onClick={()=>onUpdate(task.id,{starred:!task.starred})} style={{flex:1,padding:"7px",borderRadius:8,border:`1px solid ${task.starred?"#f59e0b":T.border}`,background:task.starred?"#f59e0b22":"transparent",color:task.starred?"#f59e0b":T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
           <Ico n="star" s={12} c={task.starred?"#f59e0b":undefined} st={task.starred?{fill:"#f59e0b"}:{}}/>Star
+        </button>
+        <button onClick={()=>{onDuplicate?.(task);onClose();}} style={{flex:1,padding:"7px",borderRadius:8,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
+          <Ico n="layers" s={12}/>Copy
         </button>
         <button onClick={()=>onDelete(task.id)} style={{flex:1,padding:"7px",borderRadius:8,border:`1px solid ${T.danger}22`,background:T.danger+"11",color:T.danger,cursor:"pointer",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
           <Ico n="trash" s={12} c={T.danger}/>Delete
@@ -1266,7 +1375,8 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
   );
 }
 
-function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme}) {
+function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onImport,onClearCompleted}) {
+  const importRef=useRef(null);
   const [notifs,setNotifs]=useState(true);
   const [focus,setFocus]=useState(false);
   const [weekly,setWeekly]=useState(true);
@@ -1346,8 +1456,9 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme}) {
           </div>
         )}]},
         {title:"Data",rows:[
-          {label:"Export Data",desc:"Download tasks, notes & settings",el:<button style={{padding:"5px 11px",borderRadius:7,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:12}}>Export JSON</button>},
-          {label:"Clear Completed",desc:"Remove all completed tasks",el:<button style={{padding:"5px 11px",borderRadius:7,border:`1px solid ${T.danger}33`,background:T.danger+"11",color:T.danger,cursor:"pointer",fontSize:12}}>Clear</button>},
+          {label:"Export Data",desc:"Download a full backup file",el:<button onClick={onExport} style={{padding:"5px 11px",borderRadius:7,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:12}}>Export JSON</button>},
+          {label:"Import Data",desc:"Restore from a backup file",el:<><input ref={importRef} type="file" accept="application/json" style={{display:"none"}} onChange={e=>{if(e.target.files[0]){onImport(e.target.files[0]);e.target.value="";}}}/><button onClick={()=>importRef.current?.click()} style={{padding:"5px 11px",borderRadius:7,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:12}}>Import JSON</button></>},
+          {label:"Clear Completed",desc:"Remove all completed tasks",el:<button onClick={onClearCompleted} style={{padding:"5px 11px",borderRadius:7,border:`1px solid ${T.danger}33`,background:T.danger+"11",color:T.danger,cursor:"pointer",fontSize:12}}>Clear</button>},
         ]},
       ].map(s=>(
         <div key={s.title} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"0 16px",marginBottom:12}}>
