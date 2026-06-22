@@ -207,18 +207,47 @@ const DEFAULT_CATS = {
 };
 const CAT_ICONS = ["💼","📚","🏃","💰","🏠","❤️","🎯","✈️","🛒","🎨","🎮","🍔","☕","🌱","🐶","📞","🎵","⚽","💪","🧘","📝","💻","📅","🔥","⭐","🎓","🏥","🍳","🚗","🎁","📖","🧹","💡","🎬","🎉","🌍","🏋️","🧠","📷","🎸","🍕","🛏️","🐱","✏️","🔧","📌","🏆","🌸"];
 
-const mkT = d => ({
+// Accent palettes (#25). "lavender" = the original look; the rest are pastel.
+const PALETTES = {
+  lavender: {name:"Lavender", accent:"#c084fc", accentAlt:"#818cf8"},
+  rose:     {name:"Rose",     accent:"#fda4af", accentAlt:"#f9a8d4"},
+  mint:     {name:"Mint",     accent:"#6ee7b7", accentAlt:"#5eead4"},
+  sky:      {name:"Sky",      accent:"#93c5fd", accentAlt:"#a5b4fc"},
+  peach:    {name:"Peach",    accent:"#fdba74", accentAlt:"#fca5a5"},
+  butter:   {name:"Butter",   accent:"#fcd34d", accentAlt:"#fbbf24"},
+};
+
+const mkT = (d, p=PALETTES.lavender) => ({
   bg:d?"#0c0e16":"#f3f3f8", surface:d?"#141828":"#ffffff", surface2:d?"#1c2238":"#f0f0f6",
   surface3:d?"#242c44":"#e4e4f0", border:d?"rgba(255,255,255,.07)":"rgba(0,0,0,.07)",
   text:d?"#eef0fa":"#18192e", textMuted:d?"#7a85a3":"#7878a0",
-  accent:"#c084fc", accentAlt:"#818cf8", accentGlow:d?"rgba(192,132,252,.12)":"rgba(129,140,248,.1)",
+  accent:p.accent, accentAlt:p.accentAlt, accentGlow:p.accent+(d?"22":"1a"),
+  grad:`linear-gradient(135deg,${p.accent},${p.accentAlt})`,
   sidebar:d?"#0e1120":"#f7f7fc", canvas:d?"#07080f":"#e8e8f4",
   danger:"#ef4444", success:"#22c55e", warning:"#f59e0b", info:"#3b82f6",
 });
 
+// Joyful little major-arpeggio chime via Web Audio (no asset). (#29)
+let _actx=null;
+function playComplete(){
+  try{
+    _actx=_actx||new (window.AudioContext||window.webkitAudioContext)();
+    const ctx=_actx, now=ctx.currentTime, notes=[523.25,659.25,783.99];
+    notes.forEach((f,i)=>{
+      const o=ctx.createOscillator(), g=ctx.createGain(), t=now+i*0.08;
+      o.type="triangle"; o.frequency.value=f;
+      g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.18,t+0.02); g.gain.exponentialRampToValueAtTime(0.0008,t+0.35);
+      o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t+0.4);
+    });
+  }catch{}
+}
+
 export default function FlowSpace() {
   const [dark, setDark] = useState(true);
-  const T = mkT(dark);
+  const [scheme, setScheme] = useState(()=>localStorage.getItem("fs_scheme")||"lavender");
+  useEffect(()=>{ try{localStorage.setItem("fs_scheme",scheme);}catch{} },[scheme]);
+  const T = mkT(dark, PALETTES[scheme]||PALETTES.lavender);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [view, setView] = useState("myday");
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -358,7 +387,7 @@ export default function FlowSpace() {
     if(!task) return;
     const newDone=!task.done;
     setTasks(ts=>ts.map(t=>t.id===id?{...t,done:newDone}:t));
-    if(newDone){ awardXp("done-"+id,20); markActiveDay(); }
+    if(newDone){ awardXp("done-"+id,20); markActiveDay(); navigator.vibrate?.(30); playComplete(); }
     if(user) db.updateTask(id,{done:newDone}).catch(console.error);
   };
   const deleteTask = id=>{setTasks(ts=>ts.filter(t=>t.id!==id));if(selTask?.id===id)setSelTask(null);if(user)db.deleteTask(id).catch(console.error);};
@@ -425,14 +454,15 @@ export default function FlowSpace() {
   return (
     <div style={{fontFamily:"'DM Sans',sans-serif",background:T.bg,color:T.text,height:"100%",display:"flex",overflow:"hidden",transition:"background .3s,color .3s"}}>
       <FontLink/>
+      {aboutOpen&&<AboutModal T={T} onClose={()=>setAboutOpen(false)}/>}
       {cmdOpen&&<CmdPalette T={T} tasks={tasks} onClose={()=>setCmdOpen(false)} onGo={v=>{setView(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}}/>}
       <aside style={{width:sideOpen?224:60,transition:"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:30}}>
-        <div style={{padding:"18px 14px",display:"flex",alignItems:"center",gap:9}}>
-          <div style={{width:30,height:30,borderRadius:9,background:"linear-gradient(135deg,#c084fc,#818cf8)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:"0 3px 12px rgba(192,132,252,.45)"}}>
+        <button onClick={()=>setAboutOpen(true)} title="About FlowSpace" style={{padding:"18px 14px",display:"flex",alignItems:"center",gap:9,background:"none",border:"none",cursor:"pointer",width:"100%"}}>
+          <div style={{width:30,height:30,borderRadius:9,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:`0 3px 12px ${T.accent}55`}}>
             <Ico n="zap" s={14} c="#fff"/>
           </div>
-          {sideOpen&&<span style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:16,letterSpacing:"-.4px",background:"linear-gradient(90deg,#c084fc,#818cf8)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",whiteSpace:"nowrap"}}>FlowSpace</span>}
-        </div>
+          {sideOpen&&<span style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:16,letterSpacing:"-.4px",background:`linear-gradient(90deg,${T.accent},${T.accentAlt})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",whiteSpace:"nowrap"}}>FlowSpace</span>}
+        </button>
         {sideOpen&&(
           <div style={{padding:"0 12px 14px"}}>
             <div style={{background:T.surface2,borderRadius:9,padding:"8px 10px",border:`1px solid ${T.border}`}}>
@@ -441,7 +471,7 @@ export default function FlowSpace() {
                 <span style={{fontSize:11,color:T.accent,fontWeight:700}}>{xp} XP</span>
               </div>
               <div style={{height:4,background:T.border,borderRadius:2,overflow:"hidden"}}>
-                <div style={{height:"100%",width:`${xpLvl}%`,background:"linear-gradient(90deg,#c084fc,#818cf8)",borderRadius:2,transition:"width .5s ease"}}/>
+                <div style={{height:"100%",width:`${xpLvl}%`,background:`linear-gradient(90deg,${T.accent},${T.accentAlt})`,borderRadius:2,transition:"width .5s ease"}}/>
               </div>
               <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
                 <span style={{fontSize:10,color:T.textMuted}}>🔥 {streak}-day streak</span>
@@ -480,7 +510,7 @@ export default function FlowSpace() {
                 <Ico n="clock" s={12} c={pomRun?T.accent:T.textMuted}/>
               </div>
               <div style={{fontSize:26,fontFamily:"'Sora',sans-serif",fontWeight:700,color:pomRun?T.accent:T.text,letterSpacing:"-1px",textAlign:"center",marginBottom:8}}>{pmm}:{pms}</div>
-              <button onClick={()=>setPomRun(r=>!r)} style={{width:"100%",padding:"6px",borderRadius:8,border:"none",cursor:"pointer",background:pomRun?T.danger:"linear-gradient(135deg,#c084fc,#818cf8)",color:"#fff",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>
+              <button onClick={()=>setPomRun(r=>!r)} style={{width:"100%",padding:"6px",borderRadius:8,border:"none",cursor:"pointer",background:pomRun?T.danger:T.grad,color:"#fff",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>
                 {pomRun?"⏸ Pause":"▶ Focus"}
               </button>
             </div>
@@ -520,14 +550,14 @@ export default function FlowSpace() {
           {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} sendToMyDay={sendToMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} setTasks={setTasks}/>}
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
-          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats}/>}
+          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme}/>}
           {(["myday","upcoming","all","completed"].includes(view)||view.startsWith("cat:"))&&(
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length}/>
           )}
         </div>
       </main>
       {(["myday","upcoming","all"].includes(view)||view.startsWith("cat:"))&&(
-        <button onClick={()=>inputRef.current?.focus()} style={{position:"fixed",bottom:26,right:26,width:50,height:50,borderRadius:"50%",border:"none",cursor:"pointer",background:"linear-gradient(135deg,#c084fc,#818cf8)",color:"#fff",boxShadow:"0 6px 20px rgba(192,132,252,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:50,transition:"transform .15s"}}
+        <button onClick={()=>inputRef.current?.focus()} style={{position:"fixed",bottom:26,right:26,width:50,height:50,borderRadius:"50%",border:"none",cursor:"pointer",background:T.grad,color:"#fff",boxShadow:"0 6px 20px rgba(192,132,252,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:50,transition:"transform .15s"}}
           onMouseEnter={e=>e.currentTarget.style.transform="scale(1.1)"}
           onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
           <Ico n="plus" s={22} c="#fff"/>
@@ -544,6 +574,43 @@ const SB = ({onClick,T,children})=>(
     {children}
   </button>
 );
+
+function AboutModal({T,onClose}) {
+  // Placeholder links — replace the href/handles with your real accounts later.
+  const socials=[
+    {label:"Instagram", handle:"@flowspace", href:"#", emoji:"📷"},
+    {label:"X", handle:"@flowspace", href:"#", emoji:"✖️"},
+    {label:"TikTok", handle:"@flowspace", href:"#", emoji:"🎵"},
+    {label:"Email", handle:"hello@flowspace.app", href:"mailto:hello@flowspace.app", emoji:"✉️"},
+  ];
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.65)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:360,maxWidth:"100%",background:T.surface,border:`1px solid ${T.border}`,borderRadius:18,padding:26,boxShadow:"0 24px 60px rgba(0,0,0,.5)",animation:"slideIn .2s ease"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:40,height:40,borderRadius:11,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 4px 16px ${T.accent}55`}}><Ico n="zap" s={20} c="#fff"/></div>
+            <div>
+              <div style={{fontFamily:"'Sora',sans-serif",fontSize:18,fontWeight:700,color:T.text}}>FlowSpace</div>
+              <div style={{fontSize:11,color:T.textMuted}}>Focus. Flow. Finish.</div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{width:26,height:26,borderRadius:7,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={13}/></button>
+        </div>
+        <p style={{fontSize:12,color:T.textMuted,lineHeight:1.6,marginBottom:16}}>Your all-in-one space for tasks, priorities, notes and focus. Thanks for being here 💜</p>
+        <div style={{display:"flex",flexDirection:"column",gap:7}}>
+          {socials.map(s=>(
+            <a key={s.label} href={s.href} target="_blank" rel="noreferrer" style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderRadius:10,border:`1px solid ${T.border}`,background:T.surface2,textDecoration:"none",color:T.text}}>
+              <span style={{fontSize:16}}>{s.emoji}</span>
+              <span style={{fontSize:13,fontWeight:600,flex:1}}>{s.label}</span>
+              <span style={{fontSize:12,color:T.textMuted}}>{s.handle}</span>
+            </a>
+          ))}
+        </div>
+        <div style={{fontSize:10,color:T.textMuted,textAlign:"center",marginTop:16,opacity:.6}}>v1.0 · made with FlowSpace</div>
+      </div>
+    </div>
+  );
+}
 
 function CmdPalette({T,tasks,onClose,onGo,onAdd}) {
   const [q,setQ]=useState("");
@@ -627,7 +694,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
               <Ico n="plus" s={15} c={T.textMuted}/>
               <input ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addTask()} placeholder={view==="myday"?'Add to My Day… "Meet client May 26 at 4pm"':'Add task… "Call dentist tomorrow"'} style={{flex:1,background:"none",border:"none",outline:"none",color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:13,padding:"12px 0"}}/>
             </div>
-            <button onClick={addTask} style={{padding:"0 18px",borderRadius:11,border:"none",cursor:"pointer",background:"linear-gradient(135deg,#c084fc,#818cf8)",color:"#fff",fontWeight:700,fontSize:13,fontFamily:"'DM Sans',sans-serif",boxShadow:"0 3px 12px rgba(192,132,252,.35)"}}>Add</button>
+            <button onClick={addTask} style={{padding:"0 18px",borderRadius:11,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontWeight:700,fontSize:13,fontFamily:"'DM Sans',sans-serif",boxShadow:"0 3px 12px rgba(192,132,252,.35)"}}>Add</button>
           </div>
         )}
         {view!=="completed"&&(
@@ -963,6 +1030,7 @@ function FreeNote({note,T,editing,onPointerDown,onEdit,onSave,onDelete,onConvert
       {editing ? (
         <div style={{minWidth:130,padding:2}}>
           <textarea autoFocus value={txt} onChange={e=>setTxt(e.target.value)}
+            onFocus={e=>e.target.select()}
             onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();onSave(txt);}if(e.key==="Escape")onSave(note.text);}}
             onBlur={()=>onSave(txt)}
             style={{minWidth:130,minHeight:70,padding:"8px",borderRadius:10,border:`2px solid ${note.color}`,background:note.color+"18",color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"both",lineHeight:1.5}}/>
@@ -1005,7 +1073,7 @@ function NotesView({T,notes,setNotes}) {
           </div>
           <div style={{display:"flex",gap:6}}>
             <input value={nt} onChange={e=>setNt(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addNote()} placeholder="New note title…" style={{flex:1,padding:"7px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
-            <button onClick={addNote} style={{width:30,height:30,borderRadius:8,border:"none",cursor:"pointer",background:"linear-gradient(135deg,#c084fc,#818cf8)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="plus" s={14} c="#fff"/></button>
+            <button onClick={addNote} style={{width:30,height:30,borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="plus" s={14} c="#fff"/></button>
           </div>
         </div>
         {notes.filter(n=>n.pinned).length>0&&<>
@@ -1055,9 +1123,17 @@ function NRow({note,T,sel,onSel,onUp,onDel}) {
   );
 }
 
+const ACHIEVEMENTS=[
+  {emoji:"🔥",name:"On Fire",desc:"Keep a daily streak going by checking off a task each day."},
+  {emoji:"⚡",name:"Quick Start",desc:"Reach Level 2 — earn 100 XP from adding and finishing tasks."},
+  {emoji:"🎯",name:"Focused",desc:"Reach Level 3. You're building a real habit now."},
+  {emoji:"💎",name:"Consistent",desc:"Reach Level 4. Rare focus and follow-through."},
+  {emoji:"🏆",name:"Champion",desc:"Reach Level 5 — the top tier. Productivity master!"},
+];
 function AnalyticsView({T,tasks,xp,level,streak}) {
   const [aiLoad,setAiLoad]=useState(false);
   const [aiMsg,setAiMsg]=useState("");
+  const [achSel,setAchSel]=useState(null);
   const wk=[3,6,4,8,5,2,tasks.filter(t=>t.done).length];
   const maxW=Math.max(...wk,1);
   const total=tasks.length, done=tasks.filter(t=>t.done).length;
@@ -1084,7 +1160,7 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
           <div style={{display:"flex",alignItems:"flex-end",gap:6,height:80}}>
             {["M","T","W","T","F","S","S"].map((d,i)=>(
               <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
-                <div style={{width:"100%",borderRadius:"3px 3px 0 0",background:i===6?"linear-gradient(180deg,#c084fc,#818cf8)":T.surface3,height:`${(wk[i]/maxW)*68}px`,transition:"height .6s ease"}}/>
+                <div style={{width:"100%",borderRadius:"3px 3px 0 0",background:i===6?`linear-gradient(180deg,${T.accent},${T.accentAlt})`:T.surface3,height:`${(wk[i]/maxW)*68}px`,transition:"height .6s ease"}}/>
                 <span style={{fontSize:9,color:T.textMuted}}>{d}</span>
               </div>
             ))}
@@ -1097,9 +1173,17 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
             <div style={{borderLeft:`1px solid ${T.border}`,paddingLeft:14}}>
               <div style={{fontSize:20,fontFamily:"'Sora',sans-serif",fontWeight:700}}>LVL {level}</div>
               <div style={{fontSize:11,color:T.textMuted}}>{xp} XP</div>
-              <div style={{display:"flex",gap:3,marginTop:7}}>{["🔥","⚡","🎯","💎","🏆"].map((e,i)=><div key={i} style={{width:24,height:24,borderRadius:6,background:i<level-1?"#f59e0b22":T.surface2,border:`1px solid ${i<level-1?"#f59e0b":T.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12}}>{e}</div>)}</div>
+              <div style={{display:"flex",gap:3,marginTop:7}}>{ACHIEVEMENTS.map((a,i)=>{const earned=i<level-1;return(
+                <button key={i} title={a.name} onClick={()=>setAchSel(achSel===i?null:i)} style={{width:24,height:24,borderRadius:6,background:achSel===i?"#f59e0b44":earned?"#f59e0b22":T.surface2,border:`1px solid ${achSel===i||earned?"#f59e0b":T.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,cursor:"pointer",filter:earned?"none":"grayscale(1) opacity(.6)"}}>{a.emoji}</button>
+              );})}</div>
             </div>
           </div>
+          {achSel!=null&&(
+            <div style={{marginTop:10,padding:"8px 10px",background:T.surface2,borderRadius:8,border:`1px solid ${T.border}`,animation:"fadeIn .2s"}}>
+              <div style={{fontSize:12,fontWeight:700,color:T.text}}>{ACHIEVEMENTS[achSel].emoji} {ACHIEVEMENTS[achSel].name} {level-1>achSel&&<span style={{color:"#22c55e",fontSize:10}}>· Earned ✓</span>}</div>
+              <div style={{fontSize:11,color:T.textMuted,marginTop:2,lineHeight:1.5}}>{ACHIEVEMENTS[achSel].desc}</div>
+            </div>
+          )}
         </div>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1.3fr",gap:12,marginBottom:12}}>
@@ -1127,7 +1211,7 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
       <div style={{background:T.accentGlow,border:`1px solid ${T.accent}33`,borderRadius:12,padding:16}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
           <div style={{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:5}}><Ico n="sparkles" s={13} c={T.accent}/>AI Productivity Coach</div>
-          <button onClick={runAI} disabled={aiLoad} style={{padding:"5px 13px",borderRadius:7,border:"none",cursor:"pointer",background:"linear-gradient(135deg,#c084fc,#818cf8)",color:"#fff",fontSize:11,fontWeight:700,opacity:aiLoad?.7:1}}>{aiLoad?"Analyzing…":"Get Insights"}</button>
+          <button onClick={runAI} disabled={aiLoad} style={{padding:"5px 13px",borderRadius:7,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:11,fontWeight:700,opacity:aiLoad?.7:1}}>{aiLoad?"Analyzing…":"Get Insights"}</button>
         </div>
         {aiLoad&&<div style={{display:"flex",gap:4}}>{[0,1,2].map(i=><div key={i} className="dp" style={{width:6,height:6,borderRadius:"50%",background:T.accent}}/>)}</div>}
         {aiMsg&&<p style={{fontSize:12,lineHeight:1.7,animation:"fadeIn .5s"}}>{aiMsg}</p>}
@@ -1137,7 +1221,7 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
   );
 }
 
-function SettingsView({T,dark,setDark,cats,setCats}) {
+function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme}) {
   const [notifs,setNotifs]=useState(true);
   const [focus,setFocus]=useState(false);
   const [weekly,setWeekly]=useState(true);
@@ -1190,11 +1274,20 @@ function SettingsView({T,dark,setDark,cats,setCats}) {
             {CAT_COLORS.map(c=><div key={c} onClick={()=>setNewCatColor(c)} style={{width:16,height:16,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${newCatColor===c?T.text:"transparent"}`,flexShrink:0}}/>)}
           </div>
           <input value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCat()} placeholder="New category name…" style={{flex:1,padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
-          <button onClick={addCat} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:"linear-gradient(135deg,#c084fc,#818cf8)",color:"#fff",fontSize:12,fontWeight:700}}>Add</button>
+          <button onClick={addCat} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Add</button>
         </div>
       </div>
       {[
-        {title:"Appearance",rows:[{label:"Dark Mode",desc:"Switch between light and dark themes",el:<Toggle val={dark} onChange={setDark}/>}]},
+        {title:"Appearance",rows:[
+          {label:"Dark Mode",desc:"Switch between light and dark themes",el:<Toggle val={dark} onChange={setDark}/>},
+          {label:"Color Theme",desc:"Pick your accent palette",el:(
+            <div style={{display:"flex",gap:6}}>
+              {Object.entries(PALETTES).map(([key,p])=>(
+                <button key={key} title={p.name} onClick={()=>setScheme(key)} style={{width:24,height:24,borderRadius:"50%",cursor:"pointer",background:`linear-gradient(135deg,${p.accent},${p.accentAlt})`,border:`2px solid ${scheme===key?T.text:"transparent"}`,boxShadow:scheme===key?`0 0 0 2px ${T.surface}`:"none"}}/>
+              ))}
+            </div>
+          )},
+        ]},
         {title:"Notifications",rows:[
           {label:"Push Notifications",desc:"Reminders for upcoming tasks",el:<Toggle val={notifs} onChange={setNotifs}/>},
           {label:"Weekly Summary",desc:"Email digest every Sunday",el:<Toggle val={weekly} onChange={setWeekly}/>},
