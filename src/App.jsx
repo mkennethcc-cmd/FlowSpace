@@ -1053,9 +1053,45 @@ function FreeNote({note,T,editing,onPointerDown,onEdit,onSave,onDelete,onConvert
   );
 }
 
+function DrawPad({value,T,onChange}) {
+  const cv=useRef(null);
+  const drawing=useRef(false);
+  const last=useRef(null);
+  const [pen,setPen]=useState("#1e293b");
+  const [erase,setErase]=useState(false);
+  const W=900,H=460;
+  useEffect(()=>{
+    const c=cv.current; if(!c) return; const ctx=c.getContext("2d");
+    ctx.clearRect(0,0,W,H);
+    if(value){ const img=new Image(); img.onload=()=>ctx.drawImage(img,0,0,W,H); img.src=value; }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+  const pos=e=>{ const r=cv.current.getBoundingClientRect(); return {x:(e.clientX-r.left)*(W/r.width), y:(e.clientY-r.top)*(H/r.height)}; };
+  const down=e=>{ e.preventDefault(); cv.current.setPointerCapture?.(e.pointerId); drawing.current=true; last.current=pos(e); };
+  const move=e=>{ if(!drawing.current) return; const ctx=cv.current.getContext("2d"); const p=pos(e);
+    ctx.lineWidth=erase?26:3; ctx.lineCap="round"; ctx.lineJoin="round";
+    ctx.globalCompositeOperation=erase?"destination-out":"source-over"; ctx.strokeStyle=pen;
+    ctx.beginPath(); ctx.moveTo(last.current.x,last.current.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last.current=p; };
+  const up=()=>{ if(!drawing.current) return; drawing.current=false; onChange(cv.current.toDataURL("image/png")); };
+  const clear=()=>{ const ctx=cv.current.getContext("2d"); ctx.clearRect(0,0,W,H); onChange(""); };
+  const PENS=["#1e293b","#ef4444","#f59e0b","#22c55e","#3b82f6","#a855f7","#ec4899"];
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+      <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+        {PENS.map(c=><button key={c} onClick={()=>{setPen(c);setErase(false);}} style={{width:22,height:22,borderRadius:"50%",background:c,border:`2px solid ${!erase&&pen===c?T.accent:"transparent"}`,cursor:"pointer",flexShrink:0}}/>)}
+        <button onClick={()=>setErase(e=>!e)} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${erase?T.accent:T.border}`,background:erase?T.accentGlow:"transparent",color:erase?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Eraser</button>
+        <button onClick={clear} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${T.danger}33`,background:T.danger+"11",color:T.danger,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Clear</button>
+      </div>
+      <canvas ref={cv} width={W} height={H} onPointerDown={down} onPointerMove={move} onPointerUp={up}
+        style={{width:"100%",aspectRatio:`${W}/${H}`,borderRadius:12,border:`1px solid ${T.border}`,background:"#ffffff",touchAction:"none",cursor:"crosshair"}}/>
+    </div>
+  );
+}
+
 function NotesView({T,notes,setNotes}) {
   const [sel,setSel]=useState(null);
   const [nt,setNt]=useState("");
+  const [mode,setMode]=useState("text");
   const ACC=["#3b82f6","#22c55e","#f59e0b","#ef4444","#a855f7","#ec4899","#14b8a6"];
   const addNote=()=>{if(!nt.trim())return;const n={id:Date.now(),title:nt.trim(),body:"",pinned:false,color:ACC[notes.length%ACC.length],created:tod()};setNotes(ns=>[n,...ns]);setSel(n);setNt("");};
   const upNote=(id,patch)=>{setNotes(ns=>ns.map(n=>n.id===id?{...n,...patch}:n));if(sel?.id===id)setSel(s=>({...s,...patch}));};
@@ -1093,9 +1129,18 @@ function NotesView({T,notes,setNotes}) {
               {ACC.slice(0,5).map(c=><div key={c} onClick={()=>upNote(sel.id,{color:c})} style={{width:14,height:14,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${sel.color===c?T.text:"transparent"}`,transition:"border-color .15s"}}/>)}
             </div>
           </div>
-          <div style={{height:3,width:36,borderRadius:2,background:sel.color,marginBottom:16}}/>
-          <textarea value={sel.body} onChange={e=>upNote(sel.id,{body:e.target.value})} placeholder={"Start writing…\n\nUse for meeting notes, ideas, journaling, research."} style={{flex:1,minHeight:300,background:"transparent",border:"none",outline:"none",color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:14,lineHeight:1.8,resize:"none"}}/>
-          <div style={{fontSize:10,color:T.textMuted,marginTop:10}}>{fmtDate(sel.created)||sel.created} · {sel.body.split(/\s+/).filter(Boolean).length} words</div>
+          <div style={{height:3,width:36,borderRadius:2,background:sel.color,marginBottom:14}}/>
+          <div style={{display:"flex",gap:5,marginBottom:14}}>
+            {[["text","✏️ Write"],["draw","🎨 Draw"]].map(([m,lbl])=>(
+              <button key={m} onClick={()=>setMode(m)} style={{padding:"5px 14px",borderRadius:8,border:`1px solid ${mode===m?T.accent:T.border}`,background:mode===m?T.accentGlow:"transparent",color:mode===m?T.accent:T.textMuted,cursor:"pointer",fontSize:12,fontWeight:mode===m?700:500,fontFamily:"'DM Sans',sans-serif"}}>{lbl}{m==="draw"&&sel.drawing?" •":""}</button>
+            ))}
+          </div>
+          {mode==="text"?(
+            <textarea value={sel.body} onChange={e=>upNote(sel.id,{body:e.target.value})} placeholder={"Start writing…\n\nUse for meeting notes, ideas, journaling, research."} style={{flex:1,minHeight:300,background:"transparent",border:"none",outline:"none",color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:14,lineHeight:1.8,resize:"none"}}/>
+          ):(
+            <DrawPad key={sel.id} value={sel.drawing} T={T} onChange={d=>upNote(sel.id,{drawing:d})}/>
+          )}
+          <div style={{fontSize:10,color:T.textMuted,marginTop:10}}>{fmtDate(sel.created)||sel.created} · {sel.body.split(/\s+/).filter(Boolean).length} words{sel.drawing?" · has sketch 🎨":""}</div>
         </div>
       ):(
         <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:T.textMuted,flexDirection:"column",gap:8}}>
