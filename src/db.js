@@ -4,7 +4,8 @@ export const fromDbTask = r => ({
   id: r.id, title: r.title, done: r.done, priority: r.priority,
   tag: r.tag, due: r.due, starred: r.starred, notes: r.notes || "",
   color: r.color, subtasks: r.subtasks || [], recurring: r.recurring,
-  quadrant: r.quadrant || null,
+  quadrant: r.quadrant || null, remindAt: r.remind_at || null,
+  attachments: r.attachments || [],
 });
 
 const fromDbCanvas = r => ({ id: r.id, text: r.text, x: r.x, y: r.y, color: r.color });
@@ -21,7 +22,8 @@ export const db = {
       priority: t.priority, tag: t.tag, due: t.due || null,
       starred: t.starred, notes: t.notes || "", color: t.color || null,
       subtasks: t.subtasks || [], recurring: t.recurring || null,
-      quadrant: t.quadrant || null,
+      quadrant: t.quadrant || null, remind_at: t.remindAt || null,
+      attachments: t.attachments || [],
     });
   },
   async updateTask(id, p) {
@@ -30,10 +32,24 @@ export const db = {
     if (p.due !== undefined) u.due = p.due || null;
     if (p.color !== undefined) u.color = p.color || null;
     if (p.subtasks !== undefined) u.subtasks = p.subtasks;
+    if (p.remindAt !== undefined) u.remind_at = p.remindAt || null;
+    if (p.attachments !== undefined) u.attachments = p.attachments;
     if (Object.keys(u).length) await supabase.from("tasks").update(u).eq("id", id);
   },
   async deleteTask(id) {
     await supabase.from("tasks").delete().eq("id", id);
+  },
+
+  async uploadAttachment(file, uid, taskId) {
+    const safe = file.name.replace(/[^\w.\-]/g, "_");
+    const path = `${uid}/${taskId}/${Date.now()}-${safe}`;
+    const { error } = await supabase.storage.from("attachments").upload(path, file, { upsert: false });
+    if (error) throw error;
+    const { data } = supabase.storage.from("attachments").getPublicUrl(path);
+    return { name: file.name, path, url: data.publicUrl, type: file.type };
+  },
+  async deleteAttachment(path) {
+    await supabase.storage.from("attachments").remove([path]);
   },
 
   async loadCanvas(uid) {

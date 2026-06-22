@@ -365,7 +365,7 @@ export default function FlowSpace() {
     const {title,due:parsed}=parseNL(input);
     const due=parsed||(view==="myday"?tod():null);
     const inCat=view.startsWith("cat:")?view.slice(4):null;
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:inCat||guessCat(title,cats),due,starred:view==="myday"||view==="important",notes:"",color:null,subtasks:[],recurring:null,quadrant:null};
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:inCat||guessCat(title,cats),due,starred:view==="myday"||view==="important",notes:"",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:null,attachments:[]};
     setTasks(ts=>[t,...ts]);
     setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
     if(view==="myday"||t.starred) markActiveDay();
@@ -383,7 +383,7 @@ export default function FlowSpace() {
       if(task.recurring && !awardedRef.current.has("recur-"+id)){
         awardedRef.current.add("recur-"+id);
         const nd=nextDue(task.due,task.recurring);
-        if(nd){ const clone={...task,id:crypto.randomUUID(),done:false,due:nd,quadrant:task.quadrant||null,subtasks:(task.subtasks||[]).map(s=>({...s,done:false}))};
+        if(nd){ const clone={...task,id:crypto.randomUUID(),done:false,due:nd,quadrant:task.quadrant||null,remindAt:null,attachments:[],subtasks:(task.subtasks||[]).map(s=>({...s,done:false}))};
           setTasks(ts=>[clone,...ts]); if(user) db.insertTask(clone,user.id).catch(console.error);
           showToast(`↻ Next "${task.title}" scheduled for ${fmtDate(nd)}`);
         }
@@ -397,7 +397,10 @@ export default function FlowSpace() {
     if(user)db.deleteTask(id).catch(console.error);
     if(t) showToast("Task deleted", ()=>{ setTasks(ts=>[t,...ts]); if(user) db.insertTask(t,user.id).catch(console.error); setToast(null); });
   };
-  const duplicateTask = task=>{ const c={...task,id:crypto.randomUUID(),done:false,title:task.title+" (copy)"}; setTasks(ts=>[c,...ts]); if(user) db.insertTask(c,user.id).catch(console.error); showToast("Task duplicated"); };
+  const duplicateTask = task=>{ const c={...task,id:crypto.randomUUID(),done:false,title:task.title+" (copy)",attachments:[]}; setTasks(ts=>[c,...ts]); if(user) db.insertTask(c,user.id).catch(console.error); showToast("Task duplicated"); };
+  const attachFile = async (task,file)=>{ if(!user) return; const meta=await db.uploadAttachment(file,user.id,task.id); updateTask(task.id,{attachments:[...(task.attachments||[]),meta]}); };
+  const removeAttach = async (task,att)=>{ await db.deleteAttachment(att.path).catch(()=>{}); updateTask(task.id,{attachments:(task.attachments||[]).filter(a=>a.path!==att.path)}); };
+  const setReminder = (id,val)=>{ remindedRef.current?.delete(id); updateTask(id,{remindAt:val||null}); if(val&&"Notification"in window&&Notification.permission==="default") Notification.requestPermission(); };
   const clearCompleted = ()=>{ const done=tasks.filter(t=>t.done); if(!done.length){showToast("No completed tasks");return;} setTasks(ts=>ts.filter(t=>!t.done)); if(user) done.forEach(t=>db.deleteTask(t.id).catch(()=>{})); showToast(`Cleared ${done.length} completed`); };
   const exportData = ()=>{
     const data={app:"FlowSpace",exportedAt:new Date().toISOString(),tasks,notes,cats,canvasNotes};
@@ -445,6 +448,24 @@ export default function FlowSpace() {
       if(a.due) return -1; if(b.due) return 1; return 0;
     }).slice(0,6);
   const addToMyDay=id=>{ navigator.vibrate?.(10); updateTask(id,{due:todStr}); markActiveDay(); };
+
+  const remindedRef=useRef();
+  if(!remindedRef.current){ try{ remindedRef.current=new Set(JSON.parse(localStorage.getItem("fs_reminded")||"[]")); }catch{ remindedRef.current=new Set(); } }
+  useEffect(()=>{
+    const check=()=>{
+      const now=Date.now();
+      tasks.forEach(t=>{
+        if(t.remindAt && !t.done && !remindedRef.current.has(t.id) && new Date(t.remindAt).getTime()<=now){
+          remindedRef.current.add(t.id);
+          try{ localStorage.setItem("fs_reminded",JSON.stringify([...remindedRef.current])); }catch{}
+          navigator.vibrate?.([30,40,30]); playComplete();
+          try{ if("Notification"in window&&Notification.permission==="granted") new Notification("FlowSpace reminder ⏰",{body:t.title}); }catch{}
+          showToast(`⏰ Reminder: ${t.title}`);
+        }
+      });
+    };
+    check(); const iv=setInterval(check,30000); return ()=>clearInterval(iv);
+  },[tasks]);
   const carryOver=()=>{
     if(!overdueTasks.length) return;
     navigator.vibrate?.(15);
@@ -452,7 +473,7 @@ export default function FlowSpace() {
   };
   const addMatrixTask=(quadrant,text)=>{
     const title=(text||"").trim(); if(!title) return;
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:guessCat(title,cats),due:null,starred:false,notes:"",color:null,subtasks:[],recurring:null,quadrant};
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:guessCat(title,cats),due:null,starred:false,notes:"",color:null,subtasks:[],recurring:null,quadrant,remindAt:null,attachments:[]};
     setTasks(ts=>[t,...ts]); awardXp("add-"+t.id,10);
     if(user) db.insertTask(t,user.id).catch(console.error);
   };
@@ -600,7 +621,7 @@ export default function FlowSpace() {
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted}/>}
           {(["myday","important","upcoming","all","completed"].includes(view)||view.startsWith("cat:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay}/>
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder}/>
           )}
         </div>
       </main>
@@ -693,7 +714,7 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onCarryOver,overdueCount,suggestions,onAddToMyDay}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onCarryOver,overdueCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder}) {
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
   const [sort,setSort]=useState("smart");
@@ -835,7 +856,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           )}
         </div>
       </div>
-      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onClose={()=>setSelTask(null)}/>}
+      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} onClose={()=>setSelTask(null)}/>}
     </div>
   );
 }
@@ -874,7 +895,10 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
   );
 }
 
-function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onClose}) {
+function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,onClose}) {
+  const [uploading,setUploading]=useState(false);
+  const fileRef=useRef(null);
+  const doAttach=async files=>{ if(!files?.length)return; setUploading(true); try{ for(const f of files) await onAttach?.(task,f); }catch(e){ alert("Upload failed: "+(e.message||e)); } setUploading(false); };
   const [nts,setNts]=useState(task.notes||"");
   const [ns,setNs]=useState("");
   useEffect(()=>setNts(task.notes||""),[task.id]);
@@ -918,6 +942,11 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onClose}) {
           <option value="monthly">Monthly</option>
         </select>
       </DL>
+      <DL label="Reminder ⏰" T={T}>
+        <input type="datetime-local" value={task.remindAt||""} onChange={e=>onSetReminder?.(task.id,e.target.value)} style={{marginTop:5,width:"100%",padding:"7px 9px",borderRadius:7,border:`1px solid ${task.remindAt?T.accent:T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+        {task.remindAt&&<button onClick={()=>onSetReminder?.(task.id,"")} style={{marginTop:4,background:"none",border:"none",color:T.textMuted,cursor:"pointer",fontSize:10,textDecoration:"underline",fontFamily:"'DM Sans',sans-serif"}}>Clear reminder</button>}
+        <div style={{fontSize:9,color:T.textMuted,marginTop:3,lineHeight:1.4}}>Notifies you while FlowSpace is open. Allow notifications when asked.</div>
+      </DL>
       <DL label="Category" T={T}>
         <div style={{display:"flex",gap:4,marginTop:5,flexWrap:"wrap"}}>
           {Object.entries(cats).map(([tag,meta])=>(
@@ -943,6 +972,20 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onClose}) {
       </DL>
       <DL label="Notes" T={T}>
         <textarea value={nts} onChange={e=>{setNts(e.target.value);onUpdate(task.id,{notes:e.target.value});}} placeholder="Notes, links, markdown…" style={{marginTop:5,width:"100%",minHeight:80,padding:"7px 9px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"vertical",lineHeight:1.6}}/>
+      </DL>
+      <DL label="Attachments 📎" T={T}>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:6}}>
+          {(task.attachments||[]).map(att=>(
+            <div key={att.path} style={{position:"relative",width:64,height:64,borderRadius:8,overflow:"hidden",border:`1px solid ${T.border}`,background:T.surface2}}>
+              {(att.type||"").startsWith("image/")
+                ? <a href={att.url} target="_blank" rel="noreferrer"><img src={att.url} alt={att.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/></a>
+                : <a href={att.url} target="_blank" rel="noreferrer" title={att.name} style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,textDecoration:"none"}}>📄</a>}
+              <button onClick={()=>onRemoveAttach?.(task,att)} style={{position:"absolute",top:2,right:2,width:16,height:16,borderRadius:"50%",border:"none",cursor:"pointer",background:"rgba(0,0,0,.6)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={9} c="#fff"/></button>
+            </div>
+          ))}
+        </div>
+        <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple style={{display:"none"}} onChange={e=>{doAttach([...e.target.files]); e.target.value="";}}/>
+        <button onClick={()=>fileRef.current?.click()} disabled={uploading} style={{marginTop:7,width:"100%",padding:"7px",borderRadius:8,border:`1px dashed ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{uploading?"Uploading…":"+ Add photo / screenshot"}</button>
       </DL>
       <div style={{display:"flex",gap:6}}>
         <button onClick={()=>onUpdate(task.id,{starred:!task.starred})} style={{flex:1,padding:"7px",borderRadius:8,border:`1px solid ${task.starred?"#f59e0b":T.border}`,background:task.starred?"#f59e0b22":"transparent",color:task.starred?"#f59e0b":T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
