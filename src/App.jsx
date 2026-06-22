@@ -61,6 +61,22 @@ const NOTE_COLS = ["#ef4444","#f97316","#f59e0b","#22c55e","#3b82f6","#a855f7","
 const CAT_COLORS = ["#0ea5e9","#6366f1","#10b981","#f59e0b","#a855f7","#ef4444","#ec4899","#14b8a6","#f97316","#84cc16"];
 const PRIORITY_COLOR = { high:"#ef4444", medium:"#f59e0b", low:"#22c55e" };
 const MONTHS = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+const WEEKDAYS = {sun:0,mon:1,tue:2,wed:3,thu:4,fri:5,sat:6};
+
+const CAT_KEYWORDS = {
+  health:["gym","run","running","workout","exercise","yoga","doctor","dentist","medic","meditate","jog","therapy","health","hydrate","sleep"],
+  personal:["friend","friends","family","birthday","party","dinner","lunch","movie","date","shopping","grocery","groceries","hangout","mom","dad","vacation","trip","brunch","wedding"],
+  finance:["budget","invoice","tax","taxes","pay","bill","bills","bank","rent","salary","expense","refund","insurance","mortgage"],
+  school:["homework","study","studying","exam","class","assignment","lecture","quiz","essay","thesis","school","course","revision"],
+  work:["meeting","client","report","email","project","deadline","standup","presentation","interview","proposal","slides","sprint","ticket","work","launch"],
+};
+const guessCat = (title, cats) => {
+  const t = (title || "").toLowerCase();
+  for (const cat of ["health","personal","finance","school","work"]) {
+    if (cats[cat] && CAT_KEYWORDS[cat].some(k => t.includes(k))) return cat;
+  }
+  return cats["personal"] ? "personal" : (cats["work"] ? "work" : Object.keys(cats)[0] || "work");
+};
 
 const tod = () => new Date().toISOString().split("T")[0];
 const addDays = n => { const d=new Date(); d.setDate(d.getDate()+n); return d.toISOString().split("T")[0]; };
@@ -79,6 +95,16 @@ const parseNL = raw => {
   if (/\btomorrow\b/i.test(title)) { due=addDays(1); title=title.replace(/\s*\btomorrow(\s+at\s+[\w:]+(\s*(am|pm))?)?\b/gi,""); }
   else if (/\btoday\b/i.test(title)) { due=tod(); title=title.replace(/\s*\btoday(\s+at\s+[\w:]+(\s*(am|pm))?)?\b/gi,""); }
   else if (/\bnext week\b/i.test(title)) { due=addDays(7); title=title.replace(/\bnext week\b/gi,""); }
+  else if (title.match(/\b(?:this\s+)?(next\s+)?(?:on\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)\b/i)) {
+    const wd = title.match(/\b(?:this\s+)?(next\s+)?(?:on\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)\b/i);
+    const key = wd[2].toLowerCase().substring(0,3), target = WEEKDAYS[key], cur = new Date().getDay();
+    let delta = (target - cur + 7) % 7;
+    if (delta === 0) delta = 7;
+    if (wd[1]) delta += 7;
+    const d = new Date(); d.setDate(d.getDate() + delta);
+    due = d.toISOString().split("T")[0];
+    title = title.replace(wd[0], "");
+  }
   else {
     const m = title.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})\b/i);
     if (m) {
@@ -265,13 +291,13 @@ export default function FlowSpace() {
     if (!input.trim()) return;
     const {title,due:parsed}=parseNL(input);
     const due=parsed||(view==="myday"?tod():null);
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:"work",due,starred:view==="myday",notes:"",color:null,subtasks:[],recurring:null};
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:guessCat(title,cats),due,starred:view==="myday",notes:"",color:null,subtasks:[],recurring:null};
     setTasks(ts=>[t,...ts]);
     setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
     if(view==="myday"||t.starred) markActiveDay();
     setTimeout(()=>setNewAnim(null),600);
     if(user) db.insertTask(t,user.id).catch(console.error);
-  },[input,view,user,awardXp,markActiveDay]);
+  },[input,view,user,cats,awardXp,markActiveDay]);
 
   const toggleTask = id=>{
     const task=tasks.find(t=>t.id===id);
@@ -296,6 +322,12 @@ export default function FlowSpace() {
   const myDay=tasks.filter(t=>t.due===todStr||t.starred);
   const upcoming=tasks.filter(t=>t.due&&t.due>todStr);
   const completed=tasks.filter(t=>t.done);
+  const overdueTasks=tasks.filter(t=>!t.done&&t.due&&t.due<todStr);
+  const carryOver=()=>{
+    if(!overdueTasks.length) return;
+    navigator.vibrate?.(15);
+    overdueTasks.forEach(t=>updateTask(t.id,{due:todStr}));
+  };
   const level=Math.floor(xp/100)+1, xpLvl=xp%100;
   const pmm=String(Math.floor(pomSecs/60)).padStart(2,"0"), pms=String(pomSecs%60).padStart(2,"0");
 
@@ -414,7 +446,7 @@ export default function FlowSpace() {
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats}/>}
           {["myday","upcoming","all","completed"].includes(view)&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats}/>
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length}/>
           )}
         </div>
       </main>
@@ -470,13 +502,46 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,selTask,setSelTask,newAnim,cats}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,selTask,setSelTask,newAnim,cats,onCarryOver,overdueCount}) {
   const [filter,setFilter]=useState("all");
   const [dragId,setDragId]=useState(null);
   const [dropId,setDropId]=useState(null);
+  const pressTimer=useRef(null);
+  const armedRef=useRef(false);
+  const didDragRef=useRef(false);
+  const startRef=useRef({x:0,y:0});
+  const captureRef=useRef(null);
   const labels={myday:"My Day",upcoming:"Upcoming",all:"All Tasks",completed:"Completed"};
   const show=filter==="active"?tasks.filter(t=>!t.done):filter==="done"?tasks.filter(t=>t.done):tasks;
-  const handleDrop=(fromId,toId)=>{if(fromId!==toId) reorderTasks(fromId,toId);setDragId(null);setDropId(null);};
+
+  const arm=id=>{ armedRef.current=true; navigator.vibrate?.(20); captureRef.current?.el?.setPointerCapture?.(captureRef.current.pid); setDragId(id); };
+  const onCardDown=(e,id)=>{
+    if(e.target.closest("button")) return;
+    didDragRef.current=false;
+    startRef.current={x:e.clientX,y:e.clientY};
+    captureRef.current={el:e.currentTarget,pid:e.pointerId};
+    if(e.pointerType==="mouse"){ armedRef.current=true; e.currentTarget.setPointerCapture?.(e.pointerId); }
+    else { pressTimer.current=setTimeout(()=>arm(id),100); }
+  };
+  const onCardMove=(e,id)=>{
+    if(!armedRef.current){
+      const dx=Math.abs(e.clientX-startRef.current.x), dy=Math.abs(e.clientY-startRef.current.y);
+      if(dx>10||dy>10) clearTimeout(pressTimer.current);
+      return;
+    }
+    e.preventDefault();
+    if(dragId==null) setDragId(id);
+    didDragRef.current=true;
+    const el=document.elementFromPoint(e.clientX,e.clientY);
+    const card=el&&el.closest("[data-task-id]");
+    if(card){ const tid=card.getAttribute("data-task-id"); if(tid&&tid!==dropId) setDropId(tid); }
+  };
+  const onCardUp=()=>{
+    clearTimeout(pressTimer.current);
+    if(armedRef.current&&dragId!=null&&dropId!=null&&String(dragId)!==String(dropId)) reorderTasks(dragId,dropId);
+    armedRef.current=false; setDragId(null); setDropId(null);
+  };
+  const selectCard=task=>{ if(didDragRef.current){ didDragRef.current=false; return; } setSelTask(task); };
   return (
     <div style={{flex:1,display:"flex",overflow:"hidden"}}>
       <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
@@ -488,6 +553,11 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           </div>
           <div style={{fontSize:12,color:T.textMuted,marginTop:2}}>{new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}{view==="myday"&&` · ${tasks.filter(t=>!t.done).length} remaining`}</div>
         </div>
+        {view==="myday"&&overdueCount>0&&(
+          <button onClick={onCarryOver} style={{display:"flex",alignItems:"center",gap:7,width:"100%",marginBottom:12,padding:"9px 12px",borderRadius:11,border:`1px solid ${T.warning}55`,background:T.warning+"15",color:T.warning,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>
+            <Ico n="repeat" s={14} c={T.warning}/> Carry over {overdueCount} overdue {overdueCount===1?"task":"tasks"} to today
+          </button>
+        )}
         {view!=="completed"&&(
           <div style={{display:"flex",gap:8,marginBottom:14}}>
             <div style={{flex:1,display:"flex",alignItems:"center",gap:9,background:T.surface,border:`1px solid ${T.border}`,borderRadius:11,padding:"0 12px"}}>
@@ -497,22 +567,24 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             <button onClick={addTask} style={{padding:"0 18px",borderRadius:11,border:"none",cursor:"pointer",background:"linear-gradient(135deg,#c084fc,#818cf8)",color:"#fff",fontWeight:700,fontSize:13,fontFamily:"'DM Sans',sans-serif",boxShadow:"0 3px 12px rgba(192,132,252,.35)"}}>Add</button>
           </div>
         )}
-        <div style={{display:"flex",gap:5,marginBottom:12}}>
-          {["all","active","done"].map(f=>(
-            <button key={f} onClick={()=>setFilter(f)} style={{padding:"4px 13px",borderRadius:20,border:`1px solid ${filter===f?T.accent:T.border}`,background:filter===f?T.accent+"22":"transparent",color:filter===f?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:filter===f?700:400,fontFamily:"'DM Sans',sans-serif",transition:"all .15s"}}>{f.charAt(0).toUpperCase()+f.slice(1)}</button>
-          ))}
-        </div>
+        {view!=="completed"&&(
+          <div style={{display:"flex",gap:5,marginBottom:12}}>
+            {["all","active","done"].map(f=>(
+              <button key={f} onClick={()=>setFilter(f)} style={{padding:"4px 13px",borderRadius:20,border:`1px solid ${filter===f?T.accent:T.border}`,background:filter===f?T.accent+"22":"transparent",color:filter===f?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:filter===f?700:400,fontFamily:"'DM Sans',sans-serif",transition:"all .15s"}}>{f.charAt(0).toUpperCase()+f.slice(1)}</button>
+            ))}
+          </div>
+        )}
         <div style={{display:"flex",flexDirection:"column",gap:4}}>
           {show.filter(t=>!t.done).map(task=>(
-            <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={setSelTask} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id} dropTarget={dropId===task.id}
-              onDragStart={()=>setDragId(task.id)} onDragOver={()=>setDropId(task.id)} onDrop={()=>handleDrop(dragId,task.id)} onDragEnd={()=>{setDragId(null);setDropId(null);}}/>
+            <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id} dropTarget={dropId===task.id}
+              onDown={onCardDown} onMove={onCardMove} onUp={onCardUp}/>
           ))}
           {show.filter(t=>t.done).length>0&&<>
             <div style={{fontSize:10,color:T.textMuted,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",padding:"10px 2px 4px",display:"flex",alignItems:"center",gap:5}}>
               <Ico n="check" s={11} c={T.textMuted}/> Completed · {show.filter(t=>t.done).length}
             </div>
             {show.filter(t=>t.done).map(task=>(
-              <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={setSelTask} sel={selTask?.id===task.id}/>
+              <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id}/>
             ))}
           </>}
           {show.length===0&&(
@@ -529,14 +601,17 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   );
 }
 
-function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,onDragStart,onDragOver,onDrop,onDragEnd}) {
+function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,onDown,onMove,onUp}) {
   const [hov,setHov]=useState(false);
   const ov=task.due&&task.due<tod()&&!task.done;
   const catColor=cats[task.tag]||"#6b7280";
   return (
-    <div className={entering?"te":""} draggable onDragStart={e=>{e.dataTransfer.setData("tid",task.id);onDragStart?.();}} onDragOver={e=>{e.preventDefault();onDragOver?.();}} onDrop={e=>{e.preventDefault();onDrop?.();}} onDragEnd={onDragEnd}
+    <div className={entering?"te":""} data-task-id={task.id}
+      onPointerDown={onDown?e=>onDown(e,task.id):undefined}
+      onPointerMove={onMove?e=>onMove(e,task.id):undefined}
+      onPointerUp={onUp}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)} onClick={()=>onSel(task)}
-      style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent",border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:"all .12s",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:dragging?"scale(.98)":"scale(1)"}}>
+      style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent",border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:"all .12s",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:dragging?"scale(.98)":"scale(1)",userSelect:"none",WebkitUserSelect:"none",touchAction:"pan-y"}}>
       {task.color&&<div style={{position:"absolute",left:0,top:8,bottom:8,width:3,borderRadius:2,background:task.color}}/>}
       <div style={{color:T.textMuted,opacity:hov?.6:0,transition:"opacity .15s",flexShrink:0,marginTop:1,cursor:"grab",paddingLeft:task.color?4:0}}><Ico n="grip" s={14} c={T.textMuted}/></div>
       <button onClick={e=>{e.stopPropagation();onToggle(task.id);}} style={{width:19,height:19,borderRadius:5,border:`2px solid ${task.done?T.success:PRIORITY_COLOR[task.priority]||T.border}`,background:task.done?T.success:"transparent",cursor:"pointer",flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s"}}>
@@ -549,8 +624,8 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
           {task.recurring&&<Ico n="repeat" s={11} c={T.textMuted} st={{flexShrink:0}}/>}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5,marginTop:3,flexWrap:"wrap"}}>
-          {task.due&&<span style={{fontSize:11,color:ov?T.danger:T.textMuted,fontWeight:ov?700:400}}>{fmtDate(task.due)}</span>}
           {task.tag&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:catColor+"22",color:catColor,fontWeight:600}}>{task.tag}</span>}
+          {task.due&&<span style={{fontSize:11,color:ov?T.danger:T.textMuted,fontWeight:ov?700:400}}>{fmtDate(task.due)}</span>}
           {task.subtasks?.length>0&&<span style={{fontSize:10,color:T.textMuted}}>{task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</span>}
         </div>
       </div>
@@ -719,7 +794,7 @@ function MNote({note,T,onDelete,onConvert,editing,onEdit,onSave}) {
     </div>
   );
   return (
-    <div draggable onDragStart={e=>{e.dataTransfer.setData("nid",note.id);e.dataTransfer.effectAllowed="move";}}
+    <div draggable onDragStart={e=>{e.dataTransfer.setData("nid",note.id);e.dataTransfer.effectAllowed="move";navigator.vibrate?.(15);}}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
       style={{padding:"7px 9px",borderRadius:8,background:note.color+"1a",border:`1px solid ${note.color}44`,fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:150,cursor:"grab",transition:"transform .15s,box-shadow .15s",transform:hov?"translateY(-2px) rotate(.4deg)":"none",boxShadow:hov?`0 6px 14px ${note.color}33`:"none",animation:"slideIn .2s ease",userSelect:"none"}}>
       <div style={{borderLeft:`3px solid ${note.color}`,paddingLeft:6}}>{note.text}</div>
