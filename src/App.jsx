@@ -60,7 +60,6 @@ const Ico = ({ n, s=16, c="currentColor", st={} }) => {
 
 const NOTE_COLS = ["#ef4444","#f97316","#f59e0b","#22c55e","#3b82f6","#a855f7","#ec4899","#14b8a6"];
 const CAT_COLORS = ["#0ea5e9","#6366f1","#10b981","#f59e0b","#a855f7","#ef4444","#ec4899","#14b8a6","#f97316","#84cc16"];
-const PRIORITY_COLOR = { high:"#ef4444", medium:"#f59e0b", low:"#22c55e" };
 // Unified priority = Eisenhower quadrant, ranked urgent+important → neither. (#24)
 const QUAD = {
   q1:{label:"Urgent & Important", short:"Do First",  color:"#ef4444", icon:"🔥"},
@@ -166,38 +165,6 @@ const parseNL = raw => {
   return {title, due};
 };
 
-const mkSeed = () => [
-  {id:1,title:"Finish Q2 investor report",done:false,priority:"high",tag:"work",due:tod(),starred:true,notes:"Focus on MRR and churn",color:"#ef4444",subtasks:[{id:11,title:"Pull revenue data",done:true},{id:12,title:"Write summary",done:false}],recurring:null},
-  {id:2,title:"Team standup — sprint review",done:false,priority:"medium",tag:"work",due:tod(),starred:false,notes:"",color:null,subtasks:[],recurring:"daily"},
-  {id:3,title:"Morning run — 5km",done:true,priority:"low",tag:"health",due:tod(),starred:false,notes:"",color:null,subtasks:[],recurring:"daily"},
-  {id:4,title:"Meet business partner — Joe's Coffee",done:false,priority:"high",tag:"work",due:addDays(14),starred:false,notes:"Discuss Q3 roadmap",color:"#3b82f6",subtasks:[],recurring:null},
-  {id:5,title:"Review PR #247 — auth module",done:false,priority:"high",tag:"work",due:addDays(1),starred:false,notes:"Check token refresh",color:null,subtasks:[],recurring:null},
-  {id:6,title:"Read Atomic Habits ch.5",done:false,priority:"low",tag:"personal",due:addDays(2),starred:false,notes:"",color:null,subtasks:[],recurring:null},
-  {id:7,title:"Quarterly budget review",done:false,priority:"medium",tag:"finance",due:addDays(3),starred:true,notes:"",color:"#a855f7",subtasks:[],recurring:"monthly"},
-];
-
-const SEED_MATRIX = [
-  {id:1,q:"q1",text:"Fix production auth bug",color:"#ef4444"},
-  {id:2,q:"q1",text:"Submit client proposal",color:"#f97316"},
-  {id:3,q:"q2",text:"Learn TypeScript generics",color:"#3b82f6"},
-  {id:4,q:"q2",text:"Weekly exercise habit",color:"#22c55e"},
-  {id:5,q:"q3",text:"Reply to newsletters",color:"#a855f7"},
-  {id:6,q:"q4",text:"Reorganize downloads",color:"#6b7280"},
-];
-
-const SEED_CANVAS = [
-  {id:1,text:"💡 Mobile app v2",x:60,y:60,color:"#3b82f6"},
-  {id:2,text:"🎯 10k MRR by Q3",x:240,y:130,color:"#22c55e"},
-  {id:3,text:"🔍 Competitor pricing",x:80,y:240,color:"#f59e0b"},
-  {id:4,text:"📢 Launch blog",x:310,y:60,color:"#a855f7"},
-];
-
-const SEED_NOTES = [
-  {id:1,title:"Q2 Planning Notes",body:"Key priorities:\n- Launch mobile app by August\n- Hire 2 engineers\n- Improve retention to 85%",pinned:true,color:"#3b82f6",created:addDays(-2)},
-  {id:2,title:"Book list",body:"- Thinking Fast and Slow\n- The Mom Test\n- Zero to One\n- Inspired",pinned:false,color:"#22c55e",created:addDays(-4)},
-  {id:3,title:"Weekly intentions",body:"Stay in deep work mode.\nLimit meetings to 3/day.\nShip dashboard feature by Friday.",pinned:false,color:"#f59e0b",created:tod()},
-];
-
 const DEFAULT_CATS = {
   work:     {color:"#0ea5e9", icon:"💼"},
   school:   {color:"#6366f1", icon:"📚"},
@@ -281,7 +248,6 @@ export default function FlowSpace() {
   const isLoadingData = useRef(false);
   const syncTimers = useRef({});
   const [tasks, setTasks] = useState([]);
-  const [matrix, setMatrix] = useState([]);
   const [canvasNotes, setCanvasNotes] = useState([]);
   const [notes, setNotes] = useState([]);
   const [cats, setCats] = useState(DEFAULT_CATS);
@@ -329,18 +295,17 @@ export default function FlowSpace() {
   },[]);
 
   useEffect(()=>{
-    if(!user){setTasks([]);setMatrix([]);setCanvasNotes([]);setNotes([]);setCats(DEFAULT_CATS);return;}
+    if(!user){setTasks([]);setCanvasNotes([]);setNotes([]);setCats(DEFAULT_CATS);return;}
     isLoadingData.current=true; setSyncing(true);
-    Promise.all([db.loadTasks(user.id),db.loadMatrix(user.id),db.loadCanvas(user.id),db.loadNotes(user.id),db.loadCats(user.id)])
-      .then(([t,m,c,n,cats])=>{
-        setTasks(t); setMatrix(m); setCanvasNotes(c); setNotes(n);
+    Promise.all([db.loadTasks(user.id),db.loadCanvas(user.id),db.loadNotes(user.id),db.loadCats(user.id)])
+      .then(([t,c,n,cats])=>{
+        setTasks(t); setCanvasNotes(c); setNotes(n);
         if(cats) setCats(cats);
         setSyncing(false);
         setTimeout(()=>{isLoadingData.current=false;},200);
       }).catch(()=>setSyncing(false));
   },[user]);
 
-  useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.m);syncTimers.current.m=setTimeout(()=>db.syncMatrix(matrix,user.id).catch(console.error),1500);},[matrix]);
   useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.c);syncTimers.current.c=setTimeout(()=>db.syncCanvas(canvasNotes,user.id).catch(console.error),1500);},[canvasNotes]);
   useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.n);syncTimers.current.n=setTimeout(()=>db.syncNotes(notes,user.id).catch(console.error),1500);},[notes]);
   useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.k);syncTimers.current.k=setTimeout(()=>db.syncCats(cats,user.id).catch(console.error),1500);},[cats]);
@@ -356,8 +321,8 @@ export default function FlowSpace() {
     const onVisible=()=>{
       if(!document.hidden){
         isLoadingData.current=true;
-        Promise.all([db.loadMatrix(user.id),db.loadCanvas(user.id),db.loadNotes(user.id)])
-          .then(([m,c,n])=>{setMatrix(m);setCanvasNotes(c);setNotes(n);setTimeout(()=>{isLoadingData.current=false;},200);});
+        Promise.all([db.loadCanvas(user.id),db.loadNotes(user.id)])
+          .then(([c,n])=>{setCanvasNotes(c);setNotes(n);setTimeout(()=>{isLoadingData.current=false;},200);});
       }
     };
     document.addEventListener("visibilitychange",onVisible);
@@ -400,7 +365,7 @@ export default function FlowSpace() {
     const {title,due:parsed}=parseNL(input);
     const due=parsed||(view==="myday"?tod():null);
     const inCat=view.startsWith("cat:")?view.slice(4):null;
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:inCat||guessCat(title,cats),due,starred:view==="myday",notes:"",color:null,subtasks:[],recurring:null,quadrant:null};
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:inCat||guessCat(title,cats),due,starred:view==="myday"||view==="important",notes:"",color:null,subtasks:[],recurring:null,quadrant:null};
     setTasks(ts=>[t,...ts]);
     setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
     if(view==="myday"||t.starred) markActiveDay();
@@ -470,6 +435,16 @@ export default function FlowSpace() {
   const myDayAllDone=myDay.length>0&&myDay.every(t=>t.done);
   const prevMyDayDone=useRef(false);
   useEffect(()=>{ if(myDayAllDone&&!prevMyDayDone.current) fireConfetti(); prevMyDayDone.current=myDayAllDone; },[myDayAllDone]);
+  // Shortlist that complements My Day: tasks worth pulling in today (overdue → due soon → the rest).
+  const mydaySuggestions=tasks
+    .filter(t=>!t.done && t.due!==todStr && !t.starred)
+    .sort((a,b)=>{
+      const ao=a.due&&a.due<todStr, bo=b.due&&b.due<todStr;
+      if(ao!==bo) return ao?-1:1;
+      if(a.due&&b.due) return a.due.localeCompare(b.due);
+      if(a.due) return -1; if(b.due) return 1; return 0;
+    }).slice(0,6);
+  const addToMyDay=id=>{ navigator.vibrate?.(10); updateTask(id,{due:todStr}); markActiveDay(); };
   const carryOver=()=>{
     if(!overdueTasks.length) return;
     navigator.vibrate?.(15);
@@ -494,6 +469,7 @@ export default function FlowSpace() {
   const getViewTasks=()=>{
     let base;
     if(view.startsWith("cat:")){ const c=view.slice(4); base=tasks.filter(t=>t.tag===c); }
+    else if(view==="important") base=tasks.filter(t=>t.starred);
     else base=view==="myday"?myDay:view==="upcoming"?upcoming:view==="completed"?completed:tasks;
     if(search) base=base.filter(t=>t.title.toLowerCase().includes(search.toLowerCase()));
     return sortByDate(base);
@@ -501,6 +477,7 @@ export default function FlowSpace() {
 
   const navItems=[
     {id:"myday",label:"My Day",icon:"sun",badge:myDay.filter(t=>!t.done).length},
+    {id:"important",label:"Important",icon:"star",badge:tasks.filter(t=>t.starred&&!t.done).length},
     {id:"upcoming",label:"Upcoming",icon:"cal",badge:upcoming.filter(t=>!t.done).length},
     {id:"all",label:"All Tasks",icon:"layers",badge:null},
     {id:"completed",label:"Completed",icon:"done",badge:completed.length},
@@ -622,12 +599,12 @@ export default function FlowSpace() {
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted}/>}
-          {(["myday","upcoming","all","completed"].includes(view)||view.startsWith("cat:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length}/>
+          {(["myday","important","upcoming","all","completed"].includes(view)||view.startsWith("cat:"))&&(
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay}/>
           )}
         </div>
       </main>
-      {(["myday","upcoming","all"].includes(view)||view.startsWith("cat:"))&&(
+      {(["myday","important","upcoming","all"].includes(view)||view.startsWith("cat:"))&&(
         <button onClick={()=>inputRef.current?.focus()} style={{position:"fixed",bottom:26,right:26,width:50,height:50,borderRadius:"50%",border:"none",cursor:"pointer",background:T.grad,color:"#fff",boxShadow:"0 6px 20px rgba(192,132,252,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:50,transition:"transform .15s"}}
           onMouseEnter={e=>e.currentTarget.style.transform="scale(1.1)"}
           onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
@@ -716,16 +693,17 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onCarryOver,overdueCount}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onCarryOver,overdueCount,suggestions,onAddToMyDay}) {
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
   const [sort,setSort]=useState("smart");
+  const [showSugg,setShowSugg]=useState(true);
   const [dragId,setDragId]=useState(null);
   const [dropId,setDropId]=useState(null);
   const dragIdRef=useRef(null);
   const dropIdRef=useRef(null);
   const didDragRef=useRef(false);
-  const labels={myday:"My Day",upcoming:"Upcoming",all:"All Tasks",completed:"Completed"};
+  const labels={myday:"My Day",important:"Important",upcoming:"Upcoming",all:"All Tasks",completed:"Completed"};
   const catKey=view.startsWith("cat:")?view.slice(4):null;
   const titleLabel=catKey?`${cats[catKey]?.icon||"📁"} ${catKey.charAt(0).toUpperCase()+catKey.slice(1)}`:labels[view];
   let show=filter==="active"?tasks.filter(t=>!t.done):filter==="done"?tasks.filter(t=>t.done):tasks;
@@ -788,6 +766,28 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           <button onClick={onCarryOver} style={{display:"flex",alignItems:"center",gap:7,width:"100%",marginBottom:12,padding:"9px 12px",borderRadius:11,border:`1px solid ${T.warning}55`,background:T.warning+"15",color:T.warning,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>
             <Ico n="repeat" s={14} c={T.warning}/> Carry over {overdueCount} overdue {overdueCount===1?"task":"tasks"} to today
           </button>
+        )}
+        {view==="myday"&&suggestions&&suggestions.length>0&&(
+          <div style={{marginBottom:14,border:`1px solid ${T.border}`,borderRadius:11,background:T.surface,overflow:"hidden"}}>
+            <button onClick={()=>setShowSugg(s=>!s)} style={{width:"100%",display:"flex",alignItems:"center",gap:7,padding:"9px 12px",background:"none",border:"none",cursor:"pointer",color:T.text,fontFamily:"'DM Sans',sans-serif"}}>
+              <Ico n="sparkles" s={14} c={T.accent}/>
+              <span style={{fontSize:12,fontWeight:700,flex:1,textAlign:"left"}}>Suggestions for My Day</span>
+              <span style={{fontSize:10,color:T.textMuted}}>{showSugg?"Hide":`Show ${suggestions.length}`}</span>
+            </button>
+            {showSugg&&(
+              <div style={{padding:"0 8px 8px",display:"flex",flexDirection:"column",gap:3}}>
+                {suggestions.map(t=>{const ov=t.due&&t.due<tod();return(
+                  <div key={t.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 8px",borderRadius:8,background:T.surface2}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:12,color:T.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{t.title}</div>
+                      {t.due&&<div style={{fontSize:10,color:ov?T.danger:T.textMuted,fontWeight:ov?700:400}}>{ov?"Overdue · ":""}{fmtDate(t.due)}</div>}
+                    </div>
+                    <button onClick={()=>onAddToMyDay(t.id)} style={{display:"flex",alignItems:"center",gap:4,padding:"4px 10px",borderRadius:7,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}><Ico n="plus" s={11} c={T.accent}/>Add</button>
+                  </div>
+                );})}
+              </div>
+            )}
+          </div>
         )}
         {view!=="completed"&&(
           <div style={{display:"flex",gap:8,marginBottom:14}}>

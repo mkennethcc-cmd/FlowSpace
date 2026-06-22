@@ -7,7 +7,6 @@ export const fromDbTask = r => ({
   quadrant: r.quadrant || null,
 });
 
-const fromDbMatrix = r => ({ id: r.id, q: r.quadrant, text: r.text, color: r.color });
 const fromDbCanvas = r => ({ id: r.id, text: r.text, x: r.x, y: r.y, color: r.color });
 const fromDbNote = r => ({ id: r.id, title: r.title, body: r.body || "", pinned: r.pinned, color: r.color, drawing: r.drawing || null, created: r.created_at?.split("T")[0] || "" });
 
@@ -35,17 +34,6 @@ export const db = {
   },
   async deleteTask(id) {
     await supabase.from("tasks").delete().eq("id", id);
-  },
-
-  async loadMatrix(uid) {
-    const { data } = await supabase.from("matrix_notes").select("*").eq("user_id", uid);
-    return (data || []).map(fromDbMatrix);
-  },
-  async syncMatrix(notes, uid) {
-    await supabase.from("matrix_notes").delete().eq("user_id", uid);
-    if (notes.length) await supabase.from("matrix_notes").insert(
-      notes.map(n => ({ user_id: uid, quadrant: n.q, text: n.text, color: n.color }))
-    );
   },
 
   async loadCanvas(uid) {
