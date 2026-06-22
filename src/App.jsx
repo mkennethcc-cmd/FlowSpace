@@ -152,7 +152,14 @@ const SEED_NOTES = [
   {id:3,title:"Weekly intentions",body:"Stay in deep work mode.\nLimit meetings to 3/day.\nShip dashboard feature by Friday.",pinned:false,color:"#f59e0b",created:tod()},
 ];
 
-const DEFAULT_CATS = {work:"#0ea5e9",school:"#6366f1",health:"#10b981",personal:"#f59e0b",finance:"#a855f7"};
+const DEFAULT_CATS = {
+  work:     {color:"#0ea5e9", icon:"💼"},
+  school:   {color:"#6366f1", icon:"📚"},
+  health:   {color:"#10b981", icon:"🏃"},
+  personal: {color:"#f59e0b", icon:"🌟"},
+  finance:  {color:"#a855f7", icon:"💰"},
+};
+const CAT_ICONS = ["💼","📚","🏃","💰","🏠","❤️","🎯","✈️","🛒","🎨","🎮","🍔","☕","🌱","🐶","📞","🎵","⚽","💪","🧘","📝","💻","📅","🔥","⭐","🎓","🏥","🍳","🚗","🎁","📖","🧹","💡","🎬","🎉","🌍","🏋️","🧠","📷","🎸","🍕","🛏️","🐱","✏️","🔧","📌","🏆","🌸"];
 
 const mkT = d => ({
   bg:d?"#0c0e16":"#f3f3f8", surface:d?"#141828":"#ffffff", surface2:d?"#1c2238":"#f0f0f6",
@@ -291,7 +298,8 @@ export default function FlowSpace() {
     if (!input.trim()) return;
     const {title,due:parsed}=parseNL(input);
     const due=parsed||(view==="myday"?tod():null);
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:guessCat(title,cats),due,starred:view==="myday",notes:"",color:null,subtasks:[],recurring:null};
+    const inCat=view.startsWith("cat:")?view.slice(4):null;
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:inCat||guessCat(title,cats),due,starred:view==="myday",notes:"",color:null,subtasks:[],recurring:null};
     setTasks(ts=>[t,...ts]);
     setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
     if(view==="myday"||t.starred) markActiveDay();
@@ -338,7 +346,9 @@ export default function FlowSpace() {
   });
 
   const getViewTasks=()=>{
-    let base=view==="myday"?myDay:view==="upcoming"?upcoming:view==="completed"?completed:tasks;
+    let base;
+    if(view.startsWith("cat:")){ const c=view.slice(4); base=tasks.filter(t=>t.tag===c); }
+    else base=view==="myday"?myDay:view==="upcoming"?upcoming:view==="completed"?completed:tasks;
     if(search) base=base.filter(t=>t.title.toLowerCase().includes(search.toLowerCase()));
     return sortByDate(base);
   };
@@ -395,6 +405,19 @@ export default function FlowSpace() {
               {sideOpen&&item.badge>0&&<span style={{background:view===item.id?T.accent:T.surface3,color:view===item.id?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{item.badge}</span>}
             </button>
           ))}
+          {sideOpen&&Object.keys(cats).length>0&&(
+            <div style={{padding:"12px 10px 4px",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>Folders</div>
+          )}
+          {Object.entries(cats).map(([name,meta])=>{
+            const v=`cat:${name}`, active=view===v, count=tasks.filter(t=>t.tag===name&&!t.done).length;
+            return (
+              <button key={name} onClick={()=>setView(v)} style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:sideOpen?"8px 10px":"8px 0",justifyContent:sideOpen?"flex-start":"center",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,transition:"all .15s",background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
+                <span style={{fontSize:15,width:16,textAlign:"center",flexShrink:0}}>{meta.icon}</span>
+                {sideOpen&&<span style={{flex:1,textAlign:"left",whiteSpace:"nowrap",textTransform:"capitalize"}}>{name}</span>}
+                {sideOpen&&count>0&&<span style={{background:active?T.accent:T.surface3,color:active?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{count}</span>}
+              </button>
+            );
+          })}
         </nav>
         {sideOpen&&(
           <div style={{padding:"10px 12px"}}>
@@ -445,12 +468,12 @@ export default function FlowSpace() {
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats}/>}
-          {["myday","upcoming","all","completed"].includes(view)&&(
+          {(["myday","upcoming","all","completed"].includes(view)||view.startsWith("cat:"))&&(
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length}/>
           )}
         </div>
       </main>
-      {["myday","upcoming","all"].includes(view)&&(
+      {(["myday","upcoming","all"].includes(view)||view.startsWith("cat:"))&&(
         <button onClick={()=>inputRef.current?.focus()} style={{position:"fixed",bottom:26,right:26,width:50,height:50,borderRadius:"50%",border:"none",cursor:"pointer",background:"linear-gradient(135deg,#c084fc,#818cf8)",color:"#fff",boxShadow:"0 6px 20px rgba(192,132,252,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:50,transition:"transform .15s"}}
           onMouseEnter={e=>e.currentTarget.style.transform="scale(1.1)"}
           onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
@@ -504,6 +527,7 @@ const CR=({icon,label,sub,T,onClick})=>(
 
 function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,selTask,setSelTask,newAnim,cats,onCarryOver,overdueCount}) {
   const [filter,setFilter]=useState("all");
+  const [catFilter,setCatFilter]=useState(null);
   const [dragId,setDragId]=useState(null);
   const [dropId,setDropId]=useState(null);
   const pressTimer=useRef(null);
@@ -512,7 +536,10 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const startRef=useRef({x:0,y:0});
   const captureRef=useRef(null);
   const labels={myday:"My Day",upcoming:"Upcoming",all:"All Tasks",completed:"Completed"};
-  const show=filter==="active"?tasks.filter(t=>!t.done):filter==="done"?tasks.filter(t=>t.done):tasks;
+  const catKey=view.startsWith("cat:")?view.slice(4):null;
+  const titleLabel=catKey?`${cats[catKey]?.icon||"📁"} ${catKey.charAt(0).toUpperCase()+catKey.slice(1)}`:labels[view];
+  let show=filter==="active"?tasks.filter(t=>!t.done):filter==="done"?tasks.filter(t=>t.done):tasks;
+  if(view==="all"&&catFilter) show=show.filter(t=>t.tag===catFilter);
 
   const arm=id=>{ armedRef.current=true; navigator.vibrate?.(20); captureRef.current?.el?.setPointerCapture?.(captureRef.current.pid); setDragId(id); };
   const onCardDown=(e,id)=>{
@@ -548,7 +575,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
         <div style={{marginBottom:18}}>
           {view==="myday"&&<div style={{fontSize:12,color:T.textMuted,fontWeight:500,marginBottom:3}}>{new Date().getHours()<12?"Good morning 🌤":new Date().getHours()<17?"Keep it up 💪":"Good evening 🌙"}</div>}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
-            <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:22,fontWeight:700,letterSpacing:"-.5px"}}>{labels[view]}</h1>
+            <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:22,fontWeight:700,letterSpacing:"-.5px"}}>{titleLabel}</h1>
             <span style={{fontSize:11,color:T.textMuted}}>Sorted by date · drag ⠿ to reorder</span>
           </div>
           <div style={{fontSize:12,color:T.textMuted,marginTop:2}}>{new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}{view==="myday"&&` · ${tasks.filter(t=>!t.done).length} remaining`}</div>
@@ -571,6 +598,14 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           <div style={{display:"flex",gap:5,marginBottom:12}}>
             {["all","active","done"].map(f=>(
               <button key={f} onClick={()=>setFilter(f)} style={{padding:"4px 13px",borderRadius:20,border:`1px solid ${filter===f?T.accent:T.border}`,background:filter===f?T.accent+"22":"transparent",color:filter===f?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:filter===f?700:400,fontFamily:"'DM Sans',sans-serif",transition:"all .15s"}}>{f.charAt(0).toUpperCase()+f.slice(1)}</button>
+            ))}
+          </div>
+        )}
+        {view==="all"&&(
+          <div style={{display:"flex",gap:5,marginBottom:12,flexWrap:"wrap"}}>
+            <button onClick={()=>setCatFilter(null)} style={{padding:"4px 11px",borderRadius:20,border:`1px solid ${!catFilter?T.accent:T.border}`,background:!catFilter?T.accent+"22":"transparent",color:!catFilter?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:!catFilter?700:400,fontFamily:"'DM Sans',sans-serif"}}>All</button>
+            {Object.entries(cats).map(([name,meta])=>(
+              <button key={name} onClick={()=>setCatFilter(catFilter===name?null:name)} style={{padding:"4px 11px",borderRadius:20,border:`1px solid ${catFilter===name?meta.color:T.border}`,background:catFilter===name?meta.color+"22":"transparent",color:catFilter===name?meta.color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:catFilter===name?700:400,fontFamily:"'DM Sans',sans-serif",textTransform:"capitalize"}}>{meta.icon} {name}</button>
             ))}
           </div>
         )}
@@ -604,7 +639,8 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
 function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,onDown,onMove,onUp}) {
   const [hov,setHov]=useState(false);
   const ov=task.due&&task.due<tod()&&!task.done;
-  const catColor=cats[task.tag]||"#6b7280";
+  const catMeta=cats[task.tag];
+  const catColor=catMeta?.color||"#6b7280";
   return (
     <div className={entering?"te":""} data-task-id={task.id}
       onPointerDown={onDown?e=>onDown(e,task.id):undefined}
@@ -624,7 +660,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
           {task.recurring&&<Ico n="repeat" s={11} c={T.textMuted} st={{flexShrink:0}}/>}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5,marginTop:3,flexWrap:"wrap"}}>
-          {task.tag&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:catColor+"22",color:catColor,fontWeight:600}}>{task.tag}</span>}
+          {task.tag&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:catColor+"22",color:catColor,fontWeight:600}}>{catMeta?.icon?catMeta.icon+" ":""}{task.tag}</span>}
           {task.due&&<span style={{fontSize:11,color:ov?T.danger:T.textMuted,fontWeight:ov?700:400}}>{fmtDate(task.due)}</span>}
           {task.subtasks?.length>0&&<span style={{fontSize:10,color:T.textMuted}}>{task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</span>}
         </div>
@@ -672,8 +708,8 @@ function TDetail({task,T,cats,onUpdate,onDelete,onClose}) {
       </DL>
       <DL label="Category" T={T}>
         <div style={{display:"flex",gap:4,marginTop:5,flexWrap:"wrap"}}>
-          {Object.entries(cats).map(([tag,clr])=>(
-            <button key={tag} onClick={()=>onUpdate(task.id,{tag})} style={{padding:"3px 9px",borderRadius:20,border:`1px solid ${task.tag===tag?clr:T.border}`,background:task.tag===tag?clr+"22":"transparent",color:task.tag===tag?clr:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:task.tag===tag?700:400,fontFamily:"'DM Sans',sans-serif"}}>{tag}</button>
+          {Object.entries(cats).map(([tag,meta])=>(
+            <button key={tag} onClick={()=>onUpdate(task.id,{tag})} style={{padding:"3px 9px",borderRadius:20,border:`1px solid ${task.tag===tag?meta.color:T.border}`,background:task.tag===tag?meta.color+"22":"transparent",color:task.tag===tag?meta.color:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:task.tag===tag?700:400,fontFamily:"'DM Sans',sans-serif"}}>{meta.icon} {tag}</button>
           ))}
         </div>
       </DL>
@@ -1061,8 +1097,11 @@ function SettingsView({T,dark,setDark,cats,setCats}) {
   const [pomLen,setPomLen]=useState(25);
   const [newCat,setNewCat]=useState("");
   const [newCatColor,setNewCatColor]=useState(CAT_COLORS[5]);
-  const addCat=()=>{const name=newCat.trim().toLowerCase();if(!name||cats[name])return;setCats(c=>({...c,[name]:newCatColor}));setNewCat("");};
+  const [newCatIcon,setNewCatIcon]=useState(CAT_ICONS[0]);
+  const [iconMenuFor,setIconMenuFor]=useState(null);
+  const addCat=()=>{const name=newCat.trim().toLowerCase();if(!name||cats[name])return;setCats(c=>({...c,[name]:{color:newCatColor,icon:newCatIcon}}));setNewCat("");setNewCatIcon(CAT_ICONS[0]);};
   const delCat=name=>{if(["work","health"].includes(name))return;const c={...cats};delete c[name];setCats(c);};
+  const pickIcon=em=>{if(iconMenuFor==="__new__")setNewCatIcon(em);else setCats(c=>({...c,[iconMenuFor]:{...c[iconMenuFor],icon:em}}));setIconMenuFor(null);};
   const Toggle=({val,onChange})=>(
     <div onClick={()=>onChange(!val)} style={{width:36,height:20,borderRadius:10,background:val?T.accent:T.surface3,cursor:"pointer",position:"relative",transition:"background .2s",flexShrink:0}}>
       <div style={{width:16,height:16,borderRadius:"50%",background:"#fff",position:"absolute",top:2,left:val?18:2,transition:"left .2s",boxShadow:"0 1px 4px rgba(0,0,0,.3)"}}/>
@@ -1079,18 +1118,27 @@ function SettingsView({T,dark,setDark,cats,setCats}) {
       <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px",marginBottom:18}}>Settings</h1>
       <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"0 16px",marginBottom:14}}>
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,padding:"12px 0 6px"}}>Categories</div>
+        <div style={{fontSize:11,color:T.textMuted,marginBottom:8}}>These are your folders in the sidebar. Tap a category's icon to change it.</div>
         <div style={{display:"flex",flexWrap:"wrap",gap:7,paddingBottom:10}}>
-          {Object.entries(cats).map(([name,color])=>(
-            <div key={name} style={{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:20,background:color+"22",border:`1px solid ${color}55`}}>
-              <div style={{width:7,height:7,borderRadius:"50%",background:color}}/>
-              <span style={{fontSize:12,color:color,fontWeight:600}}>{name}</span>
+          {Object.entries(cats).map(([name,meta])=>(
+            <div key={name} style={{display:"flex",alignItems:"center",gap:5,padding:"4px 8px 4px 6px",borderRadius:20,background:meta.color+"22",border:`1px solid ${meta.color}55`}}>
+              <button onClick={()=>setIconMenuFor(iconMenuFor===name?null:name)} title="Change icon" style={{border:"none",background:"transparent",cursor:"pointer",fontSize:14,lineHeight:1,padding:0}}>{meta.icon}</button>
+              <span style={{fontSize:12,color:meta.color,fontWeight:600}}>{name}</span>
               {!["work","health"].includes(name)&&(
                 <button onClick={()=>delCat(name)} style={{width:14,height:14,borderRadius:"50%",border:"none",cursor:"pointer",background:T.surface3,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",marginLeft:1}}><Ico n="x" s={8}/></button>
               )}
             </div>
           ))}
         </div>
-        <div style={{display:"flex",gap:6,paddingBottom:12}}>
+        {iconMenuFor&&(
+          <div style={{display:"flex",flexWrap:"wrap",gap:3,padding:"4px 0 10px",maxHeight:128,overflowY:"auto"}}>
+            {CAT_ICONS.map(em=>(
+              <button key={em} onClick={()=>pickIcon(em)} style={{width:30,height:30,borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center"}}>{em}</button>
+            ))}
+          </div>
+        )}
+        <div style={{display:"flex",gap:6,paddingBottom:12,alignItems:"center"}}>
+          <button onClick={()=>setIconMenuFor(iconMenuFor==="__new__"?null:"__new__")} title="Pick icon" style={{width:32,height:32,borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,cursor:"pointer",fontSize:16,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{newCatIcon}</button>
           <div style={{display:"flex",gap:4,flexWrap:"wrap",marginRight:4}}>
             {CAT_COLORS.map(c=><div key={c} onClick={()=>setNewCatColor(c)} style={{width:16,height:16,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${newCatColor===c?T.text:"transparent"}`,flexShrink:0}}/>)}
           </div>

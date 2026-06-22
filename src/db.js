@@ -71,11 +71,11 @@ export const db = {
   async loadCats(uid) {
     const { data } = await supabase.from("categories").select("*").eq("user_id", uid);
     if (!data?.length) return null;
-    return Object.fromEntries(data.map(r => [r.name, r.color]));
+    return Object.fromEntries(data.map(r => [r.name, { color: r.color, icon: r.icon || "📌" }]));
   },
   async syncCats(cats, uid) {
     await supabase.from("categories").delete().eq("user_id", uid);
-    const rows = Object.entries(cats).map(([name, color]) => ({ user_id: uid, name, color }));
+    const rows = Object.entries(cats).map(([name, m]) => ({ user_id: uid, name, color: m.color, icon: m.icon || "📌" }));
     if (rows.length) await supabase.from("categories").insert(rows);
   },
 };
