@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "./supabase";
 import { db, fromDbTask } from "./db";
-import AuthScreen from "./AuthScreen";
+import AuthScreen, { SignupSuccess, ResetPassword } from "./AuthScreen";
 
 const FontLink = () => (
   <style>{`
@@ -154,8 +154,16 @@ export default function FlowSpace() {
   const [sideOpen, setSideOpen] = useState(true);
   const [selTask, setSelTask] = useState(null);
   const [input, setInput] = useState("");
-  const [xp, setXp] = useState(380);
-  const [streak] = useState(7);
+  const [xp, setXp] = useState(0);
+  const [streak, setStreak] = useState(0);
+  const awardedRef = useRef(new Set());
+  const lastActiveRef = useRef(null);
+  const [confirmFlow, setConfirmFlow] = useState(()=>{
+    const h = window.location.hash || "";
+    if (h.includes("type=signup")) return "signup";
+    if (h.includes("type=recovery")) return "recovery";
+    return null;
+  });
   const [newAnim, setNewAnim] = useState(null);
   const [showSearch, setShowSearch] = useState(false);
   const [search, setSearch] = useState("");
@@ -222,23 +230,55 @@ export default function FlowSpace() {
     return ()=>{supabase.removeChannel(ch);document.removeEventListener("visibilitychange",onVisible);};
   },[user]);
 
+  useEffect(()=>{
+    if(!user){ setXp(0); setStreak(0); awardedRef.current=new Set(); lastActiveRef.current=null; return; }
+    let g={xp:0,streak:0,awarded:[],lastActive:null};
+    try{ const raw=localStorage.getItem(`fs_gami_${user.id}`); if(raw) g=JSON.parse(raw); }catch{}
+    awardedRef.current=new Set(g.awarded||[]);
+    lastActiveRef.current=g.lastActive||null;
+    const yest=addDays(-1);
+    let st=g.streak||0;
+    if(g.lastActive && g.lastActive!==tod() && g.lastActive!==yest) st=0;
+    setStreak(st); setXp(g.xp||0);
+  },[user]);
+
+  useEffect(()=>{
+    if(!user) return;
+    try{ localStorage.setItem(`fs_gami_${user.id}`, JSON.stringify({xp,streak,awarded:[...awardedRef.current],lastActive:lastActiveRef.current})); }catch{}
+  },[xp,streak,user]);
+
+  const markActiveDay = useCallback(()=>{
+    const today=tod();
+    if(lastActiveRef.current===today) return;
+    const yest=addDays(-1);
+    setStreak(s=> lastActiveRef.current===yest ? s+1 : 1);
+    lastActiveRef.current=today;
+  },[]);
+
+  const awardXp = useCallback((key,amount)=>{
+    if(key && awardedRef.current.has(key)) return;
+    if(key) awardedRef.current.add(key);
+    setXp(x=>x+amount);
+  },[]);
+
   const addTask = useCallback(()=>{
     if (!input.trim()) return;
     const {title,due:parsed}=parseNL(input);
     const due=parsed||(view==="myday"?tod():null);
     const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:"work",due,starred:view==="myday",notes:"",color:null,subtasks:[],recurring:null};
     setTasks(ts=>[t,...ts]);
-    setInput(""); setXp(x=>x+10); setNewAnim(t.id);
+    setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
+    if(view==="myday"||t.starred) markActiveDay();
     setTimeout(()=>setNewAnim(null),600);
     if(user) db.insertTask(t,user.id).catch(console.error);
-  },[input,view,user]);
+  },[input,view,user,awardXp,markActiveDay]);
 
   const toggleTask = id=>{
     const task=tasks.find(t=>t.id===id);
     if(!task) return;
     const newDone=!task.done;
     setTasks(ts=>ts.map(t=>t.id===id?{...t,done:newDone}:t));
-    if(newDone) setXp(x=>x+20);
+    if(newDone){ awardXp("done-"+id,20); markActiveDay(); }
     if(user) db.updateTask(id,{done:newDone}).catch(console.error);
   };
   const deleteTask = id=>{setTasks(ts=>ts.filter(t=>t.id!==id));if(selTask?.id===id)setSelTask(null);if(user)db.deleteTask(id).catch(console.error);};
@@ -282,11 +322,13 @@ export default function FlowSpace() {
     {id:"settings",label:"Settings",icon:"cog",badge:null},
   ];
 
-  if(authLoading) return <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0c0e16",color:"#7a85a3",fontFamily:"'DM Sans',sans-serif"}}>Loading…</div>;
+  if(confirmFlow==="signup") return <SignupSuccess onContinue={()=>{ try{window.history.replaceState(null,"",window.location.pathname);}catch{} setConfirmFlow(null); }}/>;
+  if(confirmFlow==="recovery") return <ResetPassword onDone={()=>{ try{window.history.replaceState(null,"",window.location.pathname);}catch{} setConfirmFlow(null); }}/>;
+  if(authLoading) return <div style={{height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:"#0c0e16",color:"#7a85a3",fontFamily:"'DM Sans',sans-serif"}}>Loading…</div>;
   if(!user) return <AuthScreen/>;
 
   return (
-    <div style={{fontFamily:"'DM Sans',sans-serif",background:T.bg,color:T.text,height:"100vh",display:"flex",overflow:"hidden",transition:"background .3s,color .3s"}}>
+    <div style={{fontFamily:"'DM Sans',sans-serif",background:T.bg,color:T.text,height:"100%",display:"flex",overflow:"hidden",transition:"background .3s,color .3s"}}>
       <FontLink/>
       {cmdOpen&&<CmdPalette T={T} tasks={tasks} onClose={()=>setCmdOpen(false)} onGo={v=>{setView(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}}/>}
       <aside style={{width:sideOpen?224:60,transition:"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:30}}>
@@ -313,7 +355,7 @@ export default function FlowSpace() {
             </div>
           </div>
         )}
-        <nav style={{flex:1,padding:"0 6px",overflowY:"auto",overflowX:"hidden"}}>
+        <nav style={{flex:1,minHeight:0,padding:"0 6px",overflowY:"auto",overflowX:"hidden"}}>
           {navItems.map(item=>(
             <button key={item.id} onClick={()=>setView(item.id)} style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:sideOpen?"8px 10px":"8px 0",justifyContent:sideOpen?"flex-start":"center",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,transition:"all .15s",background:view===item.id?T.accentGlow:"transparent",color:view===item.id?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:view===item.id?600:400}}>
               <Ico n={item.icon} s={16} c={view===item.id?T.accent:T.textMuted}/>
@@ -864,7 +906,7 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
   const rate=total>0?Math.round((done/total)*100):0;
   const ov=tasks.filter(t=>t.due&&t.due<tod()&&!t.done).length;
   const byTag={};tasks.forEach(t=>{byTag[t.tag]=(byTag[t.tag]||0)+1;});
-  const heat=Array.from({length:35},(_,i)=>({v:Math.floor(Math.random()*6)}));
+  const heat=Array.from({length:35},()=>({v:0}));
   const runAI=()=>{setAiLoad(true);setAiMsg("");setTimeout(()=>{setAiLoad(false);setAiMsg(`🧠 Peak productivity: Tue–Thu. Work tasks: 94% done. ${ov>0?`${ov} overdue — schedule catch-up.`:"No overdue tasks! "} Recommended deep-work window: 9–11am. Keep your ${streak}-day streak 🔥`);},1600);};
   return (
     <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>

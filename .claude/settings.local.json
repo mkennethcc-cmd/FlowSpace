@@ -7,7 +7,8 @@
       "Bash(ls \"C:/Claude Files Download/\" 2>/dev/null || echo \"empty or not found\")",
       "Bash(npm --version)",
       "Bash(unzip -l files.zip)",
-      "Bash(unzip -o files.zip -d ./extracted/)"
+      "Bash(unzip -o files.zip -d ./extracted/)",
+      "PowerShell(npm run build 2>&1)"
     ]
   }
 }
