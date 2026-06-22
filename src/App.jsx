@@ -78,6 +78,43 @@ const guessCat = (title, cats) => {
   return cats["personal"] ? "personal" : (cats["work"] ? "work" : Object.keys(cats)[0] || "work");
 };
 
+// Robust press-to-drag: mouse drags after a tiny move; touch drags after a 120ms hold.
+// Calls onActivate() once when a real drag should begin (not a tap/click/scroll).
+function startPressDrag(e, onActivate) {
+  const sx = e.clientX, sy = e.clientY, type = e.pointerType;
+  let done = false, timer = null;
+  const finish = () => { clearTimeout(timer); window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up); };
+  const activate = () => { if (done) return; done = true; finish(); onActivate(); };
+  const mv = ev => {
+    const dx = Math.abs(ev.clientX - sx), dy = Math.abs(ev.clientY - sy);
+    if (type === "mouse") { if (dx > 4 || dy > 4) activate(); }
+    else if (dx > 8 || dy > 8) { finish(); } // moved before the hold fired → it's a scroll, cancel
+  };
+  const up = () => finish();
+  if (type !== "mouse") timer = setTimeout(activate, 120);
+  window.addEventListener("pointermove", mv);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
+}
+
+// Runs an active drag via window listeners (reliable across re-renders). Blocks text-select/scroll while dragging.
+function runDrag(onMove, onDrop) {
+  document.body.style.userSelect = "none";
+  document.body.style.touchAction = "none";
+  const mv = e => onMove(e);
+  const up = e => {
+    window.removeEventListener("pointermove", mv);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
+    document.body.style.userSelect = "";
+    document.body.style.touchAction = "";
+    onDrop(e);
+  };
+  window.addEventListener("pointermove", mv);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
+}
+
 const tod = () => new Date().toISOString().split("T")[0];
 const addDays = n => { const d=new Date(); d.setDate(d.getDate()+n); return d.toISOString().split("T")[0]; };
 const fmtDate = s => {
@@ -530,43 +567,26 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const [catFilter,setCatFilter]=useState(null);
   const [dragId,setDragId]=useState(null);
   const [dropId,setDropId]=useState(null);
-  const pressTimer=useRef(null);
-  const armedRef=useRef(false);
+  const dragIdRef=useRef(null);
+  const dropIdRef=useRef(null);
   const didDragRef=useRef(false);
-  const startRef=useRef({x:0,y:0});
-  const captureRef=useRef(null);
   const labels={myday:"My Day",upcoming:"Upcoming",all:"All Tasks",completed:"Completed"};
   const catKey=view.startsWith("cat:")?view.slice(4):null;
   const titleLabel=catKey?`${cats[catKey]?.icon||"📁"} ${catKey.charAt(0).toUpperCase()+catKey.slice(1)}`:labels[view];
   let show=filter==="active"?tasks.filter(t=>!t.done):filter==="done"?tasks.filter(t=>t.done):tasks;
   if(view==="all"&&catFilter) show=show.filter(t=>t.tag===catFilter);
 
-  const arm=id=>{ armedRef.current=true; navigator.vibrate?.(20); captureRef.current?.el?.setPointerCapture?.(captureRef.current.pid); setDragId(id); };
   const onCardDown=(e,id)=>{
     if(e.target.closest("button")) return;
     didDragRef.current=false;
-    startRef.current={x:e.clientX,y:e.clientY};
-    captureRef.current={el:e.currentTarget,pid:e.pointerId};
-    if(e.pointerType==="mouse"){ armedRef.current=true; e.currentTarget.setPointerCapture?.(e.pointerId); }
-    else { pressTimer.current=setTimeout(()=>arm(id),100); }
-  };
-  const onCardMove=(e,id)=>{
-    if(!armedRef.current){
-      const dx=Math.abs(e.clientX-startRef.current.x), dy=Math.abs(e.clientY-startRef.current.y);
-      if(dx>10||dy>10) clearTimeout(pressTimer.current);
-      return;
-    }
-    e.preventDefault();
-    if(dragId==null) setDragId(id);
-    didDragRef.current=true;
-    const el=document.elementFromPoint(e.clientX,e.clientY);
-    const card=el&&el.closest("[data-task-id]");
-    if(card){ const tid=card.getAttribute("data-task-id"); if(tid&&tid!==dropId) setDropId(tid); }
-  };
-  const onCardUp=()=>{
-    clearTimeout(pressTimer.current);
-    if(armedRef.current&&dragId!=null&&dropId!=null&&String(dragId)!==String(dropId)) reorderTasks(dragId,dropId);
-    armedRef.current=false; setDragId(null); setDropId(null);
+    startPressDrag(e,()=>{
+      didDragRef.current=true;
+      dragIdRef.current=id; setDragId(id); navigator.vibrate?.(20);
+      runDrag(
+        ev=>{ const el=document.elementFromPoint(ev.clientX,ev.clientY); const card=el&&el.closest("[data-task-id]"); dropIdRef.current=card?card.getAttribute("data-task-id"):null; setDropId(dropIdRef.current); },
+        ()=>{ const from=dragIdRef.current,to=dropIdRef.current; if(from!=null&&to!=null&&String(from)!==String(to)) reorderTasks(from,to); dragIdRef.current=null; dropIdRef.current=null; setDragId(null); setDropId(null); }
+      );
+    });
   };
   const selectCard=task=>{ if(didDragRef.current){ didDragRef.current=false; return; } setSelTask(task); };
   return (
@@ -612,7 +632,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
         <div style={{display:"flex",flexDirection:"column",gap:4}}>
           {show.filter(t=>!t.done).map(task=>(
             <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id} dropTarget={dropId===task.id}
-              onDown={onCardDown} onMove={onCardMove} onUp={onCardUp}/>
+              onDown={onCardDown}/>
           ))}
           {show.filter(t=>t.done).length>0&&<>
             <div style={{fontSize:10,color:T.textMuted,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",padding:"10px 2px 4px",display:"flex",alignItems:"center",gap:5}}>
@@ -636,7 +656,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   );
 }
 
-function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,onDown,onMove,onUp}) {
+function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,onDown}) {
   const [hov,setHov]=useState(false);
   const ov=task.due&&task.due<tod()&&!task.done;
   const catMeta=cats[task.tag];
@@ -644,8 +664,6 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
   return (
     <div className={entering?"te":""} data-task-id={task.id}
       onPointerDown={onDown?e=>onDown(e,task.id):undefined}
-      onPointerMove={onMove?e=>onMove(e,task.id):undefined}
-      onPointerUp={onUp}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)} onClick={()=>onSel(task)}
       style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent",border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:"all .12s",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:dragging?"scale(.98)":"scale(1)",userSelect:"none",WebkitUserSelect:"none",touchAction:"pan-y"}}>
       {task.color&&<div style={{position:"absolute",left:0,top:8,bottom:8,width:3,borderRadius:2,background:task.color}}/>}
@@ -775,7 +793,9 @@ function EisenhowerMatrix({T,notes,setNotes,setTasks,cats}) {
   const [addingIn,setAddingIn]=useState(null);
   const [newText,setNewText]=useState("");
   const [dragOver,setDragOver]=useState(null);
+  const [dragNoteId,setDragNoteId]=useState(null);
   const [editId,setEditId]=useState(null);
+  const dragOverRef=useRef(null);
   useEffect(()=>{
     const fn=e=>{if(e.key==="n"&&!e.metaKey&&!e.ctrlKey&&document.activeElement.tagName!=="INPUT"&&document.activeElement.tagName!=="TEXTAREA")setAddingIn("q1");};
     window.addEventListener("keydown",fn); return ()=>window.removeEventListener("keydown",fn);
@@ -788,11 +808,20 @@ function EisenhowerMatrix({T,notes,setNotes,setTasks,cats}) {
   ];
   const addNote=qid=>{if(!newText.trim())return;setNotes(n=>[...n,{id:Date.now(),q:qid,text:newText.trim(),color:NOTE_COLS[Math.floor(Math.random()*NOTE_COLS.length)]}]);setNewText("");setAddingIn(null);};
   const convertToTask=note=>{setTasks(ts=>[{id:Date.now(),title:note.text,done:false,priority:note.q==="q1"?"high":note.q==="q2"?"medium":"low",tag:"work",due:tod(),starred:note.q==="q1",notes:"From Matrix",color:note.color,subtasks:[],recurring:null},...ts]);setNotes(n=>n.filter(x=>x.id!==note.id));};
+  const onNoteDown=(e,note)=>{
+    if(e.target.closest("button")||e.target.tagName==="TEXTAREA") return;
+    startPressDrag(e,()=>{
+      setDragNoteId(note.id); navigator.vibrate?.(20);
+      runDrag(
+        ev=>{ const el=document.elementFromPoint(ev.clientX,ev.clientY); const qd=el&&el.closest("[data-quadrant]"); dragOverRef.current=qd?qd.getAttribute("data-quadrant"):null; setDragOver(dragOverRef.current); },
+        ()=>{ const q=dragOverRef.current; if(q) setNotes(n=>n.map(x=>x.id===note.id?{...x,q}:x)); dragOverRef.current=null; setDragNoteId(null); setDragOver(null); }
+      );
+    });
+  };
   return (
     <div style={{flex:1,display:"grid",gridTemplateColumns:"1fr 1fr",gridTemplateRows:"1fr 1fr",gap:1,background:T.border,overflow:"hidden"}}>
       {QUADS.map(q=>(
-        <div key={q.id} onDragOver={e=>{e.preventDefault();setDragOver(q.id);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget))setDragOver(null);}}
-          onDrop={e=>{e.preventDefault();const id=parseInt(e.dataTransfer.getData("nid"));if(id)setNotes(n=>n.map(x=>x.id===id?{...x,q:q.id}:x));setDragOver(null);}}
+        <div key={q.id} data-quadrant={q.id}
           style={{background:dragOver===q.id?q.color+"12":T.bg,transition:"background .15s",display:"flex",flexDirection:"column",overflow:"hidden",outline:dragOver===q.id?`2px dashed ${q.color}44`:"none",outlineOffset:"-2px"}}>
           <div style={{padding:"9px 14px 7px",borderBottom:`1px solid ${T.border}`,background:q.color+"09",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
             <div style={{display:"flex",alignItems:"center",gap:6}}>
@@ -803,7 +832,7 @@ function EisenhowerMatrix({T,notes,setNotes,setTasks,cats}) {
           </div>
           <div style={{flex:1,padding:10,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:7,alignContent:"flex-start"}}>
             {notes.filter(n=>n.q===q.id).map(note=>(
-              <MNote key={note.id} note={note} T={T} onDelete={id=>setNotes(n=>n.filter(x=>x.id!==id))} onConvert={()=>convertToTask(note)} editing={editId===note.id} onEdit={()=>setEditId(note.id)} onSave={txt=>{setNotes(n=>n.map(x=>x.id===note.id?{...x,text:txt}:x));setEditId(null);}}/>
+              <MNote key={note.id} note={note} T={T} onDown={onNoteDown} dragging={dragNoteId===note.id} onDelete={id=>setNotes(n=>n.filter(x=>x.id!==id))} onConvert={()=>convertToTask(note)} editing={editId===note.id} onEdit={()=>setEditId(note.id)} onSave={txt=>{setNotes(n=>n.map(x=>x.id===note.id?{...x,text:txt}:x));setEditId(null);}}/>
             ))}
             {addingIn===q.id&&(
               <div style={{width:"100%",animation:"slideIn .2s ease"}}>
@@ -821,7 +850,7 @@ function EisenhowerMatrix({T,notes,setNotes,setTasks,cats}) {
   );
 }
 
-function MNote({note,T,onDelete,onConvert,editing,onEdit,onSave}) {
+function MNote({note,T,onDelete,onConvert,editing,onEdit,onSave,onDown,dragging}) {
   const [hov,setHov]=useState(false);
   const [et,setEt]=useState(note.text);
   if (editing) return (
@@ -830,9 +859,9 @@ function MNote({note,T,onDelete,onConvert,editing,onEdit,onSave}) {
     </div>
   );
   return (
-    <div draggable onDragStart={e=>{e.dataTransfer.setData("nid",note.id);e.dataTransfer.effectAllowed="move";navigator.vibrate?.(15);}}
+    <div onPointerDown={e=>onDown?.(e,note)}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
-      style={{padding:"7px 9px",borderRadius:8,background:note.color+"1a",border:`1px solid ${note.color}44`,fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:150,cursor:"grab",transition:"transform .15s,box-shadow .15s",transform:hov?"translateY(-2px) rotate(.4deg)":"none",boxShadow:hov?`0 6px 14px ${note.color}33`:"none",animation:"slideIn .2s ease",userSelect:"none"}}>
+      style={{padding:"7px 9px",borderRadius:8,background:note.color+"1a",border:`1px solid ${note.color}44`,fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:150,cursor:"grab",transition:"transform .15s,box-shadow .15s",transform:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",boxShadow:dragging?`0 10px 22px ${note.color}55`:hov?`0 6px 14px ${note.color}33`:"none",opacity:dragging?.85:1,animation:"slideIn .2s ease",userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
       <div style={{borderLeft:`3px solid ${note.color}`,paddingLeft:6}}>{note.text}</div>
       {hov&&(
         <div style={{position:"absolute",top:-10,right:-4,display:"flex",gap:2,zIndex:10,animation:"fadeIn .1s"}}>
