@@ -248,6 +248,8 @@ export default function FlowSpace() {
   const isLoadingData = useRef(false);
   const syncTimers = useRef({});
   const [tasks, setTasks] = useState([]);
+  const [ownedShares, setOwnedShares] = useState([]);
+  const [sharedWithMe, setSharedWithMe] = useState([]);
   const [canvasNotes, setCanvasNotes] = useState([]);
   const [notes, setNotes] = useState([]);
   const [cats, setCats] = useState(DEFAULT_CATS);
@@ -295,15 +297,22 @@ export default function FlowSpace() {
   },[]);
 
   useEffect(()=>{
-    if(!user){setTasks([]);setCanvasNotes([]);setNotes([]);setCats(DEFAULT_CATS);return;}
+    if(!user){setTasks([]);setCanvasNotes([]);setNotes([]);setCats(DEFAULT_CATS);setOwnedShares([]);setSharedWithMe([]);return;}
     isLoadingData.current=true; setSyncing(true);
-    Promise.all([db.loadTasks(user.id),db.loadCanvas(user.id),db.loadNotes(user.id),db.loadCats(user.id)])
-      .then(([t,c,n,cats])=>{
+    Promise.all([db.loadTasks(),db.loadCanvas(user.id),db.loadNotes(user.id),db.loadCats(user.id),db.loadOwnedShares(user.id),db.loadSharedWithMe(user.email)])
+      .then(([t,c,n,cats,os,sm])=>{
         setTasks(t); setCanvasNotes(c); setNotes(n);
         if(cats) setCats(cats);
+        setOwnedShares(os); setSharedWithMe(sm);
         setSyncing(false);
         setTimeout(()=>{isLoadingData.current=false;},200);
       }).catch(()=>setSyncing(false));
+  },[user]);
+
+  const refreshShares=useCallback(()=>{
+    if(!user) return;
+    db.loadOwnedShares(user.id).then(setOwnedShares).catch(()=>{});
+    db.loadSharedWithMe(user.email).then(setSharedWithMe).catch(()=>{});
   },[user]);
 
   useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.c);syncTimers.current.c=setTimeout(()=>db.syncCanvas(canvasNotes,user.id).catch(console.error),1500);},[canvasNotes]);
@@ -321,8 +330,8 @@ export default function FlowSpace() {
     const onVisible=()=>{
       if(!document.hidden){
         isLoadingData.current=true;
-        Promise.all([db.loadCanvas(user.id),db.loadNotes(user.id)])
-          .then(([c,n])=>{setCanvasNotes(c);setNotes(n);setTimeout(()=>{isLoadingData.current=false;},200);});
+        Promise.all([db.loadTasks(),db.loadCanvas(user.id),db.loadNotes(user.id)])
+          .then(([t,c,n])=>{setTasks(t);setCanvasNotes(c);setNotes(n);setTimeout(()=>{isLoadingData.current=false;},200);});
       }
     };
     document.addEventListener("visibilitychange",onVisible);
@@ -365,12 +374,14 @@ export default function FlowSpace() {
     const {title,due:parsed}=parseNL(input);
     const due=parsed||(view==="myday"?tod():null);
     const inCat=view.startsWith("cat:")?view.slice(4):null;
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:inCat||guessCat(title,cats),due,starred:view==="myday"||view==="important",notes:"",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:null,attachments:[]};
+    let ownerId=user?.id, tagForTask=inCat||guessCat(title,cats);
+    if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"); ownerId=rest.slice(0,ci); tagForTask=rest.slice(ci+1); }
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="myday"||view==="important",notes:"",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:null,attachments:[],owner:ownerId};
     setTasks(ts=>[t,...ts]);
     setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
     if(view==="myday"||t.starred) markActiveDay();
     setTimeout(()=>setNewAnim(null),600);
-    if(user) db.insertTask(t,user.id).catch(console.error);
+    if(user) db.insertTask(t,ownerId).catch(console.error);
   },[input,view,user,cats,awardXp,markActiveDay]);
 
   const toggleTask = id=>{
@@ -431,10 +442,11 @@ export default function FlowSpace() {
   };
 
   const todStr=tod();
-  const myDay=tasks.filter(t=>t.due===todStr||t.starred);
-  const upcoming=tasks.filter(t=>t.due&&t.due>todStr);
-  const completed=tasks.filter(t=>t.done);
-  const overdueTasks=tasks.filter(t=>!t.done&&t.due&&t.due<todStr);
+  const myTasks=tasks.filter(t=>t.owner===user?.id);
+  const myDay=myTasks.filter(t=>t.due===todStr||t.starred);
+  const upcoming=myTasks.filter(t=>t.due&&t.due>todStr);
+  const completed=myTasks.filter(t=>t.done);
+  const overdueTasks=myTasks.filter(t=>!t.done&&t.due&&t.due<todStr);
   const myDayAllDone=myDay.length>0&&myDay.every(t=>t.done);
   const prevMyDayDone=useRef(false);
   useEffect(()=>{ if(myDayAllDone&&!prevMyDayDone.current) fireConfetti(); prevMyDayDone.current=myDayAllDone; },[myDayAllDone]);
@@ -448,6 +460,8 @@ export default function FlowSpace() {
       if(a.due) return -1; if(b.due) return 1; return 0;
     }).slice(0,6);
   const addToMyDay=id=>{ navigator.vibrate?.(10); updateTask(id,{due:todStr}); markActiveDay(); };
+  const shareFolder=async(folder,email)=>{ if(!user||!email.trim())return; try{ await db.addShare(user.id,folder,email); refreshShares(); showToast(`Shared "${folder}" with ${email.trim()}`); }catch(e){ showToast("Share failed: "+(e.message||e)); } };
+  const unshareFolder=async id=>{ await db.removeShare(id).catch(()=>{}); refreshShares(); showToast("Collaborator removed"); };
 
   const remindedRef=useRef();
   if(!remindedRef.current){ try{ remindedRef.current=new Set(JSON.parse(localStorage.getItem("fs_reminded")||"[]")); }catch{ remindedRef.current=new Set(); } }
@@ -489,16 +503,17 @@ export default function FlowSpace() {
 
   const getViewTasks=()=>{
     let base;
-    if(view.startsWith("cat:")){ const c=view.slice(4); base=tasks.filter(t=>t.tag===c); }
-    else if(view==="important") base=tasks.filter(t=>t.starred);
-    else base=view==="myday"?myDay:view==="upcoming"?upcoming:view==="completed"?completed:tasks;
+    if(view.startsWith("cat:")){ const c=view.slice(4); base=tasks.filter(t=>t.tag===c&&t.owner===user?.id); }
+    else if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"),o=rest.slice(0,ci),f=rest.slice(ci+1); base=tasks.filter(t=>t.owner===o&&t.tag===f); }
+    else if(view==="important") base=myTasks.filter(t=>t.starred);
+    else base=view==="myday"?myDay:view==="upcoming"?upcoming:view==="completed"?completed:myTasks;
     if(search) base=base.filter(t=>t.title.toLowerCase().includes(search.toLowerCase()));
     return sortByDate(base);
   };
 
   const navItems=[
     {id:"myday",label:"My Day",icon:"sun",badge:myDay.filter(t=>!t.done).length},
-    {id:"important",label:"Important",icon:"star",badge:tasks.filter(t=>t.starred&&!t.done).length},
+    {id:"important",label:"Important",icon:"star",badge:myTasks.filter(t=>t.starred&&!t.done).length},
     {id:"upcoming",label:"Upcoming",icon:"cal",badge:upcoming.filter(t=>!t.done).length},
     {id:"all",label:"All Tasks",icon:"layers",badge:null},
     {id:"completed",label:"Completed",icon:"done",badge:completed.length},
@@ -561,11 +576,24 @@ export default function FlowSpace() {
             <div style={{padding:"12px 10px 4px",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>Folders</div>
           )}
           {Object.entries(cats).map(([name,meta])=>{
-            const v=`cat:${name}`, active=view===v, count=tasks.filter(t=>t.tag===name&&!t.done).length;
+            const v=`cat:${name}`, active=view===v, count=myTasks.filter(t=>t.tag===name&&!t.done).length;
             return (
               <button key={name} onClick={()=>setView(v)} style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:sideOpen?"8px 10px":"8px 0",justifyContent:sideOpen?"flex-start":"center",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,transition:"all .15s",background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
                 <span style={{fontSize:15,width:16,textAlign:"center",flexShrink:0}}>{meta.icon}</span>
                 {sideOpen&&<span style={{flex:1,textAlign:"left",whiteSpace:"nowrap",textTransform:"capitalize"}}>{name}</span>}
+                {sideOpen&&count>0&&<span style={{background:active?T.accent:T.surface3,color:active?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{count}</span>}
+              </button>
+            );
+          })}
+          {sideOpen&&sharedWithMe.length>0&&(
+            <div style={{padding:"12px 10px 4px",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>Shared with me</div>
+          )}
+          {sharedWithMe.map(s=>{
+            const v=`shared:${s.owner_id}:${s.folder}`, active=view===v, count=tasks.filter(t=>t.owner===s.owner_id&&t.tag===s.folder&&!t.done).length;
+            return (
+              <button key={s.id} onClick={()=>setView(v)} title={`Shared by ${s.owner_email||"a collaborator"}`} style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:sideOpen?"8px 10px":"8px 0",justifyContent:sideOpen?"flex-start":"center",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,transition:"all .15s",background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
+                <span style={{fontSize:15,width:16,textAlign:"center",flexShrink:0}}>🤝</span>
+                {sideOpen&&<span style={{flex:1,textAlign:"left",whiteSpace:"nowrap",textTransform:"capitalize"}}>{s.folder}</span>}
                 {sideOpen&&count>0&&<span style={{background:active?T.accent:T.surface3,color:active?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{count}</span>}
               </button>
             );
@@ -619,13 +647,13 @@ export default function FlowSpace() {
           {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} sendToMyDay={sendToMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} setTasks={setTasks}/>}
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
-          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted}/>}
-          {(["myday","important","upcoming","all","completed"].includes(view)||view.startsWith("cat:"))&&(
+          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder}/>}
+          {(["myday","important","upcoming","all","completed"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder}/>
           )}
         </div>
       </main>
-      {(["myday","important","upcoming","all"].includes(view)||view.startsWith("cat:"))&&(
+      {(["myday","important","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
         <button onClick={()=>inputRef.current?.focus()} style={{position:"fixed",bottom:26,right:26,width:50,height:50,borderRadius:"50%",border:"none",cursor:"pointer",background:T.grad,color:"#fff",boxShadow:"0 6px 20px rgba(192,132,252,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:50,transition:"transform .15s"}}
           onMouseEnter={e=>e.currentTarget.style.transform="scale(1.1)"}
           onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
@@ -726,7 +754,8 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const didDragRef=useRef(false);
   const labels={myday:"My Day",important:"Important",upcoming:"Upcoming",all:"All Tasks",completed:"Completed"};
   const catKey=view.startsWith("cat:")?view.slice(4):null;
-  const titleLabel=catKey?`${cats[catKey]?.icon||"📁"} ${catKey.charAt(0).toUpperCase()+catKey.slice(1)}`:labels[view];
+  const sharedKey=view.startsWith("shared:")?view.slice(view.lastIndexOf(":")+1):null;
+  const titleLabel=catKey?`${cats[catKey]?.icon||"📁"} ${catKey.charAt(0).toUpperCase()+catKey.slice(1)}`:sharedKey?`🤝 ${sharedKey.charAt(0).toUpperCase()+sharedKey.slice(1)}`:labels[view];
   let show=filter==="active"?tasks.filter(t=>!t.done):filter==="done"?tasks.filter(t=>t.done):tasks;
   if(view==="all"&&catFilter) show=show.filter(t=>t.tag===catFilter);
   const QRANK={q1:0,q3:1,q2:2,q4:3};
@@ -1418,8 +1447,10 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
   );
 }
 
-function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onImport,onClearCompleted}) {
+function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare}) {
   const importRef=useRef(null);
+  const [shareFolderName,setShareFolderName]=useState("");
+  const [shareEmail,setShareEmail]=useState("");
   const [notifs,setNotifs]=useState(true);
   const [focus,setFocus]=useState(false);
   const [weekly,setWeekly]=useState(true);
@@ -1474,6 +1505,30 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onI
           <input value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCat()} placeholder="New category name…" style={{flex:1,padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
           <button onClick={addCat} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Add</button>
         </div>
+      </div>
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"0 16px",marginBottom:14}}>
+        <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,padding:"12px 0 6px"}}>Share a folder 🤝</div>
+        <div style={{fontSize:11,color:T.textMuted,marginBottom:8,lineHeight:1.5}}>Invite another FlowSpace user by email. They'll see and can edit tasks in that folder. Use the email they signed up with.</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",paddingBottom:10}}>
+          <select value={shareFolderName} onChange={e=>setShareFolderName(e.target.value)} style={{padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",cursor:"pointer"}}>
+            <option value="">Choose folder…</option>
+            {Object.keys(cats).map(n=><option key={n} value={n}>{n}</option>)}
+          </select>
+          <input value={shareEmail} onChange={e=>setShareEmail(e.target.value)} placeholder="their@email.com" type="email" style={{flex:1,minWidth:140,padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+          <button onClick={()=>{if(shareFolderName&&shareEmail.trim()){onShareFolder(shareFolderName,shareEmail);setShareEmail("");}}} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Invite</button>
+        </div>
+        {ownedShares&&ownedShares.length>0&&(
+          <div style={{paddingBottom:12,display:"flex",flexDirection:"column",gap:5}}>
+            {ownedShares.map(s=>(
+              <div key={s.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
+                <span style={{fontSize:14}}>🤝</span>
+                <span style={{fontSize:12,fontWeight:600,textTransform:"capitalize"}}>{s.folder}</span>
+                <span style={{fontSize:11,color:T.textMuted,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {s.shared_with_email}</span>
+                <button onClick={()=>onUnshare(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Remove</button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       {[
         {title:"Appearance",rows:[

@@ -5,15 +5,16 @@ export const fromDbTask = r => ({
   tag: r.tag, due: r.due, starred: r.starred, notes: r.notes || "",
   color: r.color, subtasks: r.subtasks || [], recurring: r.recurring,
   quadrant: r.quadrant || null, remindAt: r.remind_at || null,
-  attachments: r.attachments || [],
+  attachments: r.attachments || [], owner: r.user_id,
 });
 
 const fromDbCanvas = r => ({ id: r.id, text: r.text, x: r.x, y: r.y, color: r.color });
 const fromDbNote = r => ({ id: r.id, title: r.title, body: r.body || "", pinned: r.pinned, color: r.color, drawing: r.drawing || null, created: r.created_at?.split("T")[0] || "" });
 
 export const db = {
-  async loadTasks(uid) {
-    const { data } = await supabase.from("tasks").select("*").eq("user_id", uid).order("created_at", { ascending: false });
+  async loadTasks() {
+    // No user_id filter — RLS returns the user's own tasks plus tasks in folders shared with them.
+    const { data } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
     return (data || []).map(fromDbTask);
   },
   async insertTask(t, uid) {
@@ -50,6 +51,23 @@ export const db = {
   },
   async deleteAttachment(path) {
     await supabase.storage.from("attachments").remove([path]);
+  },
+
+  async loadOwnedShares(uid) {
+    const { data } = await supabase.from("folder_shares").select("*").eq("owner_id", uid);
+    return data || [];
+  },
+  async loadSharedWithMe(email) {
+    if (!email) return [];
+    const { data } = await supabase.from("folder_shares").select("*").eq("shared_with_email", email.toLowerCase());
+    return data || [];
+  },
+  async addShare(ownerId, folder, email) {
+    const { error } = await supabase.from("folder_shares").insert({ owner_id: ownerId, folder, shared_with_email: email.toLowerCase().trim() });
+    if (error) throw error;
+  },
+  async removeShare(id) {
+    await supabase.from("folder_shares").delete().eq("id", id);
   },
 
   async loadCanvas(uid) {
