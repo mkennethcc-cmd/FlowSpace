@@ -8,6 +8,11 @@ export const fromDbTask = r => ({
   attachments: r.attachments || [], owner: r.user_id,
 });
 
+// Canonical icons for the built-in folders. Used to heal old accounts whose rows
+// predate the icon feature (they were stamped with a placeholder). Keep in sync with App's DEFAULT_CATS.
+const DEFAULT_CAT_ICON = { work: "💼", school: "📚", health: "🏃", personal: "🌟", finance: "💰" };
+const healIcon = (name, icon) => (!icon || icon === "📌") ? (DEFAULT_CAT_ICON[name] || "📌") : icon;
+
 const fromDbCanvas = r => ({ id: r.id, text: r.text, x: r.x, y: r.y, color: r.color });
 const fromDbNote = r => ({ id: r.id, title: r.title, body: r.body || "", pinned: r.pinned, color: r.color, drawing: r.drawing || null, created: r.created_at?.split("T")[0] || "" });
 
@@ -95,7 +100,7 @@ export const db = {
   async loadCats(uid) {
     const { data } = await supabase.from("categories").select("*").eq("user_id", uid);
     if (!data?.length) return null;
-    return Object.fromEntries(data.map(r => [r.name, { color: r.color, icon: r.icon || "📌" }]));
+    return Object.fromEntries(data.map(r => [r.name, { color: r.color, icon: healIcon(r.name, r.icon) }]));
   },
   async syncCats(cats, uid) {
     await supabase.from("categories").delete().eq("user_id", uid);
