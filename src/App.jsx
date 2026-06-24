@@ -172,6 +172,8 @@ const DEFAULT_CATS = {
   personal: {color:"#f59e0b", icon:"🌟"},
   finance:  {color:"#a855f7", icon:"💰"},
 };
+const DEFAULT_CAT_NAMES = Object.keys(DEFAULT_CATS);
+const isImgIcon = ic => typeof ic === "string" && (ic.startsWith("http") || ic.startsWith("data:"));
 const CAT_ICONS = ["💼","📚","🏃","💰","🏠","❤️","🎯","✈️","🛒","🎨","🎮","🍔","☕","🌱","🐶","📞","🎵","⚽","💪","🧘","📝","💻","📅","🔥","⭐","🎓","🏥","🍳","🚗","🎁","📖","🧹","💡","🎬","🎉","🌍","🏋️","🧠","📷","🎸","🍕","🛏️","🐱","✏️","🔧","📌","🏆","🌸"];
 
 // Accent palettes (#25). "lavender" = the original look; the rest are pastel.
@@ -254,6 +256,7 @@ export default function FlowSpace() {
   const [notes, setNotes] = useState([]);
   const [cats, setCats] = useState(DEFAULT_CATS);
   const [sideOpen, setSideOpen] = useState(true);
+  const [defOpen, setDefOpen] = useState(true);
   const [selTask, setSelTask] = useState(null);
   const [input, setInput] = useState("");
   const [xp, setXp] = useState(0);
@@ -572,32 +575,39 @@ export default function FlowSpace() {
               {sideOpen&&item.badge>0&&<span style={{background:view===item.id?T.accent:T.surface3,color:view===item.id?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{item.badge}</span>}
             </button>
           ))}
-          {sideOpen&&Object.keys(cats).length>0&&(
-            <div style={{padding:"12px 10px 4px",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>Folders</div>
-          )}
-          {Object.entries(cats).map(([name,meta])=>{
-            const v=`cat:${name}`, active=view===v, count=myTasks.filter(t=>t.tag===name&&!t.done).length;
-            return (
-              <button key={name} onClick={()=>setView(v)} style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:sideOpen?"8px 10px":"8px 0",justifyContent:sideOpen?"flex-start":"center",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,transition:"all .15s",background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
-                <span style={{fontSize:15,width:16,textAlign:"center",flexShrink:0}}>{meta.icon}</span>
-                {sideOpen&&<span style={{flex:1,textAlign:"left",whiteSpace:"nowrap",textTransform:"capitalize"}}>{name}</span>}
-                {sideOpen&&count>0&&<span style={{background:active?T.accent:T.surface3,color:active?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{count}</span>}
-              </button>
-            );
-          })}
-          {sideOpen&&sharedWithMe.length>0&&(
-            <div style={{padding:"12px 10px 4px",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>Shared with me</div>
-          )}
-          {sharedWithMe.map(s=>{
-            const v=`shared:${s.owner_id}:${s.folder}`, active=view===v, count=tasks.filter(t=>t.owner===s.owner_id&&t.tag===s.folder&&!t.done).length;
-            return (
-              <button key={s.id} onClick={()=>setView(v)} title={`Shared by ${s.owner_email||"a collaborator"}`} style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:sideOpen?"8px 10px":"8px 0",justifyContent:sideOpen?"flex-start":"center",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,transition:"all .15s",background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
-                <span style={{fontSize:15,width:16,textAlign:"center",flexShrink:0}}>🤝</span>
-                {sideOpen&&<span style={{flex:1,textAlign:"left",whiteSpace:"nowrap",textTransform:"capitalize"}}>{s.folder}</span>}
-                {sideOpen&&count>0&&<span style={{background:active?T.accent:T.surface3,color:active?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{count}</span>}
-              </button>
-            );
-          })}
+          {(()=>{
+            const FolderBtn=(name,meta,v,count,icon)=>{
+              const active=view===v;
+              return (
+                <button key={v} onClick={()=>setView(v)} style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:sideOpen?"8px 10px":"8px 0",justifyContent:sideOpen?"flex-start":"center",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,transition:"all .15s",background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
+                  {isImgIcon(icon)?<img src={icon} alt="" style={{width:16,height:16,borderRadius:4,objectFit:"cover",flexShrink:0}}/>:<span style={{fontSize:15,width:16,textAlign:"center",flexShrink:0}}>{icon}</span>}
+                  {sideOpen&&<span style={{flex:1,textAlign:"left",whiteSpace:"nowrap",textTransform:"capitalize"}}>{name}</span>}
+                  {sideOpen&&count>0&&<span style={{background:active?T.accent:T.surface3,color:active?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{count}</span>}
+                </button>
+              );
+            };
+            const defaults=Object.entries(cats).filter(([n])=>DEFAULT_CAT_NAMES.includes(n));
+            const customs=Object.entries(cats).filter(([n])=>!DEFAULT_CAT_NAMES.includes(n));
+            return (<>
+              {sideOpen&&defaults.length>0&&(
+                <button onClick={()=>setDefOpen(o=>!o)} style={{width:"100%",display:"flex",alignItems:"center",gap:4,padding:"12px 10px 4px",background:"none",border:"none",cursor:"pointer",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,fontFamily:"'DM Sans',sans-serif"}}>
+                  <span style={{transform:defOpen?"rotate(90deg)":"none",transition:"transform .15s",fontSize:8}}>▶</span> Default folders
+                </button>
+              )}
+              {(defOpen||!sideOpen)&&defaults.map(([name,meta])=>FolderBtn(name,meta,`cat:${name}`,myTasks.filter(t=>t.tag===name&&!t.done).length,meta.icon))}
+              {sideOpen&&customs.length>0&&(
+                <div style={{padding:"12px 10px 4px",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>My lists</div>
+              )}
+              {customs.map(([name,meta])=>FolderBtn(name,meta,`cat:${name}`,myTasks.filter(t=>t.tag===name&&!t.done).length,meta.icon))}
+              {sideOpen&&(
+                <div style={{padding:"12px 10px 4px",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>Shared with me</div>
+              )}
+              {sideOpen&&sharedWithMe.length===0&&(
+                <div style={{padding:"2px 10px 6px",fontSize:10,color:T.textMuted,opacity:.6,lineHeight:1.4}}>Nothing shared yet. Share a folder from Settings to collaborate.</div>
+              )}
+              {sharedWithMe.map(s=>FolderBtn(s.folder,null,`shared:${s.owner_id}:${s.folder}`,tasks.filter(t=>t.owner===s.owner_id&&t.tag===s.folder&&!t.done).length,"🤝"))}
+            </>);
+          })()}
         </nav>
         {sideOpen&&(
           <div style={{padding:"10px 12px"}}>
@@ -939,6 +949,23 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
         <h3 style={{fontFamily:"'Sora',sans-serif",fontSize:13,fontWeight:600,flex:1,lineHeight:1.4}}>{task.title}</h3>
         <button onClick={onClose} style={{width:24,height:24,borderRadius:6,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginLeft:6}}><Ico n="x" s={13}/></button>
       </div>
+      <DL label="Notes" T={T}>
+        <textarea value={nts} onChange={e=>{setNts(e.target.value);onUpdate(task.id,{notes:e.target.value});}} placeholder="Notes, links, markdown…" style={{marginTop:5,width:"100%",minHeight:80,padding:"7px 9px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"vertical",lineHeight:1.6}}/>
+      </DL>
+      <DL label="Attachments 📎" T={T}>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:6}}>
+          {(task.attachments||[]).map(att=>(
+            <div key={att.path} style={{position:"relative",width:64,height:64,borderRadius:8,overflow:"hidden",border:`1px solid ${T.border}`,background:T.surface2}}>
+              {(att.type||"").startsWith("image/")
+                ? <a href={att.url} target="_blank" rel="noreferrer"><img src={att.url} alt={att.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/></a>
+                : <a href={att.url} target="_blank" rel="noreferrer" title={att.name} style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,textDecoration:"none"}}>📄</a>}
+              <button onClick={()=>onRemoveAttach?.(task,att)} style={{position:"absolute",top:2,right:2,width:16,height:16,borderRadius:"50%",border:"none",cursor:"pointer",background:"rgba(0,0,0,.6)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={9} c="#fff"/></button>
+            </div>
+          ))}
+        </div>
+        <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple style={{display:"none"}} onChange={e=>{doAttach([...e.target.files]); e.target.value="";}}/>
+        <button onClick={()=>fileRef.current?.click()} disabled={uploading} style={{marginTop:7,width:"100%",padding:"7px",borderRadius:8,border:`1px dashed ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{uploading?"Uploading…":"+ Add photo / screenshot"}</button>
+      </DL>
       <DL label="Color Label" T={T}>
         <div style={{display:"flex",gap:5,marginTop:5,flexWrap:"wrap"}}>
           {COLS.map(c=><div key={c||"none"} onClick={()=>onUpdate(task.id,{color:c})} style={{width:18,height:18,borderRadius:4,background:c||T.surface3,border:`2px solid ${task.color===c?T.text:"transparent"}`,cursor:"pointer"}}/>)}
@@ -998,23 +1025,6 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
             <button onClick={addSub} style={{padding:"5px 9px",borderRadius:6,border:"none",cursor:"pointer",background:T.accentGlow,color:T.accent,fontSize:12,fontWeight:700}}>+</button>
           </div>
         </div>
-      </DL>
-      <DL label="Notes" T={T}>
-        <textarea value={nts} onChange={e=>{setNts(e.target.value);onUpdate(task.id,{notes:e.target.value});}} placeholder="Notes, links, markdown…" style={{marginTop:5,width:"100%",minHeight:80,padding:"7px 9px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"vertical",lineHeight:1.6}}/>
-      </DL>
-      <DL label="Attachments 📎" T={T}>
-        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:6}}>
-          {(task.attachments||[]).map(att=>(
-            <div key={att.path} style={{position:"relative",width:64,height:64,borderRadius:8,overflow:"hidden",border:`1px solid ${T.border}`,background:T.surface2}}>
-              {(att.type||"").startsWith("image/")
-                ? <a href={att.url} target="_blank" rel="noreferrer"><img src={att.url} alt={att.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/></a>
-                : <a href={att.url} target="_blank" rel="noreferrer" title={att.name} style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,textDecoration:"none"}}>📄</a>}
-              <button onClick={()=>onRemoveAttach?.(task,att)} style={{position:"absolute",top:2,right:2,width:16,height:16,borderRadius:"50%",border:"none",cursor:"pointer",background:"rgba(0,0,0,.6)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={9} c="#fff"/></button>
-            </div>
-          ))}
-        </div>
-        <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple style={{display:"none"}} onChange={e=>{doAttach([...e.target.files]); e.target.value="";}}/>
-        <button onClick={()=>fileRef.current?.click()} disabled={uploading} style={{marginTop:7,width:"100%",padding:"7px",borderRadius:8,border:`1px dashed ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{uploading?"Uploading…":"+ Add photo / screenshot"}</button>
       </DL>
       <div style={{display:"flex",gap:6}}>
         <button onClick={()=>onUpdate(task.id,{starred:!task.starred})} style={{flex:1,padding:"7px",borderRadius:8,border:`1px solid ${task.starred?"#f59e0b":T.border}`,background:task.starred?"#f59e0b22":"transparent",color:task.starred?"#f59e0b":T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
