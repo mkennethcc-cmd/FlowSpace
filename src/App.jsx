@@ -720,7 +720,7 @@ export default function FlowSpace() {
         )}
         <div style={{flex:1,overflow:"hidden",display:"flex"}}>
           {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} setTasks={setTasks}/>}
-          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes}/>}
+          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} onGoToTask={t=>{setView("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
           {(["myday","flagged","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
@@ -1392,17 +1392,27 @@ function DrawPad({value,T,onChange}) {
   );
 }
 
-function NotesView({T,notes,setNotes}) {
+function NotesView({T,notes,setNotes,tasks,onGoToTask}) {
   const [sel,setSel]=useState(null);
   const [nt,setNt]=useState("");
   const [mode,setMode]=useState("text");
+  const [listOpen,setListOpen]=useState(true);
+  const taskNotes=(tasks||[]).filter(t=>t.notes&&t.notes.trim());
+  const onEditorDown=e=>{
+    if(e.target.closest("input,textarea,select,button,a,canvas")) return;
+    const sx=e.clientX,sy=e.clientY; let decided=false;
+    const cleanup=()=>{window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up);window.removeEventListener("pointercancel",up);};
+    const mv=ev=>{ if(decided)return; const dx=ev.clientX-sx,dy=ev.clientY-sy; if(Math.abs(dx)<14&&Math.abs(dy)<14)return; decided=true; cleanup(); if(Math.abs(dx)>Math.abs(dy)) setListOpen(dx>0); };
+    const up=()=>cleanup();
+    window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up);window.addEventListener("pointercancel",up);
+  };
   const ACC=["#3b82f6","#22c55e","#f59e0b","#ef4444","#a855f7","#ec4899","#14b8a6"];
   const addNote=()=>{if(!nt.trim())return;const n={id:Date.now(),title:nt.trim(),body:"",pinned:false,color:ACC[notes.length%ACC.length],created:tod()};setNotes(ns=>[n,...ns]);setSel(n);setNt("");};
   const upNote=(id,patch)=>{setNotes(ns=>ns.map(n=>n.id===id?{...n,...patch}:n));if(sel?.id===id)setSel(s=>({...s,...patch}));};
   const delNote=id=>{setNotes(ns=>ns.filter(n=>n.id!==id));if(sel?.id===id)setSel(null);};
   return (
     <div style={{flex:1,display:"flex",overflow:"hidden"}}>
-      <div style={{width:248,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflowY:"auto",background:T.sidebar}}>
+      <div style={{width:listOpen?248:0,minWidth:0,opacity:listOpen?1:0,borderRight:listOpen?`1px solid ${T.border}`:"none",display:"flex",flexDirection:"column",overflowY:"auto",overflowX:"hidden",background:T.sidebar,transition:"width .2s ease,opacity .15s ease",flexShrink:0}}>
         <div style={{padding:"16px 12px 10px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
             <h2 style={{fontFamily:"'Sora',sans-serif",fontSize:16,fontWeight:700}}>Notes</h2>
@@ -1424,9 +1434,29 @@ function NotesView({T,notes,setNotes}) {
           {notes.filter(n=>n.pinned).length>0&&<div style={{padding:"6px 4px 2px",fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted}}>All Notes</div>}
           {notes.filter(n=>!n.pinned).map(n=><NRow key={n.id} note={n} T={T} sel={sel} onSel={setSel} onUp={upNote} onDel={delNote}/>)}
         </div>
+        {taskNotes.length>0&&(
+          <div style={{padding:"4px 8px 16px",borderTop:`1px solid ${T.border}`}}>
+            <div style={{padding:"10px 4px 4px",fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted}}>📋 Notes on tasks</div>
+            {taskNotes.map(t=>(
+              <div key={t.id} onClick={()=>onGoToTask?.(t)} title="Go to task" style={{padding:"8px",borderRadius:8,cursor:"pointer",marginBottom:2,background:"transparent",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background=T.surface2} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                <div style={{display:"flex",alignItems:"center",gap:5}}>
+                  <Ico n="check" s={11} c={T.textMuted}/>
+                  <span style={{fontSize:12,fontWeight:600,color:T.text,flex:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.title}</span>
+                  <span style={{fontSize:9,color:T.accent,fontWeight:700,whiteSpace:"nowrap"}}>Go →</span>
+                </div>
+                <div style={{fontSize:11,color:T.textMuted,marginTop:2,marginLeft:16,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.notes.slice(0,46)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}} onPointerDown={onEditorDown}>
+      <div style={{padding:"8px 14px",borderBottom:`1px solid ${T.border}`,flexShrink:0,display:"flex",alignItems:"center",gap:8}}>
+        <button onClick={()=>setListOpen(o=>!o)} title={listOpen?"Hide list for more room":"Show list"} style={{width:28,height:28,borderRadius:7,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ico n="menu" s={15}/></button>
+        <span style={{fontSize:11,color:T.textMuted}}>{listOpen?"Swipe left (or tap) to hide the list":"Swipe right (or tap) to show the list"}</span>
       </div>
       {sel?(
-        <div style={{flex:1,display:"flex",flexDirection:"column",padding:"22px 26px",overflowY:"auto"}}>
+        <div style={{flex:1,display:"flex",flexDirection:"column",padding:"18px 26px 22px",overflowY:"auto"}}>
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
             <input value={sel.title} onChange={e=>upNote(sel.id,{title:e.target.value})} style={{flex:1,fontFamily:"'Sora',sans-serif",fontSize:20,fontWeight:700,background:"transparent",border:"none",outline:"none",color:T.text,letterSpacing:"-.3px"}}/>
             <div style={{display:"flex",gap:5}}>
@@ -1452,6 +1482,7 @@ function NotesView({T,notes,setNotes}) {
           <div style={{fontWeight:600}}>Select a note to edit</div>
         </div>
       )}
+      </div>
     </div>
   );
 }
