@@ -174,6 +174,9 @@ const DEFAULT_CATS = {
 };
 const DEFAULT_CAT_NAMES = Object.keys(DEFAULT_CATS);
 const isImgIcon = ic => typeof ic === "string" && (ic.startsWith("http") || ic.startsWith("data:"));
+const CatIcon = ({icon, size=14}) => isImgIcon(icon)
+  ? <img src={icon} alt="" style={{width:size,height:size,borderRadius:4,objectFit:"cover",verticalAlign:"middle",flexShrink:0}}/>
+  : <span style={{fontSize:size+1,lineHeight:1}}>{icon}</span>;
 const CAT_ICONS = ["💼","📚","🏃","💰","🏠","❤️","🎯","✈️","🛒","🎨","🎮","🍔","☕","🌱","🐶","📞","🎵","⚽","💪","🧘","📝","💻","📅","🔥","⭐","🎓","🏥","🍳","🚗","🎁","📖","🧹","💡","🎬","🎉","🌍","🏋️","🧠","📷","🎸","🍕","🛏️","🐱","✏️","🔧","📌","🏆","🌸"];
 
 // Accent palettes (#25). "lavender" = the original look; the rest are pastel.
@@ -425,6 +428,7 @@ export default function FlowSpace() {
   const attachFile = async (task,file)=>{ if(!user) return; const meta=await db.uploadAttachment(file,user.id,task.id); updateTask(task.id,{attachments:[...(task.attachments||[]),meta]}); };
   const removeAttach = async (task,att)=>{ await db.deleteAttachment(att.path).catch(()=>{}); updateTask(task.id,{attachments:(task.attachments||[]).filter(a=>a.path!==att.path)}); };
   const setReminder = (id,val)=>{ remindedRef.current?.delete(id); updateTask(id,{remindAt:val||null}); if(val&&"Notification"in window&&Notification.permission==="default") Notification.requestPermission(); };
+  const uploadCatIcon = async file=>{ if(!user) return null; const m=await db.uploadAttachment(file,user.id,"icons"); return m.url; };
   const clearCompleted = ()=>{ const done=tasks.filter(t=>t.done); if(!done.length){showToast("No completed tasks");return;} setTasks(ts=>ts.filter(t=>!t.done)); if(user) done.forEach(t=>db.deleteTask(t.id).catch(()=>{})); showToast(`Cleared ${done.length} completed`); };
   const exportData = ()=>{
     const data={app:"FlowSpace",exportedAt:new Date().toISOString(),tasks,notes,cats,canvasNotes};
@@ -671,7 +675,7 @@ export default function FlowSpace() {
           {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} setTasks={setTasks}/>}
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
-          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder}/>}
+          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon}/>}
           {(["myday","important","upcoming","all","completed"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask}/>
           )}
@@ -909,7 +913,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           <div style={{display:"flex",gap:5,marginBottom:12,flexWrap:"wrap"}}>
             <button onClick={()=>setCatFilter(null)} style={{padding:"4px 11px",borderRadius:20,border:`1px solid ${!catFilter?T.accent:T.border}`,background:!catFilter?T.accent+"22":"transparent",color:!catFilter?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:!catFilter?700:400,fontFamily:"'DM Sans',sans-serif"}}>All</button>
             {Object.entries(cats).map(([name,meta])=>(
-              <button key={name} onClick={()=>setCatFilter(catFilter===name?null:name)} style={{padding:"4px 11px",borderRadius:20,border:`1px solid ${catFilter===name?meta.color:T.border}`,background:catFilter===name?meta.color+"22":"transparent",color:catFilter===name?meta.color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:catFilter===name?700:400,fontFamily:"'DM Sans',sans-serif",textTransform:"capitalize"}}>{meta.icon} {name}</button>
+              <button key={name} onClick={()=>setCatFilter(catFilter===name?null:name)} style={{padding:"4px 11px",borderRadius:20,border:`1px solid ${catFilter===name?meta.color:T.border}`,background:catFilter===name?meta.color+"22":"transparent",color:catFilter===name?meta.color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:catFilter===name?700:400,fontFamily:"'DM Sans',sans-serif",textTransform:"capitalize",display:"inline-flex",alignItems:"center",gap:4}}><CatIcon icon={meta.icon} size={11}/> {name}</button>
             ))}
           </div>
         )}
@@ -969,7 +973,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
           {task.recurring&&<Ico n="repeat" s={11} c={T.textMuted} st={{flexShrink:0}}/>}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5,marginTop:3,flexWrap:"wrap"}}>
-          {task.tag&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:catColor+"22",color:catColor,fontWeight:600}}>{catMeta?.icon?catMeta.icon+" ":""}{task.tag}</span>}
+          {task.tag&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:catColor+"22",color:catColor,fontWeight:600,display:"inline-flex",alignItems:"center",gap:3}}>{catMeta?.icon&&<CatIcon icon={catMeta.icon} size={10}/>}{task.tag}</span>}
           {task.due&&<span style={{fontSize:11,color:ov?T.danger:T.textMuted,fontWeight:ov?700:400}}>{fmtDate(task.due)}</span>}
           {task.subtasks?.length>0&&<span style={{fontSize:10,color:T.textMuted}}>{task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</span>}
         </div>
@@ -1062,7 +1066,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
       <DL label="Category" T={T}>
         <div style={{display:"flex",gap:4,marginTop:5,flexWrap:"wrap"}}>
           {Object.entries(cats).map(([tag,meta])=>(
-            <button key={tag} onClick={()=>onUpdate(task.id,{tag})} style={{padding:"3px 9px",borderRadius:20,border:`1px solid ${task.tag===tag?meta.color:T.border}`,background:task.tag===tag?meta.color+"22":"transparent",color:task.tag===tag?meta.color:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:task.tag===tag?700:400,fontFamily:"'DM Sans',sans-serif"}}>{meta.icon} {tag}</button>
+            <button key={tag} onClick={()=>onUpdate(task.id,{tag})} style={{padding:"3px 9px",borderRadius:20,border:`1px solid ${task.tag===tag?meta.color:T.border}`,background:task.tag===tag?meta.color+"22":"transparent",color:task.tag===tag?meta.color:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:task.tag===tag?700:400,fontFamily:"'DM Sans',sans-serif",display:"inline-flex",alignItems:"center",gap:3}}><CatIcon icon={meta.icon} size={10}/> {tag}</button>
           ))}
         </div>
       </DL>
@@ -1192,7 +1196,7 @@ function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit
   return (
     <div onPointerDown={e=>onDown?.(e,task)}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
-      style={{padding:"7px 9px",borderRadius:8,background:qColor+"1a",border:`1px solid ${qColor}44`,fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:160,cursor:"grab",transition:"transform .15s,box-shadow .15s",transform:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",boxShadow:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",opacity:dragging?.85:1,animation:"slideIn .2s ease",userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
+      style={{padding:"7px 9px",borderRadius:8,background:qColor+"1a",border:`1px solid ${qColor}44`,fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:160,cursor:"grab",transition:"transform .15s,box-shadow .15s",transform:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",boxShadow:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
       <div style={{borderLeft:`3px solid ${qColor}`,paddingLeft:6}}>{task.title}</div>
       {catMeta&&<div style={{marginTop:4,fontSize:9,color:catMeta.color,fontWeight:600}}>{catMeta.icon} {task.tag}</div>}
       {hov&&(
@@ -1225,15 +1229,17 @@ function FreeformCanvas({T,notes,setNotes,setTasks}) {
     setNotes(ns => ns.map(n => n.id === dragRef.current.id ? {...n, x, y} : n));
   }, [setNotes]);
   const onPointerUp = useCallback(() => { dragRef.current = null; }, []);
-  const onCanvasDblClick = useCallback((e) => {
-    if (!canvasRef.current) return;
-    if (["TEXTAREA","INPUT","BUTTON","DIV"].includes(e.target.tagName) && e.target !== canvasRef.current) return;
+  const editingRef = useRef(null);
+  useEffect(()=>{ editingRef.current=editingId; },[editingId]);
+  const onCanvasClick = useCallback((e) => {
+    if (!canvasRef.current || e.target !== canvasRef.current) return;
+    if (editingRef.current){ setEditingId(null); return; } // a note was open → just close it, don't create
     const rect = canvasRef.current.getBoundingClientRect();
     const x = Math.max(0, e.clientX - rect.left - 70);
     const y = Math.max(0, e.clientY - rect.top - 40);
     const newNote = { id: Date.now(), text: "New idea…", x, y, color: NOTE_COLS[notes.length % NOTE_COLS.length] };
     setNotes(ns => [...ns, newNote]);
-    setTimeout(() => setEditingId(newNote.id), 50);
+    setEditingId(newNote.id);
   }, [notes.length, setNotes]);
   const convertToTask = (note) => {
     setTasks(ts => [{id:Date.now(),title:note.text,done:false,priority:"medium",tag:"work",due:tod(),starred:false,notes:"From Canvas",color:note.color,subtasks:[],recurring:null},...ts]);
@@ -1241,7 +1247,7 @@ function FreeformCanvas({T,notes,setNotes,setTasks}) {
   };
   return (
     <div ref={canvasRef} style={{flex:1,position:"relative",background:T.canvas,overflow:"hidden",cursor:"crosshair"}}
-      onPointerMove={onPointerMove} onPointerUp={onPointerUp} onDoubleClick={onCanvasDblClick}>
+      onPointerMove={onPointerMove} onPointerUp={onPointerUp} onClick={onCanvasClick}>
       <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none",opacity:.15}}>
         <defs><pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><path d="M 28 0 L 0 0 0 28" fill="none" stroke={T.textMuted} strokeWidth=".5"/></pattern></defs>
         <rect width="100%" height="100%" fill="url(#grid)"/>
@@ -1249,7 +1255,7 @@ function FreeformCanvas({T,notes,setNotes,setTasks}) {
       {notes.length === 0 && (
         <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",color:T.textMuted,textAlign:"center",pointerEvents:"none",userSelect:"none"}}>
           <div style={{fontSize:32,marginBottom:8}}>✦</div>
-          <div style={{fontWeight:600,fontSize:14}}>Double-click anywhere to create a note</div>
+          <div style={{fontWeight:600,fontSize:14}}>Click anywhere to create a note</div>
           <div style={{fontSize:12,marginTop:4,opacity:.6}}>Drag notes freely · hover for options</div>
         </div>
       )}
@@ -1262,7 +1268,7 @@ function FreeformCanvas({T,notes,setNotes,setTasks}) {
           onColorChange={c=>setNotes(ns=>ns.map(n=>n.id===note.id?{...n,color:c}:n))}
         />
       ))}
-      <div style={{position:"absolute",bottom:12,right:16,fontSize:10,color:T.textMuted,userSelect:"none",pointerEvents:"none"}}>Double-click canvas · drag notes · hover for actions</div>
+      <div style={{position:"absolute",bottom:12,right:16,fontSize:10,color:T.textMuted,userSelect:"none",pointerEvents:"none"}}>Click canvas · drag notes · double-click a note to edit</div>
     </div>
   );
 }
@@ -1321,16 +1327,18 @@ function DrawPad({value,T,onChange}) {
     ctx.beginPath(); ctx.moveTo(last.current.x,last.current.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last.current=p; };
   const up=()=>{ if(!drawing.current) return; drawing.current=false; onChange(cv.current.toDataURL("image/png")); };
   const clear=()=>{ const ctx=cv.current.getContext("2d"); ctx.clearRect(0,0,W,H); onChange(""); };
+  const [full,setFull]=useState(false);
   const PENS=["#1e293b","#ef4444","#f59e0b","#22c55e","#3b82f6","#a855f7","#ec4899"];
   return (
-    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+    <div style={full?{position:"fixed",inset:0,zIndex:1500,background:T.bg,padding:16,display:"flex",flexDirection:"column",gap:8}:{display:"flex",flexDirection:"column",gap:8}}>
       <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
         {PENS.map(c=><button key={c} onClick={()=>{setPen(c);setErase(false);}} style={{width:22,height:22,borderRadius:"50%",background:c,border:`2px solid ${!erase&&pen===c?T.accent:"transparent"}`,cursor:"pointer",flexShrink:0}}/>)}
         <button onClick={()=>setErase(e=>!e)} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${erase?T.accent:T.border}`,background:erase?T.accentGlow:"transparent",color:erase?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Eraser</button>
         <button onClick={clear} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${T.danger}33`,background:T.danger+"11",color:T.danger,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Clear</button>
+        <button onClick={()=>setFull(f=>!f)} style={{marginLeft:"auto",padding:"4px 10px",borderRadius:7,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{full?"✕ Close":"⛶ Fullscreen"}</button>
       </div>
       <canvas ref={cv} width={W} height={H} onPointerDown={down} onPointerMove={move} onPointerUp={up}
-        style={{width:"100%",aspectRatio:`${W}/${H}`,borderRadius:12,border:`1px solid ${T.border}`,background:"#ffffff",touchAction:"none",cursor:"crosshair"}}/>
+        style={{width:"100%",...(full?{flex:1,minHeight:0}:{aspectRatio:`${W}/${H}`}),borderRadius:12,border:`1px solid ${T.border}`,background:"#ffffff",touchAction:"none",cursor:"crosshair"}}/>
     </div>
   );
 }
@@ -1513,8 +1521,9 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
   );
 }
 
-function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare}) {
+function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon}) {
   const importRef=useRef(null);
+  const iconFileRef=useRef(null);
   const [shareFolderName,setShareFolderName]=useState("");
   const [shareEmail,setShareEmail]=useState("");
   const [sharePerm,setSharePerm]=useState("edit");
@@ -1549,7 +1558,7 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onI
         <div style={{display:"flex",flexWrap:"wrap",gap:7,paddingBottom:10}}>
           {Object.entries(cats).map(([name,meta])=>(
             <div key={name} style={{display:"flex",alignItems:"center",gap:5,padding:"4px 8px 4px 6px",borderRadius:20,background:meta.color+"22",border:`1px solid ${meta.color}55`}}>
-              <button onClick={()=>setIconMenuFor(iconMenuFor===name?null:name)} title="Change icon" style={{border:"none",background:"transparent",cursor:"pointer",fontSize:14,lineHeight:1,padding:0}}>{meta.icon}</button>
+              <button onClick={()=>setIconMenuFor(iconMenuFor===name?null:name)} title="Change icon" style={{border:"none",background:"transparent",cursor:"pointer",lineHeight:1,padding:0,display:"flex",alignItems:"center"}}><CatIcon icon={meta.icon} size={15}/></button>
               <span style={{fontSize:12,color:meta.color,fontWeight:600}}>{name}</span>
               {!["work","health"].includes(name)&&(
                 <button onClick={()=>delCat(name)} style={{width:14,height:14,borderRadius:"50%",border:"none",cursor:"pointer",background:T.surface3,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",marginLeft:1}}><Ico n="x" s={8}/></button>
@@ -1558,14 +1567,18 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onI
           ))}
         </div>
         {iconMenuFor&&(
-          <div style={{display:"flex",flexWrap:"wrap",gap:3,padding:"4px 0 10px",maxHeight:128,overflowY:"auto"}}>
-            {CAT_ICONS.map(em=>(
-              <button key={em} onClick={()=>pickIcon(em)} style={{width:30,height:30,borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center"}}>{em}</button>
-            ))}
+          <div style={{padding:"4px 0 10px"}}>
+            <input ref={iconFileRef} type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{const f=e.target.files[0]; e.target.value=""; if(f&&onUploadIcon){const url=await onUploadIcon(f); if(url)pickIcon(url);}}}/>
+            <button onClick={()=>iconFileRef.current?.click()} style={{marginBottom:6,padding:"5px 10px",borderRadius:7,border:`1px dashed ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>🖼️ Upload image</button>
+            <div style={{display:"flex",flexWrap:"wrap",gap:3,maxHeight:120,overflowY:"auto"}}>
+              {CAT_ICONS.map(em=>(
+                <button key={em} onClick={()=>pickIcon(em)} style={{width:30,height:30,borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center"}}>{em}</button>
+              ))}
+            </div>
           </div>
         )}
         <div style={{display:"flex",gap:6,paddingBottom:12,alignItems:"center"}}>
-          <button onClick={()=>setIconMenuFor(iconMenuFor==="__new__"?null:"__new__")} title="Pick icon" style={{width:32,height:32,borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,cursor:"pointer",fontSize:16,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{newCatIcon}</button>
+          <button onClick={()=>setIconMenuFor(iconMenuFor==="__new__"?null:"__new__")} title="Pick icon" style={{width:32,height:32,borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><CatIcon icon={newCatIcon} size={16}/></button>
           <div style={{display:"flex",gap:4,flexWrap:"wrap",marginRight:4}}>
             {CAT_COLORS.map(c=><div key={c} onClick={()=>setNewCatColor(c)} style={{width:16,height:16,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${newCatColor===c?T.text:"transparent"}`,flexShrink:0}}/>)}
           </div>
