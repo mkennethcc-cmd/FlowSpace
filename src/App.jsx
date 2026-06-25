@@ -125,8 +125,9 @@ function runDrag(onMove, onDrop) {
   window.addEventListener("pointercancel", up);
 }
 
-const tod = () => new Date().toISOString().split("T")[0];
-const addDays = n => { const d=new Date(); d.setDate(d.getDate()+n); return d.toISOString().split("T")[0]; };
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+const tod = () => ymd(new Date());
+const addDays = n => { const d=new Date(); d.setDate(d.getDate()+n); return ymd(d); };
 const fmtDate = s => {
   if (!s) return null;
   const d = new Date(s+"T12:00:00"), t = new Date(); t.setHours(0,0,0,0);
@@ -412,14 +413,14 @@ export default function FlowSpace() {
   const addTask = useCallback(()=>{
     if (!input.trim()) return;
     const {title,due:parsed}=parseNL(input);
-    const due=parsed||(view==="myday"?tod():null);
+    const due=parsed||null;
     const inCat=view.startsWith("cat:")?view.slice(4):null;
     let ownerId=user?.id, tagForTask=inCat||guessCat(title,cats);
     if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"); ownerId=rest.slice(0,ci); tagForTask=rest.slice(ci+1); }
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="flagged",notes:"",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:null,attachments:[],owner:ownerId,position:Date.now()};
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="flagged",notes:"",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:null,attachments:[],owner:ownerId,position:Date.now(),mydayDate:view==="myday"?todStr:null};
     setTasks(ts=>[t,...ts]);
     setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
-    if(view==="myday"||t.starred) markActiveDay();
+    if(view==="myday") markActiveDay();
     setTimeout(()=>setNewAnim(null),600);
     if(user) db.insertTask(t,ownerId).catch(console.error);
   },[input,view,user,cats,awardXp,markActiveDay]);
@@ -434,7 +435,7 @@ export default function FlowSpace() {
       if(task.recurring && !awardedRef.current.has("recur-"+id)){
         awardedRef.current.add("recur-"+id);
         const nd=nextDue(task.due,task.recurring);
-        if(nd){ const clone={...task,id:crypto.randomUUID(),done:false,due:nd,quadrant:task.quadrant||null,remindAt:null,attachments:[],subtasks:(task.subtasks||[]).map(s=>({...s,done:false}))};
+        if(nd){ const clone={...task,id:crypto.randomUUID(),done:false,due:nd,quadrant:task.quadrant||null,remindAt:null,attachments:[],mydayDate:null,subtasks:(task.subtasks||[]).map(s=>({...s,done:false}))};
           setTasks(ts=>[clone,...ts]); if(user) db.insertTask(clone,user.id).catch(console.error);
           showToast(`↻ Next "${task.title}" scheduled for ${fmtDate(nd)}`);
         }
@@ -508,23 +509,23 @@ export default function FlowSpace() {
 
   const todStr=tod();
   const myTasks=tasks.filter(t=>t.owner===user?.id);
-  const myDay=myTasks.filter(t=>t.due===todStr||t.starred);
+  const myDay=myTasks.filter(t=>t.mydayDate===todStr);
   const upcoming=myTasks.filter(t=>t.due&&t.due>todStr);
   const completed=myTasks.filter(t=>t.done);
-  const overdueTasks=myTasks.filter(t=>!t.done&&t.due&&t.due<todStr);
+  const overdueTasks=myTasks.filter(t=>!t.done&&t.mydayDate&&t.mydayDate<todStr);
   const myDayAllDone=myDay.length>0&&myDay.every(t=>t.done);
   const prevMyDayDone=useRef(false);
   useEffect(()=>{ if(myDayAllDone&&!prevMyDayDone.current) fireConfetti(); prevMyDayDone.current=myDayAllDone; },[myDayAllDone]);
   // Shortlist that complements My Day: tasks worth pulling in today (overdue → due soon → the rest).
-  const mydaySuggestions=tasks
-    .filter(t=>!t.done && t.due!==todStr && !t.starred)
+  const mydaySuggestions=myTasks
+    .filter(t=>!t.done && t.mydayDate!==todStr)
     .sort((a,b)=>{
       const ao=a.due&&a.due<todStr, bo=b.due&&b.due<todStr;
       if(ao!==bo) return ao?-1:1;
       if(a.due&&b.due) return a.due.localeCompare(b.due);
       if(a.due) return -1; if(b.due) return 1; return 0;
     }).slice(0,6);
-  const addToMyDay=id=>{ navigator.vibrate?.(10); updateTask(id,{due:todStr}); markActiveDay(); };
+  const addToMyDay=id=>{ navigator.vibrate?.(10); updateTask(id,{mydayDate:todStr}); markActiveDay(); };
   const shareFolder=async(folder,email,canDelete)=>{ if(!user||!email.trim())return; try{ await db.addShare(user.id,folder,email,canDelete); refreshShares(); showToast(`Shared "${folder}" with ${email.trim()}`); }catch(e){ showToast("Share failed: "+(e.message||e)); } };
   const unshareFolder=async id=>{ await db.removeShare(id).catch(()=>{}); refreshShares(); showToast("Collaborator removed"); };
 
@@ -548,16 +549,15 @@ export default function FlowSpace() {
   const carryOver=()=>{
     if(!overdueTasks.length) return;
     navigator.vibrate?.(15);
-    overdueTasks.forEach(t=>updateTask(t.id,{due:todStr}));
+    overdueTasks.forEach(t=>updateTask(t.id,{mydayDate:todStr}));
   };
   const addMatrixTask=(quadrant,text)=>{
     const title=(text||"").trim(); if(!title) return;
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:guessCat(title,cats),due:null,starred:false,notes:"",color:null,subtasks:[],recurring:null,quadrant,remindAt:null,attachments:[],owner:user?.id,position:Date.now()};
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:guessCat(title,cats),due:null,starred:false,notes:"",color:null,subtasks:[],recurring:null,quadrant,remindAt:null,attachments:[],owner:user?.id,position:Date.now(),mydayDate:null};
     setTasks(ts=>[t,...ts]); awardXp("add-"+t.id,10);
     if(user) db.insertTask(t,user.id).catch(console.error);
   };
-  const sendToMyDay=id=>{ navigator.vibrate?.(15); updateTask(id,{starred:true,due:todStr}); markActiveDay(); };
-  const toggleMyDay=id=>{ const t=tasks.find(x=>x.id===id); if(!t)return; const inDay=t.due===todStr; navigator.vibrate?.(15); updateTask(id,{due:inDay?null:todStr}); if(!inDay) markActiveDay(); };
+  const toggleMyDay=id=>{ const t=tasks.find(x=>x.id===id); if(!t)return; const inDay=t.mydayDate===todStr; navigator.vibrate?.(15); updateTask(id,{mydayDate:inDay?null:todStr}); if(!inDay) markActiveDay(); };
   const level=Math.floor(xp/100)+1, xpLvl=xp%100;
   const pmm=String(Math.floor(pomSecs/60)).padStart(2,"0"), pms=String(pomSecs%60).padStart(2,"0");
 
@@ -915,7 +915,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
         </div>
         {view==="myday"&&overdueCount>0&&(
           <button onClick={onCarryOver} style={{display:"flex",alignItems:"center",gap:7,width:"100%",marginBottom:12,padding:"9px 12px",borderRadius:11,border:`1px solid ${T.warning}55`,background:T.warning+"15",color:T.warning,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>
-            <Ico n="repeat" s={14} c={T.warning}/> Carry over {overdueCount} overdue {overdueCount===1?"task":"tasks"} to today
+            <Ico n="repeat" s={14} c={T.warning}/> Carry over {overdueCount} unfinished {overdueCount===1?"task":"tasks"} from before
           </button>
         )}
         {view==="myday"&&suggestions&&suggestions.length>0&&(
@@ -1017,7 +1017,8 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
       <div style={{flex:1,minWidth:0}}>
         <div style={{display:"flex",alignItems:"center",gap:5}}>
           <span style={{fontSize:13,fontWeight:500,color:task.done?T.textMuted:T.text,textDecoration:task.done?"line-through":"none"}}>{task.title}</span>
-          {task.starred&&<Ico n="star" s={11} c="#f59e0b" st={{fill:"#f59e0b",flexShrink:0}}/>}
+          {task.mydayDate===tod()&&<Ico n="sun" s={11} c="#f59e0b" st={{flexShrink:0}}/>}
+          {task.starred&&<Ico n="flag" s={11} c="#f59e0b" st={{fill:"#f59e0b",flexShrink:0}}/>}
           {task.recurring&&<Ico n="repeat" s={11} c={T.textMuted} st={{flexShrink:0}}/>}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5,marginTop:3,flexWrap:"wrap"}}>
@@ -1136,7 +1137,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
       </DL>
       <div style={{display:"flex",gap:6}}>
         <button onClick={()=>onUpdate(task.id,{starred:!task.starred})} style={{flex:1,padding:"7px",borderRadius:8,border:`1px solid ${task.starred?"#f59e0b":T.border}`,background:task.starred?"#f59e0b22":"transparent",color:task.starred?"#f59e0b":T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
-          <Ico n="star" s={12} c={task.starred?"#f59e0b":undefined} st={task.starred?{fill:"#f59e0b"}:{}}/>Star
+          <Ico n="flag" s={12} c={task.starred?"#f59e0b":undefined} st={task.starred?{fill:"#f59e0b"}:{}}/>{task.starred?"Flagged":"Flag"}
         </button>
         <button onClick={()=>{onDuplicate?.(task);onClose();}} style={{flex:1,padding:"7px",borderRadius:8,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
           <Ico n="layers" s={12}/>Copy
@@ -1212,7 +1213,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
           </div>
           <div style={{flex:1,padding:10,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:7,alignContent:"flex-start"}}>
             {tasks.filter(t=>t.quadrant===qid&&!t.done).map(task=>(
-              <MNote key={task.id} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} dragging={dragId===task.id} inMyDay={task.due===tod()} onRemove={()=>updateTask(task.id,{quadrant:null})} onDelete={()=>deleteTask(task.id)} onToMyDay={()=>toggleMyDay(task.id)} editing={editId===task.id} onEdit={()=>setEditId(task.id)} onSave={txt=>{const t=txt.trim();if(t)updateTask(task.id,{title:t});setEditId(null);}}/>
+              <MNote key={task.id} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} dragging={dragId===task.id} inMyDay={task.mydayDate===tod()} onRemove={()=>updateTask(task.id,{quadrant:null})} onDelete={()=>deleteTask(task.id)} onToMyDay={()=>toggleMyDay(task.id)} editing={editId===task.id} onEdit={()=>setEditId(task.id)} onSave={txt=>{const t=txt.trim();if(t)updateTask(task.id,{title:t});setEditId(null);}}/>
             ))}
             {addingIn===qid&&(
               <div style={{width:"100%",animation:"slideIn .2s ease"}}>
