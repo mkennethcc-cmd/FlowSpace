@@ -324,12 +324,15 @@ export default function FlowSpace() {
 
   useEffect(()=>{
     if(!user) return;
+    // No user_id filter — RLS limits delivery to rows we can see (own + shared), so shared edits arrive live both ways.
     const ch=supabase.channel("fs-tasks")
-      .on("postgres_changes",{event:"*",schema:"public",table:"tasks",filter:`user_id=eq.${user.id}`},({eventType,new:n,old:o})=>{
+      .on("postgres_changes",{event:"*",schema:"public",table:"tasks"},({eventType,new:n,old:o})=>{
         if(eventType==="INSERT") setTasks(ts=>ts.some(t=>t.id===n.id)?ts:[fromDbTask(n),...ts]);
         if(eventType==="UPDATE") setTasks(ts=>ts.map(t=>t.id===n.id?fromDbTask(n):t));
         if(eventType==="DELETE") setTasks(ts=>ts.filter(t=>t.id!==o.id));
-      }).subscribe();
+      })
+      .on("postgres_changes",{event:"*",schema:"public",table:"folder_shares"},()=>{ refreshShares(); })
+      .subscribe();
     const onVisible=()=>{
       if(!document.hidden){
         isLoadingData.current=true;
@@ -405,11 +408,18 @@ export default function FlowSpace() {
     }
     if(user) db.updateTask(id,{done:newDone}).catch(console.error);
   };
+  const canDeleteTask=task=>{
+    if(!task) return true;
+    if(task.owner===user?.id) return true;
+    const sh=sharedWithMe.find(s=>s.owner_id===task.owner&&s.folder===task.tag);
+    return !!(sh&&sh.can_delete);
+  };
   const deleteTask = id=>{
     const t=tasks.find(x=>x.id===id);
+    if(t&&!canDeleteTask(t)){ showToast("You don't have permission to delete this shared task"); return; }
     setTasks(ts=>ts.filter(x=>x.id!==id)); if(selTask?.id===id)setSelTask(null);
     if(user)db.deleteTask(id).catch(console.error);
-    if(t) showToast("Task deleted", ()=>{ setTasks(ts=>[t,...ts]); if(user) db.insertTask(t,user.id).catch(console.error); setToast(null); });
+    if(t) showToast("Task deleted", ()=>{ setTasks(ts=>[t,...ts]); if(user) db.insertTask(t,t.owner||user.id).catch(console.error); setToast(null); });
   };
   const duplicateTask = task=>{ const c={...task,id:crypto.randomUUID(),done:false,title:task.title+" (copy)",attachments:[]}; setTasks(ts=>[c,...ts]); if(user) db.insertTask(c,user.id).catch(console.error); showToast("Task duplicated"); };
   const attachFile = async (task,file)=>{ if(!user) return; const meta=await db.uploadAttachment(file,user.id,task.id); updateTask(task.id,{attachments:[...(task.attachments||[]),meta]}); };
@@ -467,7 +477,7 @@ export default function FlowSpace() {
       if(a.due) return -1; if(b.due) return 1; return 0;
     }).slice(0,6);
   const addToMyDay=id=>{ navigator.vibrate?.(10); updateTask(id,{due:todStr}); markActiveDay(); };
-  const shareFolder=async(folder,email)=>{ if(!user||!email.trim())return; try{ await db.addShare(user.id,folder,email); refreshShares(); showToast(`Shared "${folder}" with ${email.trim()}`); }catch(e){ showToast("Share failed: "+(e.message||e)); } };
+  const shareFolder=async(folder,email,canDelete)=>{ if(!user||!email.trim())return; try{ await db.addShare(user.id,folder,email,canDelete); refreshShares(); showToast(`Shared "${folder}" with ${email.trim()}`); }catch(e){ showToast("Share failed: "+(e.message||e)); } };
   const unshareFolder=async id=>{ await db.removeShare(id).catch(()=>{}); refreshShares(); showToast("Collaborator removed"); };
 
   const remindedRef=useRef();
@@ -663,7 +673,7 @@ export default function FlowSpace() {
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder}/>}
           {(["myday","important","upcoming","all","completed"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr}/>
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask}/>
           )}
         </div>
       </main>
@@ -756,7 +766,7 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onCarryOver,overdueCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onCarryOver,overdueCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn}) {
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
   const [sort,setSort]=useState("smart");
@@ -906,14 +916,14 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
         <div style={{display:"flex",flexDirection:"column",gap:4}}>
           {sortList(show.filter(t=>!t.done)).map(task=>(
             <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id} dropTarget={dropId===task.id}
-              onDown={sort==="smart"?onCardDown:undefined} swipeX={swipeId===task.id?swipeX:0}/>
+              onDown={sort==="smart"?onCardDown:undefined} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true}/>
           ))}
           {show.filter(t=>t.done).length>0&&<>
             <div style={{fontSize:10,color:T.textMuted,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",padding:"10px 2px 4px",display:"flex",alignItems:"center",gap:5}}>
               <Ico n="check" s={11} c={T.textMuted}/> Completed · {show.filter(t=>t.done).length}
             </div>
             {show.filter(t=>t.done).map(task=>(
-              <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id}/>
+              <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} canDelete={canDeleteFn?canDeleteFn(task):true}/>
             ))}
           </>}
           {show.length===0&&(
@@ -925,12 +935,12 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           )}
         </div>
       </div>
-      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} onClose={()=>setSelTask(null)}/>}
+      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onClose={()=>setSelTask(null)}/>}
     </div>
   );
 }
 
-function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,onDown,swipeX=0}) {
+function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,onDown,swipeX=0,canDelete=true}) {
   const [hov,setHov]=useState(false);
   const ov=task.due&&task.due<tod()&&!task.done;
   const catMeta=cats[task.tag];
@@ -965,13 +975,13 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
         </div>
       </div>
       {qColor&&<div title={QUAD[task.quadrant]?.label} style={{width:6,height:6,borderRadius:"50%",background:qColor,flexShrink:0,marginTop:6}}/>}
-      {hov&&<button onClick={e=>{e.stopPropagation();onDelete(task.id);}} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",width:24,height:24,borderRadius:6,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",animation:"fadeIn .1s"}}><Ico n="trash" s={11}/></button>}
+      {hov&&canDelete&&<button onClick={e=>{e.stopPropagation();onDelete(task.id);}} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",width:24,height:24,borderRadius:6,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",animation:"fadeIn .1s"}}><Ico n="trash" s={11}/></button>}
     </div>
     </div>
   );
 }
 
-function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,onClose}) {
+function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,canDelete=true,onClose}) {
   const [uploading,setUploading]=useState(false);
   const fileRef=useRef(null);
   const doAttach=async files=>{ if(!files?.length)return; setUploading(true); try{ for(const f of files) await onAttach?.(task,f); }catch(e){ alert("Upload failed: "+(e.message||e)); } setUploading(false); };
@@ -1079,9 +1089,9 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
         <button onClick={()=>{onDuplicate?.(task);onClose();}} style={{flex:1,padding:"7px",borderRadius:8,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
           <Ico n="layers" s={12}/>Copy
         </button>
-        <button onClick={()=>onDelete(task.id)} style={{flex:1,padding:"7px",borderRadius:8,border:`1px solid ${T.danger}22`,background:T.danger+"11",color:T.danger,cursor:"pointer",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
+        {canDelete&&<button onClick={()=>onDelete(task.id)} style={{flex:1,padding:"7px",borderRadius:8,border:`1px solid ${T.danger}22`,background:T.danger+"11",color:T.danger,cursor:"pointer",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
           <Ico n="trash" s={12} c={T.danger}/>Delete
-        </button>
+        </button>}
       </div>
     </div>
   );
@@ -1507,6 +1517,7 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onI
   const importRef=useRef(null);
   const [shareFolderName,setShareFolderName]=useState("");
   const [shareEmail,setShareEmail]=useState("");
+  const [sharePerm,setSharePerm]=useState("edit");
   const [notifs,setNotifs]=useState(true);
   const [focus,setFocus]=useState(false);
   const [weekly,setWeekly]=useState(true);
@@ -1570,8 +1581,12 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onI
             <option value="">Choose folder…</option>
             {Object.keys(cats).map(n=><option key={n} value={n}>{n}</option>)}
           </select>
-          <input value={shareEmail} onChange={e=>setShareEmail(e.target.value)} placeholder="their@email.com" type="email" style={{flex:1,minWidth:140,padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
-          <button onClick={()=>{if(shareFolderName&&shareEmail.trim()){onShareFolder(shareFolderName,shareEmail);setShareEmail("");}}} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Invite</button>
+          <input value={shareEmail} onChange={e=>setShareEmail(e.target.value)} placeholder="their@email.com" type="email" style={{flex:1,minWidth:120,padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+          <select value={sharePerm} onChange={e=>setSharePerm(e.target.value)} style={{padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",cursor:"pointer"}}>
+            <option value="edit">Edit & add</option>
+            <option value="delete">Edit, add & delete</option>
+          </select>
+          <button onClick={()=>{if(shareFolderName&&shareEmail.trim()){onShareFolder(shareFolderName,shareEmail,sharePerm==="delete");setShareEmail("");}}} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Invite</button>
         </div>
         {ownedShares&&ownedShares.length>0&&(
           <div style={{paddingBottom:12,display:"flex",flexDirection:"column",gap:5}}>
@@ -1580,6 +1595,7 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onI
                 <span style={{fontSize:14}}>🤝</span>
                 <span style={{fontSize:12,fontWeight:600,textTransform:"capitalize"}}>{s.folder}</span>
                 <span style={{fontSize:11,color:T.textMuted,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {s.shared_with_email}</span>
+                <span style={{fontSize:9,fontWeight:700,color:s.can_delete?T.danger:T.textMuted,background:(s.can_delete?T.danger:T.textMuted)+"22",padding:"1px 6px",borderRadius:10}}>{s.can_delete?"can delete":"edit"}</span>
                 <button onClick={()=>onUnshare(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Remove</button>
               </div>
             ))}

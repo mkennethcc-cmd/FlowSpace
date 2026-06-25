@@ -69,8 +69,11 @@ export const db = {
     const { data } = await supabase.from("folder_shares").select("*").eq("shared_with_email", email.toLowerCase());
     return data || [];
   },
-  async addShare(ownerId, folder, email) {
-    const { error } = await supabase.from("folder_shares").insert({ owner_id: ownerId, folder, shared_with_email: email.toLowerCase().trim() });
+  async addShare(ownerId, folder, email, canDelete) {
+    const { error } = await supabase.from("folder_shares").upsert(
+      { owner_id: ownerId, folder, shared_with_email: email.toLowerCase().trim(), can_delete: !!canDelete },
+      { onConflict: "owner_id,folder,shared_with_email" }
+    );
     if (error) throw error;
   },
   async removeShare(id) {
