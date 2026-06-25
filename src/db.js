@@ -6,6 +6,7 @@ export const fromDbTask = r => ({
   color: r.color, subtasks: r.subtasks || [], recurring: r.recurring,
   quadrant: r.quadrant || null, remindAt: r.remind_at || null,
   attachments: r.attachments || [], owner: r.user_id,
+  position: r.position != null ? r.position : (r.created_at ? new Date(r.created_at).getTime() : Date.now()),
 });
 
 // Canonical icons for the built-in folders. Used to heal old accounts whose rows
@@ -29,7 +30,7 @@ export const db = {
       starred: t.starred, notes: t.notes || "", color: t.color || null,
       subtasks: t.subtasks || [], recurring: t.recurring || null,
       quadrant: t.quadrant || null, remind_at: t.remindAt || null,
-      attachments: t.attachments || [],
+      attachments: t.attachments || [], position: t.position != null ? t.position : Date.now(),
     });
   },
   async updateTask(id, p) {
@@ -40,6 +41,7 @@ export const db = {
     if (p.subtasks !== undefined) u.subtasks = p.subtasks;
     if (p.remindAt !== undefined) u.remind_at = p.remindAt || null;
     if (p.attachments !== undefined) u.attachments = p.attachments;
+    if (p.position !== undefined) u.position = p.position;
     if (Object.keys(u).length) await supabase.from("tasks").update(u).eq("id", id);
   },
   async deleteTask(id) {
