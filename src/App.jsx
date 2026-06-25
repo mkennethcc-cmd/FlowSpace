@@ -179,6 +179,33 @@ const isImgIcon = ic => typeof ic === "string" && (ic.startsWith("http") || ic.s
 const CatIcon = ({icon, size=14}) => isImgIcon(icon)
   ? <img src={icon} alt="" style={{width:size,height:size,borderRadius:4,objectFit:"cover",verticalAlign:"middle",flexShrink:0}}/>
   : <span style={{fontSize:size+1,lineHeight:1}}>{icon}</span>;
+// Auto-pick a folder icon from its name; falls back to a varied (name-seeded) emoji.
+const ICON_KEYWORDS = [
+  [["gym","run","health","fit","workout","sport","yoga","med","doctor","walk"],"🏃"],
+  [["work","job","office","meeting","client","project","career"],"💼"],
+  [["school","study","class","exam","homework","course","uni","college","lecture"],"📚"],
+  [["money","finance","budget","bank","bill","pay","invest","tax","saving"],"💰"],
+  [["home","house","chore","clean","family","apartment"],"🏠"],
+  [["food","cook","recipe","meal","grocery","eat","kitchen","dinner"],"🍔"],
+  [["travel","trip","vacation","flight","holiday","journey"],"✈️"],
+  [["shop","buy","store","cart","wishlist"],"🛒"],
+  [["fun","game","play","hobby","gaming"],"🎮"],
+  [["music","song","band","playlist"],"🎵"],
+  [["love","date","relationship","friend","social"],"❤️"],
+  [["read","book","novel","reading"],"📖"],
+  [["idea","creative","art","design","draw","paint"],"🎨"],
+  [["pet","dog","cat","animal"],"🐶"],
+  [["goal","target","plan","dream"],"🎯"],
+  [["event","party","birthday","celebrat"],"🎉"],
+  [["garden","plant","nature","grow"],"🌱"],
+  [["code","dev","program","tech","app"],"💻"],
+];
+const guessIcon = name => {
+  const n=(name||"").toLowerCase();
+  for(const [keys,icon] of ICON_KEYWORDS){ if(keys.some(k=>n.includes(k))) return icon; }
+  const sum=[...n].reduce((a,c)=>a+c.charCodeAt(0),0);
+  return CAT_ICONS[sum % CAT_ICONS.length];
+};
 const CAT_ICONS = ["💼","📚","🏃","💰","🏠","❤️","🎯","✈️","🛒","🎨","🎮","🍔","☕","🌱","🐶","📞","🎵","⚽","💪","🧘","📝","💻","📅","🔥","⭐","🎓","🏥","🍳","🚗","🎁","📖","🧹","💡","🎬","🎉","🌍","🏋️","🧠","📷","🎸","🍕","🛏️","🐱","✏️","🔧","📌","🏆","🌸"];
 
 // Accent palettes (#25). "lavender" = the original look; the rest are pastel.
@@ -257,6 +284,7 @@ export default function FlowSpace() {
   const [tasks, setTasks] = useState([]);
   const [ownedShares, setOwnedShares] = useState([]);
   const [sharedWithMe, setSharedWithMe] = useState([]);
+  const [deletedCats, setDeletedCats] = useState([]);
   const [canvasNotes, setCanvasNotes] = useState([]);
   const [notes, setNotes] = useState([]);
   const [cats, setCats] = useState(DEFAULT_CATS);
@@ -432,6 +460,18 @@ export default function FlowSpace() {
   const removeAttach = async (task,att)=>{ await db.deleteAttachment(att.path).catch(()=>{}); updateTask(task.id,{attachments:(task.attachments||[]).filter(a=>a.path!==att.path)}); };
   const setReminder = (id,val)=>{ remindedRef.current?.delete(id); updateTask(id,{remindAt:val||null}); if(val&&"Notification"in window&&Notification.permission==="default") Notification.requestPermission(); };
   const uploadCatIcon = async file=>{ if(!user) return null; const m=await db.uploadAttachment(file,user.id,"icons"); return m.url; };
+  useEffect(()=>{ if(!user){setDeletedCats([]);return;} try{ setDeletedCats(JSON.parse(localStorage.getItem(`fs_delcats_${user.id}`)||"[]")); }catch{ setDeletedCats([]); } },[user]);
+  const persistDeleted=arr=>{ setDeletedCats(arr); if(user){ try{localStorage.setItem(`fs_delcats_${user.id}`,JSON.stringify(arr));}catch{} } };
+  const deleteCat=name=>{
+    const meta=cats[name]; if(!meta) return;
+    if(!window.confirm(`Delete the "${name}" folder?\n\nIts tasks keep their label, and you can restore the folder from "Recently deleted".`)) return;
+    setCats(c=>{ const n={...c}; delete n[name]; return n; });
+    persistDeleted([{name,color:meta.color,icon:meta.icon},...deletedCats.filter(d=>d.name!==name)].slice(0,20));
+    if(view===`cat:${name}`) setView("all");
+    showToast(`Folder "${name}" deleted`, ()=>{ setCats(c=>({...c,[name]:meta})); persistDeleted(deletedCats.filter(d=>d.name!==name)); setToast(null); });
+  };
+  const restoreCat=name=>{ const d=deletedCats.find(x=>x.name===name); if(!d) return; setCats(c=>({...c,[name]:{color:d.color,icon:d.icon}})); persistDeleted(deletedCats.filter(x=>x.name!==name)); showToast(`Folder "${name}" restored`); };
+  const purgeCat=name=>{ persistDeleted(deletedCats.filter(x=>x.name!==name)); };
   const clearCompleted = ()=>{ const done=tasks.filter(t=>t.done); if(!done.length){showToast("No completed tasks");return;} setTasks(ts=>ts.filter(t=>!t.done)); if(user) done.forEach(t=>db.deleteTask(t.id).catch(()=>{})); showToast(`Cleared ${done.length} completed`); };
   const clearDone = ids=>{ if(!ids||!ids.length)return; setTasks(ts=>ts.filter(t=>!ids.includes(t.id))); if(user) ids.forEach(id=>db.deleteTask(id).catch(()=>{})); showToast(`Cleared ${ids.length} completed`); };
   const exportData = ()=>{
@@ -682,7 +722,7 @@ export default function FlowSpace() {
           {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} setTasks={setTasks}/>}
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
-          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon}/>}
+          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
           {(["myday","flagged","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone}/>
           )}
@@ -1529,12 +1569,13 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
   );
 }
 
-function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon}) {
+function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon,onDeleteCat,deletedCats,onRestoreCat,onPurgeCat}) {
   const importRef=useRef(null);
   const iconFileRef=useRef(null);
   const [shareFolderName,setShareFolderName]=useState("");
   const [shareEmail,setShareEmail]=useState("");
   const [sharePerm,setSharePerm]=useState("edit");
+  const [iconPicked,setIconPicked]=useState(false);
   const [notifs,setNotifs]=useState(true);
   const [focus,setFocus]=useState(false);
   const [weekly,setWeekly]=useState(true);
@@ -1543,9 +1584,9 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onI
   const [newCatColor,setNewCatColor]=useState(CAT_COLORS[5]);
   const [newCatIcon,setNewCatIcon]=useState(CAT_ICONS[0]);
   const [iconMenuFor,setIconMenuFor]=useState(null);
-  const addCat=()=>{const name=newCat.trim().toLowerCase();if(!name||cats[name])return;setCats(c=>({...c,[name]:{color:newCatColor,icon:newCatIcon}}));setNewCat("");setNewCatIcon(CAT_ICONS[0]);};
-  const delCat=name=>{if(["work","health"].includes(name))return;const c={...cats};delete c[name];setCats(c);};
-  const pickIcon=em=>{if(iconMenuFor==="__new__")setNewCatIcon(em);else setCats(c=>({...c,[iconMenuFor]:{...c[iconMenuFor],icon:em}}));setIconMenuFor(null);};
+  const addCat=()=>{const name=newCat.trim().toLowerCase();if(!name||cats[name])return;setCats(c=>({...c,[name]:{color:newCatColor,icon:newCatIcon}}));setNewCat("");setNewCatIcon(CAT_ICONS[0]);setIconPicked(false);};
+  const onNameChange=v=>{ setNewCat(v); if(!iconPicked) setNewCatIcon(guessIcon(v)); };
+  const pickIcon=em=>{if(iconMenuFor==="__new__"){setNewCatIcon(em);setIconPicked(true);}else setCats(c=>({...c,[iconMenuFor]:{...c[iconMenuFor],icon:em}}));setIconMenuFor(null);};
   const Toggle=({val,onChange})=>(
     <div onClick={()=>onChange(!val)} style={{width:36,height:20,borderRadius:10,background:val?T.accent:T.surface3,cursor:"pointer",position:"relative",transition:"background .2s",flexShrink:0}}>
       <div style={{width:16,height:16,borderRadius:"50%",background:"#fff",position:"absolute",top:2,left:val?18:2,transition:"left .2s",boxShadow:"0 1px 4px rgba(0,0,0,.3)"}}/>
@@ -1568,9 +1609,7 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onI
             <div key={name} style={{display:"flex",alignItems:"center",gap:5,padding:"4px 8px 4px 6px",borderRadius:20,background:meta.color+"22",border:`1px solid ${meta.color}55`}}>
               <button onClick={()=>setIconMenuFor(iconMenuFor===name?null:name)} title="Change icon" style={{border:"none",background:"transparent",cursor:"pointer",lineHeight:1,padding:0,display:"flex",alignItems:"center"}}><CatIcon icon={meta.icon} size={15}/></button>
               <span style={{fontSize:12,color:meta.color,fontWeight:600}}>{name}</span>
-              {!["work","health"].includes(name)&&(
-                <button onClick={()=>delCat(name)} style={{width:14,height:14,borderRadius:"50%",border:"none",cursor:"pointer",background:T.surface3,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",marginLeft:1}}><Ico n="x" s={8}/></button>
-              )}
+              <button onClick={()=>onDeleteCat(name)} title="Delete folder" style={{width:14,height:14,borderRadius:"50%",border:"none",cursor:"pointer",background:T.surface3,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",marginLeft:1}}><Ico n="x" s={8}/></button>
             </div>
           ))}
         </div>
@@ -1590,9 +1629,25 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onI
           <div style={{display:"flex",gap:4,flexWrap:"wrap",marginRight:4}}>
             {CAT_COLORS.map(c=><div key={c} onClick={()=>setNewCatColor(c)} style={{width:16,height:16,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${newCatColor===c?T.text:"transparent"}`,flexShrink:0}}/>)}
           </div>
-          <input value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCat()} placeholder="New category name…" style={{flex:1,padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+          <input value={newCat} onChange={e=>onNameChange(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCat()} placeholder="New list name…" style={{flex:1,padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
           <button onClick={addCat} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Add</button>
         </div>
+        <div style={{fontSize:10,color:T.textMuted,paddingBottom:12,marginTop:-4}}>An icon is auto-picked from the name — tap it above to change.</div>
+        {deletedCats&&deletedCats.length>0&&(
+          <div style={{paddingBottom:12}}>
+            <div style={{fontSize:10,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>Recently deleted</div>
+            <div style={{display:"flex",flexDirection:"column",gap:5}}>
+              {deletedCats.map(d=>(
+                <div key={d.name} style={{display:"flex",alignItems:"center",gap:7,padding:"5px 9px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
+                  <CatIcon icon={d.icon} size={14}/>
+                  <span style={{fontSize:12,fontWeight:600,color:T.textMuted,flex:1,textTransform:"capitalize"}}>{d.name}</span>
+                  <button onClick={()=>onRestoreCat(d.name)} style={{padding:"3px 10px",borderRadius:6,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Restore</button>
+                  <button onClick={()=>onPurgeCat(d.name)} title="Remove permanently" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex"}}><Ico n="x" s={12}/></button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
       <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"0 16px",marginBottom:14}}>
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,padding:"12px 0 6px"}}>Share a folder 🤝</div>
