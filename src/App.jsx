@@ -48,6 +48,8 @@ const Ico = ({ n, s=16, c="currentColor", st={} }) => {
     tag:<><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></>,
     target:<><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></>,
     edit:<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></>,
+    flag:<><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></>,
+    chevron:<><polyline points="9 18 15 12 9 6"/></>,
     brain:<><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2z"/></>,
     paint:<><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></>,
   };
@@ -260,6 +262,7 @@ export default function FlowSpace() {
   const [cats, setCats] = useState(DEFAULT_CATS);
   const [sideOpen, setSideOpen] = useState(true);
   const [defOpen, setDefOpen] = useState(true);
+  const [customOpen, setCustomOpen] = useState(true);
   const [selTask, setSelTask] = useState(null);
   const [input, setInput] = useState("");
   const [xp, setXp] = useState(0);
@@ -385,7 +388,7 @@ export default function FlowSpace() {
     const inCat=view.startsWith("cat:")?view.slice(4):null;
     let ownerId=user?.id, tagForTask=inCat||guessCat(title,cats);
     if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"); ownerId=rest.slice(0,ci); tagForTask=rest.slice(ci+1); }
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="myday"||view==="important",notes:"",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:null,attachments:[],owner:ownerId,position:Date.now()};
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="flagged",notes:"",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:null,attachments:[],owner:ownerId,position:Date.now()};
     setTasks(ts=>[t,...ts]);
     setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
     if(view==="myday"||t.starred) markActiveDay();
@@ -430,6 +433,7 @@ export default function FlowSpace() {
   const setReminder = (id,val)=>{ remindedRef.current?.delete(id); updateTask(id,{remindAt:val||null}); if(val&&"Notification"in window&&Notification.permission==="default") Notification.requestPermission(); };
   const uploadCatIcon = async file=>{ if(!user) return null; const m=await db.uploadAttachment(file,user.id,"icons"); return m.url; };
   const clearCompleted = ()=>{ const done=tasks.filter(t=>t.done); if(!done.length){showToast("No completed tasks");return;} setTasks(ts=>ts.filter(t=>!t.done)); if(user) done.forEach(t=>db.deleteTask(t.id).catch(()=>{})); showToast(`Cleared ${done.length} completed`); };
+  const clearDone = ids=>{ if(!ids||!ids.length)return; setTasks(ts=>ts.filter(t=>!ids.includes(t.id))); if(user) ids.forEach(id=>db.deleteTask(id).catch(()=>{})); showToast(`Cleared ${ids.length} completed`); };
   const exportData = ()=>{
     const data={app:"FlowSpace",exportedAt:new Date().toISOString(),tasks,notes,cats,canvasNotes};
     const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
@@ -526,22 +530,20 @@ export default function FlowSpace() {
     let base;
     if(view.startsWith("cat:")){ const c=view.slice(4); base=tasks.filter(t=>t.tag===c&&t.owner===user?.id); }
     else if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"),o=rest.slice(0,ci),f=rest.slice(ci+1); base=tasks.filter(t=>t.owner===o&&t.tag===f); }
-    else if(view==="important") base=myTasks.filter(t=>t.starred);
-    else base=view==="myday"?myDay:view==="upcoming"?upcoming:view==="completed"?completed:myTasks;
+    else if(view==="flagged") base=myTasks.filter(t=>t.starred);
+    else base=view==="myday"?myDay:view==="upcoming"?upcoming:myTasks;
     if(search) base=base.filter(t=>t.title.toLowerCase().includes(search.toLowerCase()));
     return byPosition(base);
   };
 
   const navItems=[
     {id:"myday",label:"My Day",icon:"sun",badge:myDay.filter(t=>!t.done).length},
-    {id:"important",label:"Important",icon:"star",badge:myTasks.filter(t=>t.starred&&!t.done).length},
     {id:"upcoming",label:"Upcoming",icon:"cal",badge:upcoming.filter(t=>!t.done).length},
-    {id:"all",label:"All Tasks",icon:"layers",badge:null},
-    {id:"completed",label:"Completed",icon:"done",badge:completed.length},
     {id:"matrix",label:"Priority Matrix",icon:"grid",badge:null},
+    {id:"all",label:"All Tasks",icon:"layers",badge:null},
+    {id:"flagged",label:"Flagged",icon:"flag",badge:myTasks.filter(t=>t.starred&&!t.done).length},
     {id:"notes",label:"Notes",icon:"note",badge:null},
     {id:"analytics",label:"Analytics",icon:"bar",badge:null},
-    {id:"settings",label:"Settings",icon:"cog",badge:null},
   ];
 
   if(confirmFlow==="signup") return <SignupSuccess onContinue={()=>{ try{window.history.replaceState(null,"",window.location.pathname);}catch{} setConfirmFlow(null); }}/>;
@@ -562,12 +564,15 @@ export default function FlowSpace() {
       {aboutOpen&&<AboutModal T={T} onClose={()=>setAboutOpen(false)}/>}
       {cmdOpen&&<CmdPalette T={T} tasks={tasks} onClose={()=>setCmdOpen(false)} onGo={v=>{setView(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}}/>}
       <aside style={{width:sideOpen?224:60,transition:"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:30}}>
-        <button onClick={()=>setAboutOpen(true)} title="About FlowSpace" style={{padding:"18px 14px",display:"flex",alignItems:"center",gap:9,background:"none",border:"none",cursor:"pointer",width:"100%"}}>
-          <div style={{width:30,height:30,borderRadius:9,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:`0 3px 12px ${T.accent}55`}}>
-            <Ico n="zap" s={14} c="#fff"/>
-          </div>
-          {sideOpen&&<span style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:16,letterSpacing:"-.4px",background:`linear-gradient(90deg,${T.accent},${T.accentAlt})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",whiteSpace:"nowrap"}}>FlowSpace</span>}
-        </button>
+        <div style={{padding:"18px 14px",display:"flex",alignItems:"center",gap:9}}>
+          <button onClick={()=>setAboutOpen(true)} title="About FlowSpace" style={{display:"flex",alignItems:"center",gap:9,background:"none",border:"none",cursor:"pointer",padding:0,flex:1,minWidth:0}}>
+            <div style={{width:30,height:30,borderRadius:9,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:`0 3px 12px ${T.accent}55`}}>
+              <Ico n="zap" s={14} c="#fff"/>
+            </div>
+            {sideOpen&&<span style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:16,letterSpacing:"-.4px",background:`linear-gradient(90deg,${T.accent},${T.accentAlt})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",whiteSpace:"nowrap"}}>FlowSpace</span>}
+          </button>
+          {sideOpen&&<button onClick={()=>setView("settings")} title="Settings" style={{width:28,height:28,borderRadius:7,border:"none",cursor:"pointer",background:view==="settings"?T.accentGlow:"transparent",color:view==="settings"?T.accent:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ico n="cog" s={15}/></button>}
+        </div>
         {sideOpen&&(
           <div style={{padding:"0 12px 14px"}}>
             <div style={{background:T.surface2,borderRadius:9,padding:"8px 10px",border:`1px solid ${T.border}`}}>
@@ -608,15 +613,17 @@ export default function FlowSpace() {
             const customs=Object.entries(cats).filter(([n])=>!DEFAULT_CAT_NAMES.includes(n));
             return (<>
               {sideOpen&&defaults.length>0&&(
-                <button onClick={()=>setDefOpen(o=>!o)} style={{width:"100%",display:"flex",alignItems:"center",gap:4,padding:"12px 10px 4px",background:"none",border:"none",cursor:"pointer",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,fontFamily:"'DM Sans',sans-serif"}}>
-                  <span style={{transform:defOpen?"rotate(90deg)":"none",transition:"transform .15s",fontSize:8}}>▶</span> Default folders
+                <button onClick={()=>setDefOpen(o=>!o)} style={{width:"100%",display:"flex",alignItems:"center",gap:5,padding:"12px 10px 4px",background:"none",border:"none",cursor:"pointer",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,fontFamily:"'DM Sans',sans-serif"}}>
+                  <Ico n="chevron" s={10} c={T.textMuted} st={{transform:defOpen?"rotate(90deg)":"none",transition:"transform .15s"}}/> Default folders
                 </button>
               )}
               {(defOpen||!sideOpen)&&defaults.map(([name,meta])=>FolderBtn(name,meta,`cat:${name}`,myTasks.filter(t=>t.tag===name&&!t.done).length,meta.icon))}
               {sideOpen&&customs.length>0&&(
-                <div style={{padding:"12px 10px 4px",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>My lists</div>
+                <button onClick={()=>setCustomOpen(o=>!o)} style={{width:"100%",display:"flex",alignItems:"center",gap:5,padding:"12px 10px 4px",background:"none",border:"none",cursor:"pointer",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,fontFamily:"'DM Sans',sans-serif"}}>
+                  <Ico n="chevron" s={10} c={T.textMuted} st={{transform:customOpen?"rotate(90deg)":"none",transition:"transform .15s"}}/> My lists
+                </button>
               )}
-              {customs.map(([name,meta])=>FolderBtn(name,meta,`cat:${name}`,myTasks.filter(t=>t.tag===name&&!t.done).length,meta.icon))}
+              {(customOpen||!sideOpen)&&customs.map(([name,meta])=>FolderBtn(name,meta,`cat:${name}`,myTasks.filter(t=>t.tag===name&&!t.done).length,meta.icon))}
               {sideOpen&&(
                 <div style={{padding:"12px 10px 4px",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>Shared with me</div>
               )}
@@ -676,12 +683,12 @@ export default function FlowSpace() {
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon}/>}
-          {(["myday","important","upcoming","all","completed"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask}/>
+          {(["myday","flagged","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone}/>
           )}
         </div>
       </main>
-      {(["myday","important","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
+      {(["myday","flagged","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
         <button onClick={()=>inputRef.current?.focus()} style={{position:"fixed",bottom:26,right:26,width:50,height:50,borderRadius:"50%",border:"none",cursor:"pointer",background:T.grad,color:"#fff",boxShadow:"0 6px 20px rgba(192,132,252,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:50,transition:"transform .15s"}}
           onMouseEnter={e=>e.currentTarget.style.transform="scale(1.1)"}
           onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
@@ -770,7 +777,7 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onCarryOver,overdueCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onCarryOver,overdueCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone}) {
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
   const [sort,setSort]=useState("smart");
@@ -782,7 +789,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const dragIdRef=useRef(null);
   const dropIdRef=useRef(null);
   const didDragRef=useRef(false);
-  const labels={myday:"My Day",important:"Important",upcoming:"Upcoming",all:"All Tasks",completed:"Completed"};
+  const labels={myday:"My Day",flagged:"Flagged",upcoming:"Upcoming",all:"All Tasks"};
   const catKey=view.startsWith("cat:")?view.slice(4):null;
   const sharedKey=view.startsWith("shared:")?view.slice(view.lastIndexOf(":")+1):null;
   const titleLabel=catKey?`${cats[catKey]?.icon||"📁"} ${catKey.charAt(0).toUpperCase()+catKey.slice(1)}`:sharedKey?`🤝 ${sharedKey.charAt(0).toUpperCase()+sharedKey.slice(1)}`:labels[view];
@@ -925,6 +932,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           {show.filter(t=>t.done).length>0&&<>
             <div style={{fontSize:10,color:T.textMuted,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",padding:"10px 2px 4px",display:"flex",alignItems:"center",gap:5}}>
               <Ico n="check" s={11} c={T.textMuted}/> Completed · {show.filter(t=>t.done).length}
+              <button onClick={()=>onClearDone?.(show.filter(t=>t.done).map(t=>t.id))} style={{marginLeft:"auto",background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:10,fontWeight:700,letterSpacing:".3px",fontFamily:"'DM Sans',sans-serif",textTransform:"none"}}>Clear all</button>
             </div>
             {show.filter(t=>t.done).map(task=>(
               <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} canDelete={canDeleteFn?canDeleteFn(task):true}/>
