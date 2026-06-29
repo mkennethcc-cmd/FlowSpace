@@ -381,19 +381,29 @@ export default function FlowSpace() {
 
   useEffect(()=>{
     if(!user){ setXp(0); setStreak(0); awardedRef.current=new Set(); lastActiveRef.current=null; return; }
-    let g={xp:0,streak:0,awarded:[],lastActive:null};
-    try{ const raw=localStorage.getItem(`fs_gami_${user.id}`); if(raw) g=JSON.parse(raw); }catch{}
-    awardedRef.current=new Set(g.awarded||[]);
-    lastActiveRef.current=g.lastActive||null;
-    const yest=addDays(-1);
-    let st=g.streak||0;
-    if(g.lastActive && g.lastActive!==tod() && g.lastActive!==yest) st=0;
-    setStreak(st); setXp(g.xp||0);
+    let cancelled=false;
+    (async()=>{
+      let g=null;
+      try{ g=await db.loadGami(user.id); }catch{}
+      if(!g){ // migrate any older device-local data, then it'll save to the DB
+        try{ const raw=localStorage.getItem(`fs_gami_${user.id}`); if(raw){ const l=JSON.parse(raw); g={xp:l.xp,streak:l.streak,last_active:l.lastActive,awarded:l.awarded}; } }catch{}
+      }
+      g=g||{xp:0,streak:0,last_active:null,awarded:[]};
+      if(cancelled) return;
+      awardedRef.current=new Set(g.awarded||[]);
+      lastActiveRef.current=g.last_active||null;
+      const yest=addDays(-1);
+      let st=g.streak||0;
+      if(g.last_active && g.last_active!==tod() && g.last_active!==yest) st=0;
+      setStreak(st); setXp(g.xp||0);
+    })();
+    return ()=>{cancelled=true;};
   },[user]);
 
   useEffect(()=>{
     if(!user) return;
-    try{ localStorage.setItem(`fs_gami_${user.id}`, JSON.stringify({xp,streak,awarded:[...awardedRef.current],lastActive:lastActiveRef.current})); }catch{}
+    const t=setTimeout(()=>{ db.saveGami(user.id,{xp,streak,lastActive:lastActiveRef.current,awarded:[...awardedRef.current]}).catch(()=>{}); },1200);
+    return ()=>clearTimeout(t);
   },[xp,streak,user]);
 
   const markActiveDay = useCallback(()=>{

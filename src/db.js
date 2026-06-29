@@ -83,6 +83,18 @@ export const db = {
     await supabase.from("folder_shares").delete().eq("id", id);
   },
 
+  async loadGami(uid) {
+    const { data } = await supabase.from("gamification").select("*").eq("user_id", uid).maybeSingle();
+    return data || null;
+  },
+  async saveGami(uid, g) {
+    await supabase.from("gamification").upsert({
+      user_id: uid, xp: g.xp || 0, streak: g.streak || 0,
+      last_active: g.lastActive || null, awarded: g.awarded || [],
+      updated_at: new Date().toISOString(),
+    });
+  },
+
   async loadCanvas(uid) {
     const { data } = await supabase.from("canvas_notes").select("*").eq("user_id", uid);
     return (data || []).map(fromDbCanvas);
