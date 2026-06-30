@@ -182,34 +182,48 @@ const CatIcon = ({icon, size=14}) => isImgIcon(icon)
   : <span style={{fontSize:size+1,lineHeight:1}}>{icon}</span>;
 // Auto-pick a folder icon from its name; falls back to a varied (name-seeded) emoji.
 const ICON_KEYWORDS = [
-  [["cat","cats","kitten","kitty"],"🐱"],
-  [["dog","dogs","puppy","pup"],"🐶"],
-  [["pet","pets","animal","vet"],"🐾"],
-  [["gym","run","running","health","fit","fitness","workout","sport","yoga","doctor","walk"],"🏃"],
-  [["work","job","office","meeting","client","project","career"],"💼"],
-  [["school","study","class","exam","homework","course","uni","college","lecture"],"📚"],
-  [["money","finance","budget","bank","bill","bills","pay","invest","tax","saving","savings"],"💰"],
-  [["home","house","chore","chores","clean","family","apartment"],"🏠"],
-  [["food","cook","recipe","meal","grocery","groceries","eat","kitchen","dinner"],"🍔"],
-  [["travel","trip","trips","vacation","flight","holiday","journey"],"✈️"],
-  [["shop","shopping","buy","store","cart","wishlist"],"🛒"],
-  [["fun","game","games","play","hobby","gaming"],"🎮"],
-  [["music","song","songs","band","playlist"],"🎵"],
-  [["love","date","dating","relationship","friend","friends","social"],"❤️"],
-  [["read","reading","book","books","novel"],"📖"],
-  [["idea","ideas","creative","art","design","draw","drawing","paint"],"🎨"],
-  [["goal","goals","target","plan","plans","dream"],"🎯"],
-  [["event","events","party","birthday","celebrate"],"🎉"],
-  [["garden","plant","plants","nature","grow"],"🌱"],
-  [["code","coding","dev","program","tech","app"],"💻"],
-  [["travel"],"✈️"],
+  [["cat","cats","kitten","kitty"],"🐱"],[["dog","dogs","puppy","puppies","pup"],"🐶"],
+  [["fish","aquarium"],"🐟"],[["bird","birds"],"🐦"],[["pet","pets","animal","animals","vet"],"🐾"],
+  [["gym","workout","lift","weights","exercise","fitness"],"🏋️"],[["run","running","jog","jogging","marathon","cardio"],"🏃"],
+  [["swim","swimming","pool"],"🏊"],[["bike","biking","cycle","cycling"],"🚴"],[["hike","hiking","trail"],"🥾"],
+  [["yoga","stretch","pilates"],"🧘"],[["soccer","football"],"⚽"],[["basketball","hoops"],"🏀"],[["tennis"],"🎾"],
+  [["doctor","appointment","clinic","hospital","checkup"],"🩺"],[["dentist","teeth","tooth"],"🦷"],
+  [["meds","medicine","pills","prescription","pharmacy"],"💊"],[["mental","therapy","mindful","meditation"],"🧠"],
+  [["health","wellness","selfcare","spa"],"💪"],[["sleep","rest","nap"],"🛏️"],
+  [["work","job","office","career","business"],"💼"],[["meeting","meetings","standup","sync"],"📅"],
+  [["client","clients","customer"],"🤝"],[["project","projects"],"📋"],[["email","emails","inbox","mail"],"✉️"],
+  [["deadline","urgent"],"⏰"],
+  [["school","class","classes","course","courses","study","studies","exam","exams","homework","assignment"],"📚"],
+  [["college","university","uni","campus","grad"],"🎓"],[["lecture","lesson","notes"],"📝"],
+  [["science","lab","chemistry","biology","physics"],"🔬"],[["math","maths","algebra","calculus"],"🔢"],
+  [["money","finance","financial","budget","budgeting"],"💰"],[["bank","banking","savings","saving"],"🏦"],
+  [["bill","bills","invoice","invoices","payment"],"🧾"],[["invest","investing","stocks","crypto","portfolio"],"📈"],
+  [["tax","taxes"],"🧾"],[["shop","shopping","buy","store","mall"],"🛍️"],[["grocery","groceries","supermarket"],"🛒"],
+  [["wishlist","wish"],"⭐"],[["home","house","apartment","household"],"🏠"],
+  [["clean","cleaning","chore","chores","laundry","tidy"],"🧹"],[["repair","fix","maintenance","handyman"],"🔧"],
+  [["garden","gardening","plant","plants","yard"],"🌱"],[["car","cars","vehicle","auto","drive","driving"],"🚗"],
+  [["food","meal","meals","cook","cooking","recipe","recipes","kitchen"],"🍳"],
+  [["restaurant","dining","dinner","lunch","brunch"],"🍽️"],[["coffee","cafe"],"☕"],
+  [["travel","trip","trips","vacation","holiday","tour","journey"],"✈️"],[["flight","flights","airport"],"🛫"],
+  [["hotel","booking"],"🏨"],[["beach","ocean","sea"],"🏖️"],[["camp","camping","outdoor"],"⛺"],
+  [["movie","movies","film","cinema"],"🎬"],[["music","song","songs","playlist","band"],"🎵"],
+  [["game","games","gaming"],"🎮"],[["book","books","read","reading","novel"],"📖"],
+  [["art","drawing","draw","paint","painting","sketch","creative"],"🎨"],[["photo","photos","photography","camera","picture"],"📷"],
+  [["write","writing","blog","journal","diary"],"✍️"],[["code","coding","program","programming","dev","developer","software"],"💻"],
+  [["tech","gadget","device","app","apps"],"📱"],[["design","figma"],"🎨"],[["idea","ideas","brainstorm","inspiration"],"💡"],
+  [["goal","goals","target","objective","resolution"],"🎯"],[["plan","planning","plans","schedule","agenda"],"🗓️"],
+  [["love","relationship","date","dating","partner","crush"],"❤️"],[["family","kids","kid","child","children","parent"],"👪"],
+  [["baby","newborn","pregnancy"],"👶"],[["friend","friends","social","hangout"],"👥"],[["wedding","marriage","engaged"],"💍"],
+  [["birthday","bday"],"🎂"],[["party","celebrate","celebration","event","events"],"🎉"],
+  [["holiday","christmas","xmas"],"🎄"],[["gift","gifts","present","presents"],"🎁"],
+  [["beauty","makeup","skincare","hair","nails"],"💄"],[["fashion","clothes","clothing","outfit","wardrobe"],"👗"],
+  [["dream","dreams","bucket","someday"],"✨"],
 ];
 const guessIcon = name => {
   const n=(name||"").toLowerCase().trim();
   if(!n) return "📁";
   for(const [keys,icon] of ICON_KEYWORDS){ if(keys.some(k=>new RegExp("\\b"+k+"\\b").test(n))) return icon; }
-  const sum=[...n].reduce((a,c)=>a+c.charCodeAt(0),0);
-  return CAT_ICONS[sum % CAT_ICONS.length];
+  return "📁"; // predictable default when nothing matches (no random jitter)
 };
 const CAT_ICONS = ["💼","📚","🏃","💰","🏠","❤️","🎯","✈️","🛒","🎨","🎮","🍔","☕","🌱","🐶","📞","🎵","⚽","💪","🧘","📝","💻","📅","🔥","⭐","🎓","🏥","🍳","🚗","🎁","📖","🧹","💡","🎬","🎉","🌍","🏋️","🧠","📷","🎸","🍕","🛏️","🐱","✏️","🔧","📌","🏆","🌸"];
 
@@ -252,8 +266,17 @@ function nextDue(due, rec){
   if(rec==="daily") base.setDate(base.getDate()+1);
   else if(rec==="weekly") base.setDate(base.getDate()+7);
   else if(rec==="monthly") base.setMonth(base.getMonth()+1);
+  else if(rec==="yearly") base.setFullYear(base.getFullYear()+1);
+  else if(rec && rec.startsWith("custom:")){
+    const [,nStr,unit]=rec.split(":"); const n=Math.max(1,parseInt(nStr)||1);
+    if(unit==="days") base.setDate(base.getDate()+n);
+    else if(unit==="weeks") base.setDate(base.getDate()+7*n);
+    else if(unit==="months") base.setMonth(base.getMonth()+n);
+    else if(unit==="years") base.setFullYear(base.getFullYear()+n);
+    else return null;
+  }
   else return null;
-  return base.toISOString().split("T")[0];
+  return ymd(base);
 }
 
 // Joyful little major-arpeggio chime via Web Audio (no asset). (#29)
@@ -277,6 +300,7 @@ export default function FlowSpace() {
   useEffect(()=>{ try{localStorage.setItem("fs_scheme",scheme);}catch{} },[scheme]);
   const T = mkT(dark, PALETTES[scheme]||PALETTES.lavender);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [imgView, setImgView] = useState(null);
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
   const showToast = (msg, undo) => { setToast({msg, undo}); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(()=>setToast(null), 5000); };
@@ -290,6 +314,7 @@ export default function FlowSpace() {
   const [ownedShares, setOwnedShares] = useState([]);
   const [sharedWithMe, setSharedWithMe] = useState([]);
   const [deletedCats, setDeletedCats] = useState([]);
+  const [delCatModal, setDelCatModal] = useState(null);
   const [canvasNotes, setCanvasNotes] = useState([]);
   const [notes, setNotes] = useState([]);
   const [cats, setCats] = useState(DEFAULT_CATS);
@@ -297,6 +322,7 @@ export default function FlowSpace() {
   const [defOpen, setDefOpen] = useState(true);
   const [customOpen, setCustomOpen] = useState(true);
   const [selTask, setSelTask] = useState(null);
+  const keepSelRef = useRef(false);
   const [input, setInput] = useState("");
   const [xp, setXp] = useState(0);
   const [streak, setStreak] = useState(0);
@@ -314,11 +340,15 @@ export default function FlowSpace() {
   const [cmdOpen, setCmdOpen] = useState(false);
   const [pomSecs, setPomSecs] = useState(25*60);
   const [pomRun, setPomRun] = useState(false);
+  const [pomLen, setPomLen] = useState(25);
+  const pomLenRef = useRef(25);
+  useEffect(()=>{ pomLenRef.current=pomLen; },[pomLen]);
+  const cyclePom = ()=>{ if(pomRun) return; const opts=[25,15,30,45,5,50]; const m=opts[(opts.indexOf(pomLen)+1)%opts.length]; setPomLen(m); setPomSecs(m*60); };
   const pomRef = useRef(null);
   const inputRef = useRef(null);
 
   useEffect(() => {
-    if (pomRun) pomRef.current = setInterval(()=>setPomSecs(t=>{if(t<=1){clearInterval(pomRef.current);setPomRun(false);return 25*60;}return t-1;}),1000);
+    if (pomRun) pomRef.current = setInterval(()=>setPomSecs(t=>{if(t<=1){clearInterval(pomRef.current);setPomRun(false);return pomLenRef.current*60;}return t-1;}),1000);
     else clearInterval(pomRef.current);
     return ()=>clearInterval(pomRef.current);
   },[pomRun]);
@@ -350,6 +380,8 @@ export default function FlowSpace() {
         setTimeout(()=>{isLoadingData.current=false;},200);
       }).catch(()=>setSyncing(false));
   },[user]);
+
+  useEffect(()=>{ if(keepSelRef.current){ keepSelRef.current=false; return; } setSelTask(null); },[view]);
 
   const refreshShares=useCallback(()=>{
     if(!user) return;
@@ -477,13 +509,14 @@ export default function FlowSpace() {
   const uploadCatIcon = async file=>{ if(!user) return null; const m=await db.uploadAttachment(file,user.id,"icons"); return m.url; };
   useEffect(()=>{ if(!user){setDeletedCats([]);return;} try{ setDeletedCats(JSON.parse(localStorage.getItem(`fs_delcats_${user.id}`)||"[]")); }catch{ setDeletedCats([]); } },[user]);
   const persistDeleted=arr=>{ setDeletedCats(arr); if(user){ try{localStorage.setItem(`fs_delcats_${user.id}`,JSON.stringify(arr));}catch{} } };
-  const deleteCat=name=>{
-    const meta=cats[name]; if(!meta) return;
-    if(!window.confirm(`Delete the "${name}" folder?\n\nIts tasks keep their label, and you can restore the folder from "Recently deleted".`)) return;
+  const deleteCat=name=>{ if(cats[name]) setDelCatModal(name); };
+  const confirmDeleteCat=(name,alsoTasks)=>{
+    const meta=cats[name]; setDelCatModal(null); if(!meta) return;
     setCats(c=>{ const n={...c}; delete n[name]; return n; });
     persistDeleted([{name,color:meta.color,icon:meta.icon},...deletedCats.filter(d=>d.name!==name)].slice(0,20));
     if(view===`cat:${name}`) setView("all");
-    showToast(`Folder "${name}" deleted`, ()=>{ setCats(c=>({...c,[name]:meta})); persistDeleted(deletedCats.filter(d=>d.name!==name)); setToast(null); });
+    if(alsoTasks){ const ids=tasks.filter(t=>t.owner===user?.id&&t.tag===name).map(t=>t.id); if(ids.length){ setTasks(ts=>ts.filter(t=>!ids.includes(t.id))); if(user) ids.forEach(id=>db.deleteTask(id).catch(()=>{})); } showToast(`Deleted "${name}" and ${ids.length} task${ids.length===1?"":"s"}`); }
+    else showToast(`Folder "${name}" deleted — tasks kept`);
   };
   const restoreCat=name=>{ const d=deletedCats.find(x=>x.name===name); if(!d) return; setCats(c=>({...c,[name]:{color:d.color,icon:d.icon}})); persistDeleted(deletedCats.filter(x=>x.name!==name)); showToast(`Folder "${name}" restored`); };
   const purgeCat=name=>{ persistDeleted(deletedCats.filter(x=>x.name!==name)); };
@@ -540,6 +573,17 @@ export default function FlowSpace() {
       if(a.due) return -1; if(b.due) return 1; return 0;
     }).slice(0,6);
   const addToMyDay=id=>{ navigator.vibrate?.(10); updateTask(id,{mydayDate:todStr}); markActiveDay(); };
+  const didAutoCarryRef=useRef(false);
+  const [carriedIds,setCarriedIds]=useState([]);
+  useEffect(()=>{ didAutoCarryRef.current=false; setCarriedIds([]); },[user]);
+  useEffect(()=>{
+    if(!user||didAutoCarryRef.current||!tasks.length) return;
+    didAutoCarryRef.current=true;
+    const leftovers=tasks.filter(t=>t.owner===user.id&&!t.done&&t.mydayDate&&t.mydayDate<todStr);
+    if(leftovers.length){ setCarriedIds(leftovers.map(t=>t.id)); leftovers.forEach(t=>updateTask(t.id,{mydayDate:todStr})); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[tasks,user]);
+  const undoCarry=()=>{ if(!carriedIds.length)return; navigator.vibrate?.(10); carriedIds.forEach(id=>updateTask(id,{mydayDate:null})); setCarriedIds([]); showToast("Carry-over undone"); };
   const shareFolder=async(folder,email,canDelete)=>{ if(!user||!email.trim())return; try{ await db.addShare(user.id,folder,email,canDelete); refreshShares(); showToast(`Shared "${folder}" with ${email.trim()}`); }catch(e){ showToast("Share failed: "+(e.message||e)); } };
   const unshareFolder=async id=>{ await db.removeShare(id).catch(()=>{}); refreshShares(); showToast("Collaborator removed"); };
 
@@ -623,6 +667,8 @@ export default function FlowSpace() {
         </div>
       )}
       {aboutOpen&&<AboutModal T={T} onClose={()=>setAboutOpen(false)}/>}
+      {imgView&&<ImgViewer T={T} url={imgView} onClose={()=>setImgView(null)}/>}
+      {delCatModal&&<DelCatModal T={T} name={delCatModal} count={tasks.filter(t=>t.owner===user?.id&&t.tag===delCatModal).length} onConfirm={a=>confirmDeleteCat(delCatModal,a)} onClose={()=>setDelCatModal(null)}/>}
       {cmdOpen&&<CmdPalette T={T} tasks={tasks} onClose={()=>setCmdOpen(false)} onGo={v=>{setView(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}}/>}
       <aside style={{width:sideOpen?224:60,transition:"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:30}}>
         <div style={{padding:"18px 14px",display:"flex",alignItems:"center",gap:9}}>
@@ -700,7 +746,7 @@ export default function FlowSpace() {
             <div style={{background:T.surface2,borderRadius:11,padding:12,border:`1px solid ${T.border}`,...(pomRun?{animation:"glow 2s infinite"}:{})}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
                 <span style={{fontSize:10,color:T.textMuted,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase"}}>Pomodoro</span>
-                <Ico n="clock" s={12} c={pomRun?T.accent:T.textMuted}/>
+                <button onClick={cyclePom} title={pomRun?"":"Tap to change length"} style={{background:"none",border:"none",cursor:pomRun?"default":"pointer",padding:0,display:"flex",alignItems:"center",gap:3,color:pomRun?T.accent:T.textMuted,fontSize:9,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{!pomRun&&<span>{pomLen}m</span>}<Ico n="clock" s={12} c={pomRun?T.accent:T.textMuted}/></button>
               </div>
               <div style={{fontSize:26,fontFamily:"'Sora',sans-serif",fontWeight:700,color:pomRun?T.accent:T.text,letterSpacing:"-1px",textAlign:"center",marginBottom:8}}>{pmm}:{pms}</div>
               <button onClick={()=>setPomRun(r=>!r)} style={{width:"100%",padding:"6px",borderRadius:8,border:"none",cursor:"pointer",background:pomRun?T.danger:T.grad,color:"#fff",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>
@@ -741,11 +787,11 @@ export default function FlowSpace() {
         )}
         <div style={{flex:1,overflow:"hidden",display:"flex"}}>
           {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask}/>}
-          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} onGoToTask={t=>{setView("all");setSelTask(t);}}/>}
+          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
           {(["myday","flagged","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onCarryOver={carryOver} overdueCount={overdueTasks.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone}/>
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView}/>
           )}
         </div>
       </main>
@@ -805,6 +851,40 @@ function AboutModal({T,onClose}) {
   );
 }
 
+function DelCatModal({T,name,count,onConfirm,onClose}) {
+  const [alsoTasks,setAlsoTasks]=useState(false);
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:1250,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:340,maxWidth:"100%",background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,padding:22,boxShadow:"0 24px 60px rgba(0,0,0,.5)",animation:"slideIn .2s ease"}}>
+        <div style={{fontFamily:"'Sora',sans-serif",fontSize:16,fontWeight:700,color:T.text,marginBottom:6,textTransform:"capitalize"}}>Delete "{name}"?</div>
+        <div style={{fontSize:12,color:T.textMuted,lineHeight:1.5,marginBottom:14}}>The folder moves to Recently deleted{count>0?` and has ${count} task${count===1?"":"s"} in it`:""}. You can restore it later.</div>
+        {count>0&&(
+          <button onClick={()=>setAlsoTasks(v=>!v)} style={{display:"flex",alignItems:"center",gap:9,width:"100%",padding:"10px 12px",borderRadius:10,border:`1px solid ${alsoTasks?T.accent:T.border}`,background:alsoTasks?T.accentGlow:"transparent",cursor:"pointer",marginBottom:16,fontFamily:"'DM Sans',sans-serif"}}>
+            <span style={{width:18,height:18,borderRadius:5,border:`2px solid ${alsoTasks?T.accent:T.textMuted}`,background:alsoTasks?T.accent:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{alsoTasks&&<Ico n="check" s={11} c="#fff"/>}</span>
+            <span style={{fontSize:13,fontWeight:700,color:alsoTasks?T.accent:T.text,textAlign:"left"}}>Also delete the {count} task{count===1?"":"s"} in this folder</span>
+          </button>
+        )}
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={onClose} style={{flex:1,padding:"9px",borderRadius:9,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:13,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Cancel</button>
+          <button onClick={()=>onConfirm(alsoTasks)} style={{flex:1,padding:"9px",borderRadius:9,border:"none",background:T.danger,color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Delete</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImgViewer({T,url,onClose}) {
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",zIndex:1300,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:14,padding:24}}>
+      <img src={url} alt="attachment" onClick={e=>e.stopPropagation()} style={{maxWidth:"92vw",maxHeight:"80vh",objectFit:"contain",borderRadius:10,boxShadow:"0 12px 40px rgba(0,0,0,.6)"}}/>
+      <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:10}}>
+        <a href={url} target="_blank" rel="noreferrer" style={{padding:"8px 16px",borderRadius:9,background:T.grad,color:"#fff",textDecoration:"none",fontSize:13,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Open in browser ↗</a>
+        <button onClick={onClose} style={{padding:"8px 16px",borderRadius:9,border:`1px solid rgba(255,255,255,.25)`,background:"transparent",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Close</button>
+      </div>
+    </div>
+  );
+}
+
 function CmdPalette({T,tasks,onClose,onGo,onAdd}) {
   const [q,setQ]=useState("");
   const pages=["myday","upcoming","all","completed","matrix","notes","analytics","settings"];
@@ -838,7 +918,7 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onCarryOver,overdueCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage}) {
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
   const [sort,setSort]=useState("smart");
@@ -936,9 +1016,9 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           </div>
           <div style={{fontSize:12,color:T.textMuted,marginTop:2}}>{new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}{view==="myday"&&` · ${tasks.filter(t=>!t.done).length} remaining`}</div>
         </div>
-        {view==="myday"&&overdueCount>0&&(
-          <button onClick={onCarryOver} style={{display:"flex",alignItems:"center",gap:7,width:"100%",marginBottom:12,padding:"9px 12px",borderRadius:11,border:`1px solid ${T.warning}55`,background:T.warning+"15",color:T.warning,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>
-            <Ico n="repeat" s={14} c={T.warning}/> Carry over {overdueCount} unfinished {overdueCount===1?"task":"tasks"} from before
+        {view==="myday"&&carriedCount>0&&(
+          <button onClick={onUndoCarry} style={{display:"flex",alignItems:"center",gap:7,width:"100%",marginBottom:12,padding:"9px 12px",borderRadius:11,border:`1px solid ${T.border}`,background:T.surface2,color:T.textMuted,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>
+            <Ico n="repeat" s={14} c={T.textMuted}/> Carried {carriedCount} unfinished {carriedCount===1?"task":"tasks"} forward · tap to undo
           </button>
         )}
         {view==="myday"&&suggestions&&suggestions.length>0&&(
@@ -971,6 +1051,9 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             </div>
             <button onClick={addTask} style={{padding:"0 18px",borderRadius:11,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontWeight:700,fontSize:13,fontFamily:"'DM Sans',sans-serif",boxShadow:"0 3px 12px rgba(192,132,252,.35)"}}>Add</button>
           </div>
+        )}
+        {view!=="myday"&&(
+          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,marginTop:-4}}>💡 Tip: swipe a task right (or drag right) to add it to My Day ☀️</div>
         )}
         {view!=="completed"&&(
           <div style={{display:"flex",gap:5,marginBottom:12}}>
@@ -1010,7 +1093,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           )}
         </div>
       </div>
-      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onClose={()=>setSelTask(null)}/>}
+      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} onClose={()=>setSelTask(null)}/>}
     </div>
   );
 }
@@ -1057,7 +1140,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
   );
 }
 
-function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,canDelete=true,onClose}) {
+function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,canDelete=true,onViewImage,onClose}) {
   const [uploading,setUploading]=useState(false);
   const fileRef=useRef(null);
   const doAttach=async files=>{ if(!files?.length)return; setUploading(true); try{ for(const f of files) await onAttach?.(task,f); }catch(e){ alert("Upload failed: "+(e.message||e)); } setUploading(false); };
@@ -1089,7 +1172,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
           {(task.attachments||[]).map(att=>(
             <div key={att.path} style={{position:"relative",width:50,height:50,borderRadius:8,overflow:"hidden",border:`1px solid ${T.border}`,background:T.surface2}}>
               {(att.type||"").startsWith("image/")
-                ? <a href={att.url} target="_blank" rel="noreferrer"><img src={att.url} alt={att.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/></a>
+                ? <img src={att.url} alt={att.name} onClick={()=>onViewImage?.(att.url)} style={{width:"100%",height:"100%",objectFit:"cover",cursor:"pointer"}}/>
                 : <a href={att.url} target="_blank" rel="noreferrer" title={att.name} style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,textDecoration:"none"}}>📄</a>}
               <button onClick={()=>onRemoveAttach?.(task,att)} style={{position:"absolute",top:2,right:2,width:16,height:16,borderRadius:"50%",border:"none",cursor:"pointer",background:"rgba(0,0,0,.6)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={9} c="#fff"/></button>
             </div>
@@ -1121,13 +1204,27 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
         </div>
         <div style={{display:"flex",gap:6}}>
           <input type="date" value={task.due||""} onChange={e=>onUpdate(task.id,{due:e.target.value})} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
-          <select value={task.recurring||""} onChange={e=>onUpdate(task.id,{recurring:e.target.value||null})} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",cursor:"pointer"}}>
+          <select value={task.recurring&&task.recurring.startsWith("custom:")?"custom":(task.recurring||"")} onChange={e=>onUpdate(task.id,{recurring:e.target.value==="custom"?"custom:1:weeks":(e.target.value||null)})} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",cursor:"pointer"}}>
             <option value="">No repeat</option>
             <option value="daily">Daily</option>
             <option value="weekly">Weekly</option>
             <option value="monthly">Monthly</option>
+            <option value="yearly">Yearly</option>
+            <option value="custom">Custom…</option>
           </select>
         </div>
+        {task.recurring&&task.recurring.startsWith("custom:")&&(()=>{
+          const [,n,unit]=task.recurring.split(":");
+          return (
+            <div style={{display:"flex",alignItems:"center",gap:6,marginTop:6}}>
+              <span style={{fontSize:11,color:T.textMuted}}>Every</span>
+              <input type="number" min="1" value={n||1} onChange={e=>onUpdate(task.id,{recurring:`custom:${Math.max(1,parseInt(e.target.value)||1)}:${unit}`})} style={{width:52,padding:"5px 7px",borderRadius:6,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+              <select value={unit} onChange={e=>onUpdate(task.id,{recurring:`custom:${n||1}:${e.target.value}`})} style={{flex:1,padding:"5px 7px",borderRadius:6,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",cursor:"pointer"}}>
+                <option value="days">days</option><option value="weeks">weeks</option><option value="months">months</option><option value="years">years</option>
+              </select>
+            </div>
+          );
+        })()}
       </DL>
       <DL label="Reminder ⏰" T={T}>
         <div style={{display:"flex",gap:6,alignItems:"center",marginTop:5}}>
@@ -1237,7 +1334,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
             </div>
             <button onClick={()=>{setAddingIn(qid);setNewText("");}} style={{width:22,height:22,borderRadius:5,border:"none",cursor:"pointer",background:q.color+"22",color:q.color,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="plus" s={12} c={q.color}/></button>
           </div>
-          <div style={{flex:1,padding:10,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:7,alignContent:"flex-start"}}>
+          <div onClick={e=>{if(e.target===e.currentTarget&&addingIn!==qid){setAddingIn(qid);setNewText("");}}} style={{flex:1,padding:10,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:7,alignContent:"flex-start",cursor:"text"}}>
             {tasks.filter(t=>t.quadrant===qid&&!t.done).map(task=>(
               <MNote key={task.id} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} onClickNote={()=>editNote(task)} dragging={dragId===task.id} inMyDay={task.mydayDate===tod()} onRemove={()=>updateTask(task.id,{quadrant:null})} onDelete={()=>deleteTask(task.id)} onToMyDay={()=>toggleMyDay(task.id)} editing={editId===task.id} onEdit={()=>setEditId(task.id)} onSave={txt=>{const t=txt.trim();if(t)updateTask(task.id,{title:t});setEditId(null);}}/>
             ))}
@@ -1276,9 +1373,8 @@ function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit
       {catMeta&&<div style={{marginTop:4,fontSize:9,color:catMeta.color,fontWeight:600}}>{catMeta.icon} {task.tag}</div>}
       {hov&&(
         <div style={{position:"absolute",top:-10,right:-4,display:"flex",gap:2,zIndex:10,animation:"fadeIn .1s"}}>
-          <button title="Edit" onClick={onEdit} style={{width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:T.surface,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="edit" s={9}/></button>
-          <button title={inMyDay?"Remove from My Day":"Add to My Day"} onClick={onToMyDay} style={{width:18,height:18,borderRadius:4,border:`1px solid ${inMyDay?"#f59e0b":T.border}`,cursor:"pointer",background:inMyDay?"#f59e0b":T.surface,color:inMyDay?"#fff":T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="sun" s={9} c={inMyDay?"#fff":T.textMuted}/></button>
-          <button title="Remove from board" onClick={onRemove} style={{width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:T.surface,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="x" s={9}/></button>
+          <button title={inMyDay?"Remove from My Day":"Add to My Day"} onClick={e=>{e.stopPropagation();onToMyDay();}} style={{width:18,height:18,borderRadius:4,border:`1px solid ${inMyDay?"#f59e0b":T.border}`,cursor:"pointer",background:inMyDay?"#f59e0b":T.surface,color:inMyDay?"#fff":T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="sun" s={9} c={inMyDay?"#fff":T.textMuted}/></button>
+          <button title="Remove from board" onClick={e=>{e.stopPropagation();onRemove();}} style={{width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:T.surface,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="x" s={9}/></button>
         </div>
       )}
     </div>
