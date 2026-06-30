@@ -50,6 +50,7 @@ const Ico = ({ n, s=16, c="currentColor", st={} }) => {
     edit:<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></>,
     flag:<><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></>,
     chevron:<><polyline points="9 18 15 12 9 6"/></>,
+    link:<><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></>,
     brain:<><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2z"/></>,
     paint:<><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></>,
   };
@@ -301,6 +302,8 @@ export default function FlowSpace() {
   const T = mkT(dark, PALETTES[scheme]||PALETTES.lavender);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [imgView, setImgView] = useState(null);
+  const [linkPick, setLinkPick] = useState(null);
+  const [openNoteId, setOpenNoteId] = useState(null);
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
   const showToast = (msg, undo) => { setToast({msg, undo}); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(()=>setToast(null), 5000); };
@@ -616,6 +619,15 @@ export default function FlowSpace() {
     if(user) db.insertTask(t,user.id).catch(e=>showToast("Couldn't save: "+(e.message||e)));
   };
   const toggleMyDay=id=>{ const t=tasks.find(x=>x.id===id); if(!t)return; const inDay=t.mydayDate===todStr; navigator.vibrate?.(15); updateTask(id,{mydayDate:inDay?null:todStr}); if(!inDay) markActiveDay(); };
+  const requestLink=cb=>setLinkPick({onPick:cb});
+  const smartTitle=t=>{ const f=(t||"").trim().split("\n")[0].trim(); return (f.length>46?f.slice(0,46)+"…":f)||"Untitled"; };
+  const addLinkedNote=(text,taskId)=>{
+    const NACC=["#3b82f6","#22c55e","#f59e0b","#ef4444","#a855f7","#ec4899","#14b8a6"];
+    const n={id:crypto.randomUUID(),title:smartTitle(text),body:(text||"").trim(),pinned:false,color:NACC[notes.length%NACC.length],drawing:null,taskId:taskId||null,created:todStr};
+    setNotes(ns=>[n,...ns]);
+    showToast(taskId?"Linked to task & saved in Notes":"Saved to Notes");
+  };
+  const openNoteFromTask=id=>{ setOpenNoteId(id); setView("notes"); };
   const addCanvasTask=(text,myDay)=>{
     const title=(text||"").trim(); if(!title) return;
     const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:guessCat(title,cats),due:null,starred:false,notes:"From Canvas",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:null,attachments:[],owner:user?.id,position:Date.now(),mydayDate:myDay?todStr:null};
@@ -669,6 +681,7 @@ export default function FlowSpace() {
       {aboutOpen&&<AboutModal T={T} onClose={()=>setAboutOpen(false)}/>}
       {imgView&&<ImgViewer T={T} url={imgView} onClose={()=>setImgView(null)}/>}
       {delCatModal&&<DelCatModal T={T} name={delCatModal} count={tasks.filter(t=>t.owner===user?.id&&t.tag===delCatModal).length} onConfirm={a=>confirmDeleteCat(delCatModal,a)} onClose={()=>setDelCatModal(null)}/>}
+      {linkPick&&<LinkPicker T={T} tasks={myTasks.filter(t=>!t.done)} onPick={t=>{linkPick.onPick(t);setLinkPick(null);}} onClose={()=>setLinkPick(null)}/>}
       {cmdOpen&&<CmdPalette T={T} tasks={tasks} onClose={()=>setCmdOpen(false)} onGo={v=>{setView(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}}/>}
       <aside style={{width:sideOpen?224:60,transition:"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:30}}>
         <div style={{padding:"18px 14px",display:"flex",alignItems:"center",gap:9}}>
@@ -786,12 +799,12 @@ export default function FlowSpace() {
           </div>
         )}
         <div style={{flex:1,overflow:"hidden",display:"flex"}}>
-          {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask}/>}
-          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
+          {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask} requestLink={requestLink} onCanvasToNote={addLinkedNote}/>}
+          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}} requestLink={requestLink} openNoteId={openNoteId} clearOpenNote={()=>setOpenNoteId(null)}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
           {(["myday","flagged","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView}/>
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} notes={notes} onOpenNote={openNoteFromTask}/>
           )}
         </div>
       </main>
@@ -857,16 +870,37 @@ function DelCatModal({T,name,count,onConfirm,onClose}) {
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:1250,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
       <div onClick={e=>e.stopPropagation()} style={{width:340,maxWidth:"100%",background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,padding:22,boxShadow:"0 24px 60px rgba(0,0,0,.5)",animation:"slideIn .2s ease"}}>
         <div style={{fontFamily:"'Sora',sans-serif",fontSize:16,fontWeight:700,color:T.text,marginBottom:6,textTransform:"capitalize"}}>Delete "{name}"?</div>
-        <div style={{fontSize:12,color:T.textMuted,lineHeight:1.5,marginBottom:14}}>The folder moves to Recently deleted{count>0?` and has ${count} task${count===1?"":"s"} in it`:""}. You can restore it later.</div>
-        {count>0&&(
-          <button onClick={()=>setAlsoTasks(v=>!v)} style={{display:"flex",alignItems:"center",gap:9,width:"100%",padding:"10px 12px",borderRadius:10,border:`1px solid ${alsoTasks?T.accent:T.border}`,background:alsoTasks?T.accentGlow:"transparent",cursor:"pointer",marginBottom:16,fontFamily:"'DM Sans',sans-serif"}}>
-            <span style={{width:18,height:18,borderRadius:5,border:`2px solid ${alsoTasks?T.accent:T.textMuted}`,background:alsoTasks?T.accent:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{alsoTasks&&<Ico n="check" s={11} c="#fff"/>}</span>
-            <span style={{fontSize:13,fontWeight:700,color:alsoTasks?T.accent:T.text,textAlign:"left"}}>Also delete the {count} task{count===1?"":"s"} in this folder</span>
-          </button>
-        )}
+        <div style={{fontSize:12,color:T.textMuted,lineHeight:1.5,marginBottom:14}}>The folder moves to Recently deleted{count>0?` (it has ${count} task${count===1?"":"s"})`:""}. You can restore it later.</div>
+        <button onClick={()=>setAlsoTasks(v=>!v)} disabled={count===0} style={{display:"flex",alignItems:"center",gap:9,width:"100%",padding:"10px 12px",borderRadius:10,border:`1px solid ${alsoTasks?T.accent:T.border}`,background:alsoTasks?T.accentGlow:"transparent",cursor:count===0?"default":"pointer",opacity:count===0?.5:1,marginBottom:16,fontFamily:"'DM Sans',sans-serif"}}>
+          <span style={{width:18,height:18,borderRadius:5,border:`2px solid ${alsoTasks?T.accent:T.textMuted}`,background:alsoTasks?T.accent:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{alsoTasks&&<Ico n="check" s={11} c="#fff"/>}</span>
+          <span style={{fontSize:13,fontWeight:700,color:alsoTasks?T.accent:T.text,textAlign:"left"}}>Also delete the {count} task{count===1?"":"s"} in this folder</span>
+        </button>
         <div style={{display:"flex",gap:8}}>
           <button onClick={onClose} style={{flex:1,padding:"9px",borderRadius:9,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:13,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Cancel</button>
           <button onClick={()=>onConfirm(alsoTasks)} style={{flex:1,padding:"9px",borderRadius:9,border:"none",background:T.danger,color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Delete</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LinkPicker({T,tasks,onPick,onClose}) {
+  const [q,setQ]=useState("");
+  const filtered=tasks.filter(t=>!q||t.title.toLowerCase().includes(q.toLowerCase())).slice(0,40);
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:1300,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:90}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:420,maxWidth:"92vw",background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,overflow:"hidden",boxShadow:"0 24px 60px rgba(0,0,0,.5)",animation:"slideIn .2s ease"}}>
+        <div style={{padding:"12px 14px",borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",gap:8}}>
+          <Ico n="search" s={15} c={T.textMuted}/>
+          <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Link to which task?" style={{flex:1,background:"none",border:"none",outline:"none",color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:14}}/>
+        </div>
+        <div style={{maxHeight:320,overflowY:"auto",padding:6}}>
+          {filtered.length===0&&<div style={{padding:20,textAlign:"center",color:T.textMuted,fontSize:13}}>No tasks found</div>}
+          {filtered.map(t=>(
+            <div key={t.id} onClick={()=>onPick(t)} style={{padding:"9px 12px",borderRadius:8,cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background=T.accentGlow} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+              <span style={{fontSize:13,color:T.text}}>{t.title}</span>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -918,7 +952,7 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,notes,onOpenNote}) {
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
   const [sort,setSort]=useState("smart");
@@ -1093,7 +1127,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           )}
         </div>
       </div>
-      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} onClose={()=>setSelTask(null)}/>}
+      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} linkedNotes={(notes||[]).filter(n=>n.taskId===selTask.id)} onOpenNote={onOpenNote} onClose={()=>setSelTask(null)}/>}
     </div>
   );
 }
@@ -1140,7 +1174,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
   );
 }
 
-function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,canDelete=true,onViewImage,onClose}) {
+function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,canDelete=true,onViewImage,linkedNotes=[],onOpenNote,onClose}) {
   const [uploading,setUploading]=useState(false);
   const fileRef=useRef(null);
   const doAttach=async files=>{ if(!files?.length)return; setUploading(true); try{ for(const f of files) await onAttach?.(task,f); }catch(e){ alert("Upload failed: "+(e.message||e)); } setUploading(false); };
@@ -1181,6 +1215,18 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
         <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple style={{display:"none"}} onChange={e=>{doAttach([...e.target.files]); e.target.value="";}}/>
         <button onClick={()=>fileRef.current?.click()} disabled={uploading} style={{marginTop:7,width:"100%",padding:"7px",borderRadius:8,border:`1px dashed ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{uploading?"Uploading…":"+ Add photo / screenshot"}</button>
       </DL>
+      {linkedNotes.length>0&&(
+        <DL label="Linked notes 🔗" T={T}>
+          <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:5}}>
+            {linkedNotes.map(n=>(
+              <button key={n.id} onClick={()=>onOpenNote?.(n.id)} title="Open in Notes" style={{textAlign:"left",padding:"7px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
+                <div style={{fontSize:12,fontWeight:600,color:T.text,display:"flex",alignItems:"center",gap:5}}>{n.title||"Untitled"}{n.drawing&&<span style={{fontSize:10}}>🎨</span>}</div>
+                {n.body&&<div style={{fontSize:11,color:T.textMuted,marginTop:2,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{n.body.slice(0,50)}</div>}
+              </button>
+            ))}
+          </div>
+        </DL>
+      )}
       <DL label="Color Label" T={T}>
         <div style={{display:"flex",gap:5,marginTop:5,flexWrap:"wrap"}}>
           {COLS.map(c=><div key={c||"none"} onClick={()=>onUpdate(task.id,{color:c})} style={{width:18,height:18,borderRadius:4,background:c||T.surface3,border:`2px solid ${task.color===c?T.text:"transparent"}`,cursor:"pointer"}}/>)}
@@ -1271,7 +1317,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
 }
 const DL=({label,T,children})=><div><span style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>{label}</span>{children}</div>;
 
-function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,canvasNotes,setCanvasNotes,onCanvasToTask}) {
+function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,canvasNotes,setCanvasNotes,onCanvasToTask,requestLink,onCanvasToNote}) {
   const [tab,setTab]=useState("matrix");
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
@@ -1292,7 +1338,7 @@ function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDa
       </div>
       {tab==="matrix"
         ?<EisenhowerMatrix T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay}/>
-        :<FreeformCanvas T={T} notes={canvasNotes} setNotes={setCanvasNotes} onCanvasToTask={onCanvasToTask}/>}
+        :<FreeformCanvas T={T} notes={canvasNotes} setNotes={setCanvasNotes} onCanvasToTask={onCanvasToTask} requestLink={requestLink} onCanvasToNote={onCanvasToNote}/>}
     </div>
   );
 }
@@ -1381,7 +1427,7 @@ function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit
   );
 }
 
-function FreeformCanvas({T,notes,setNotes,onCanvasToTask}) {
+function FreeformCanvas({T,notes,setNotes,onCanvasToTask,requestLink,onCanvasToNote}) {
   const canvasRef = useRef(null);
   const dragRef = useRef(null);
   const [editingId, setEditingId] = useState(null);
@@ -1416,6 +1462,7 @@ function FreeformCanvas({T,notes,setNotes,onCanvasToTask}) {
     setEditingId(newNote.id);
   }, [notes.length, setNotes]);
   const convertToTask = (note, myDay) => { onCanvasToTask?.(note.text, myDay); setNotes(ns => ns.filter(n => n.id !== note.id)); };
+  const linkToTask = (note) => { requestLink?.(t=>{ onCanvasToNote?.(note.text, t.id); setNotes(ns => ns.filter(n => n.id !== note.id)); }); };
   return (
     <div ref={canvasRef} style={{flex:1,position:"relative",background:T.canvas,overflow:"hidden",cursor:"crosshair"}}
       onPointerMove={onPointerMove} onPointerUp={onPointerUp} onClick={onCanvasClick}>
@@ -1437,6 +1484,7 @@ function FreeformCanvas({T,notes,setNotes,onCanvasToTask}) {
           onDelete={()=>setNotes(ns=>ns.filter(n=>n.id!==note.id))}
           onToMyDay={()=>convertToTask(note,true)}
           onConvert={()=>convertToTask(note,false)}
+          onLink={()=>linkToTask(note)}
           onColorChange={c=>setNotes(ns=>ns.map(n=>n.id===note.id?{...n,color:c}:n))}
         />
       ))}
@@ -1445,7 +1493,7 @@ function FreeformCanvas({T,notes,setNotes,onCanvasToTask}) {
   );
 }
 
-function FreeNote({note,T,editing,onPointerDown,onEdit,onSave,onDelete,onToMyDay,onConvert,onColorChange}) {
+function FreeNote({note,T,editing,onPointerDown,onEdit,onSave,onDelete,onToMyDay,onConvert,onLink,onColorChange}) {
   const [hov,setHov]=useState(false);
   const [txt,setTxt]=useState(note.text);
   useEffect(()=>setTxt(note.text),[note.text]);
@@ -1470,6 +1518,7 @@ function FreeNote({note,T,editing,onPointerDown,onEdit,onSave,onDelete,onToMyDay
         <div style={{position:"absolute",top:-28,left:0,display:"flex",gap:3,animation:"fadeIn .1s",zIndex:30,background:T.surface2,borderRadius:8,padding:"3px 5px",border:`1px solid ${T.border}`,boxShadow:"0 4px 12px rgba(0,0,0,.3)"}}>
           <button title="Add to My Day" onClick={onToMyDay} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:"#f59e0b",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="sun" s={10} c="#fff"/></button>
           {NOTE_COLS.slice(0,5).map(c=><div key={c} onClick={()=>onColorChange(c)} style={{width:10,height:10,borderRadius:"50%",background:c,cursor:"pointer",border:`1px solid ${note.color===c?"#fff":"transparent"}`,marginTop:5}}/>)}
+          <button title="Link to a task (kept as a note)" onClick={onLink} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:"#14b8a6",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="link" s={10} c="#fff"/></button>
           <button title="Add as a task" onClick={onConvert} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:"#818cf8",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="arr" s={9} c="#fff"/></button>
           <button title="Delete" onClick={onDelete} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:"transparent",color:T.danger,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={10}/></button>
         </div>
@@ -1515,11 +1564,12 @@ function DrawPad({value,T,onChange}) {
   );
 }
 
-function NotesView({T,notes,setNotes,tasks,onGoToTask}) {
+function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,openNoteId,clearOpenNote}) {
   const [sel,setSel]=useState(null);
   const [nt,setNt]=useState("");
   const [mode,setMode]=useState("text");
   const [listOpen,setListOpen]=useState(true);
+  useEffect(()=>{ if(openNoteId){ const n=notes.find(x=>x.id===openNoteId); if(n){ setSel(n); setListOpen(true); } clearOpenNote?.(); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[openNoteId]);
   const taskNotes=(tasks||[]).filter(t=>t.notes&&t.notes.trim());
   const onEditorDown=e=>{
     if(e.target.closest("input,textarea,select,button,a,canvas")) return;
@@ -1586,7 +1636,18 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask}) {
               {ACC.slice(0,5).map(c=><div key={c} onClick={()=>upNote(sel.id,{color:c})} style={{width:14,height:14,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${sel.color===c?T.text:"transparent"}`,transition:"border-color .15s"}}/>)}
             </div>
           </div>
-          <div style={{height:3,width:36,borderRadius:2,background:sel.color,marginBottom:14}}/>
+          <div style={{height:3,width:36,borderRadius:2,background:sel.color,marginBottom:12}}/>
+          <div style={{marginBottom:14}}>
+            {sel.taskId?(()=>{ const lt=tasks?.find(t=>t.id===sel.taskId); return (
+              <div style={{display:"flex",alignItems:"center",gap:7,fontSize:12,flexWrap:"wrap"}}>
+                <Ico n="link" s={13} c={T.accent}/><span style={{color:T.textMuted}}>Linked to task:</span>
+                {lt?<button onClick={()=>onGoToTask?.(lt)} style={{background:"none",border:"none",cursor:"pointer",color:T.accent,fontWeight:700,fontSize:12,fontFamily:"'DM Sans',sans-serif",padding:0}}>{lt.title} →</button>:<span style={{color:T.textMuted}}>(removed)</span>}
+                <button onClick={()=>upNote(sel.id,{taskId:null})} style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,fontSize:11,textDecoration:"underline",fontFamily:"'DM Sans',sans-serif"}}>unlink</button>
+              </div>
+            ); })():(
+              <button onClick={()=>requestLink?.(t=>upNote(sel.id,{taskId:t.id}))} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 11px",borderRadius:8,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}><Ico n="link" s={12}/> Link to a task</button>
+            )}
+          </div>
           <div style={{display:"flex",gap:5,marginBottom:14}}>
             {[["text","✏️ Write"],["draw","🎨 Draw"]].map(([m,lbl])=>(
               <button key={m} onClick={()=>setMode(m)} style={{padding:"5px 14px",borderRadius:8,border:`1px solid ${mode===m?T.accent:T.border}`,background:mode===m?T.accentGlow:"transparent",color:mode===m?T.accent:T.textMuted,cursor:"pointer",fontSize:12,fontWeight:mode===m?700:500,fontFamily:"'DM Sans',sans-serif"}}>{lbl}{m==="draw"&&sel.drawing?" •":""}</button>
@@ -1616,6 +1677,7 @@ function NRow({note,T,sel,onSel,onUp,onDel}) {
       <div style={{display:"flex",alignItems:"center",gap:5}}>
         <div style={{width:7,height:7,borderRadius:"50%",background:note.color,flexShrink:0}}/>
         <span style={{fontSize:12,fontWeight:600,color:T.text,flex:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{note.title||"Untitled"}</span>
+        {note.taskId&&<Ico n="link" s={10} c={T.accent} st={{flexShrink:0}}/>}
       </div>
       <div style={{fontSize:11,color:T.textMuted,marginTop:2,marginLeft:12,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{note.body?note.body.slice(0,38)+"…":"Empty"}</div>
       {hov&&<div style={{position:"absolute",right:5,top:"50%",transform:"translateY(-50%)",display:"flex",gap:2}}>
