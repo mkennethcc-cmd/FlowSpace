@@ -343,7 +343,7 @@ export default function FlowSpace() {
   const [pomLen, setPomLen] = useState(25);
   const pomLenRef = useRef(25);
   useEffect(()=>{ pomLenRef.current=pomLen; },[pomLen]);
-  const cyclePom = ()=>{ if(pomRun) return; const opts=[25,15,30,45,5,50]; const m=opts[(opts.indexOf(pomLen)+1)%opts.length]; setPomLen(m); setPomSecs(m*60); };
+  const cyclePom = ()=>{ if(pomRun) return; const opts=[5,15,25,30,45,50]; let i=opts.indexOf(pomLen); if(i<0)i=2; const m=opts[(i+1)%opts.length]; setPomLen(m); setPomSecs(m*60); };
   const pomRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -1484,7 +1484,7 @@ function DrawPad({value,T,onChange}) {
   const last=useRef(null);
   const [pen,setPen]=useState("#1e293b");
   const [erase,setErase]=useState(false);
-  const W=900,H=460;
+  const W=1600,H=820;
   useEffect(()=>{
     const c=cv.current; if(!c) return; const ctx=c.getContext("2d");
     ctx.clearRect(0,0,W,H);
@@ -1494,7 +1494,7 @@ function DrawPad({value,T,onChange}) {
   const pos=e=>{ const r=cv.current.getBoundingClientRect(); return {x:(e.clientX-r.left)*(W/r.width), y:(e.clientY-r.top)*(H/r.height)}; };
   const down=e=>{ e.preventDefault(); cv.current.setPointerCapture?.(e.pointerId); drawing.current=true; last.current=pos(e); };
   const move=e=>{ if(!drawing.current) return; const ctx=cv.current.getContext("2d"); const p=pos(e);
-    ctx.lineWidth=erase?26:3; ctx.lineCap="round"; ctx.lineJoin="round";
+    ctx.lineWidth=erase?48:5; ctx.lineCap="round"; ctx.lineJoin="round";
     ctx.globalCompositeOperation=erase?"destination-out":"source-over"; ctx.strokeStyle=pen;
     ctx.beginPath(); ctx.moveTo(last.current.x,last.current.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last.current=p; };
   const up=()=>{ if(!drawing.current) return; drawing.current=false; onChange(cv.current.toDataURL("image/png")); };
