@@ -25,7 +25,7 @@ export const db = {
     return (data || []).map(fromDbTask);
   },
   async insertTask(t, uid) {
-    await supabase.from("tasks").insert({
+    const { error } = await supabase.from("tasks").insert({
       id: t.id, user_id: uid, title: t.title, done: t.done,
       priority: t.priority, tag: t.tag, due: t.due || null,
       starred: t.starred, notes: t.notes || "", color: t.color || null,
@@ -34,6 +34,7 @@ export const db = {
       attachments: t.attachments || [], position: t.position != null ? t.position : Date.now(),
       myday_date: t.mydayDate || null,
     });
+    if (error) throw error;
   },
   async updateTask(id, p) {
     const u = {};

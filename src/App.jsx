@@ -182,28 +182,32 @@ const CatIcon = ({icon, size=14}) => isImgIcon(icon)
   : <span style={{fontSize:size+1,lineHeight:1}}>{icon}</span>;
 // Auto-pick a folder icon from its name; falls back to a varied (name-seeded) emoji.
 const ICON_KEYWORDS = [
-  [["gym","run","health","fit","workout","sport","yoga","med","doctor","walk"],"🏃"],
+  [["cat","cats","kitten","kitty"],"🐱"],
+  [["dog","dogs","puppy","pup"],"🐶"],
+  [["pet","pets","animal","vet"],"🐾"],
+  [["gym","run","running","health","fit","fitness","workout","sport","yoga","doctor","walk"],"🏃"],
   [["work","job","office","meeting","client","project","career"],"💼"],
   [["school","study","class","exam","homework","course","uni","college","lecture"],"📚"],
-  [["money","finance","budget","bank","bill","pay","invest","tax","saving"],"💰"],
-  [["home","house","chore","clean","family","apartment"],"🏠"],
-  [["food","cook","recipe","meal","grocery","eat","kitchen","dinner"],"🍔"],
-  [["travel","trip","vacation","flight","holiday","journey"],"✈️"],
-  [["shop","buy","store","cart","wishlist"],"🛒"],
-  [["fun","game","play","hobby","gaming"],"🎮"],
-  [["music","song","band","playlist"],"🎵"],
-  [["love","date","relationship","friend","social"],"❤️"],
-  [["read","book","novel","reading"],"📖"],
-  [["idea","creative","art","design","draw","paint"],"🎨"],
-  [["pet","dog","cat","animal"],"🐶"],
-  [["goal","target","plan","dream"],"🎯"],
-  [["event","party","birthday","celebrat"],"🎉"],
-  [["garden","plant","nature","grow"],"🌱"],
-  [["code","dev","program","tech","app"],"💻"],
+  [["money","finance","budget","bank","bill","bills","pay","invest","tax","saving","savings"],"💰"],
+  [["home","house","chore","chores","clean","family","apartment"],"🏠"],
+  [["food","cook","recipe","meal","grocery","groceries","eat","kitchen","dinner"],"🍔"],
+  [["travel","trip","trips","vacation","flight","holiday","journey"],"✈️"],
+  [["shop","shopping","buy","store","cart","wishlist"],"🛒"],
+  [["fun","game","games","play","hobby","gaming"],"🎮"],
+  [["music","song","songs","band","playlist"],"🎵"],
+  [["love","date","dating","relationship","friend","friends","social"],"❤️"],
+  [["read","reading","book","books","novel"],"📖"],
+  [["idea","ideas","creative","art","design","draw","drawing","paint"],"🎨"],
+  [["goal","goals","target","plan","plans","dream"],"🎯"],
+  [["event","events","party","birthday","celebrate"],"🎉"],
+  [["garden","plant","plants","nature","grow"],"🌱"],
+  [["code","coding","dev","program","tech","app"],"💻"],
+  [["travel"],"✈️"],
 ];
 const guessIcon = name => {
-  const n=(name||"").toLowerCase();
-  for(const [keys,icon] of ICON_KEYWORDS){ if(keys.some(k=>n.includes(k))) return icon; }
+  const n=(name||"").toLowerCase().trim();
+  if(!n) return "📁";
+  for(const [keys,icon] of ICON_KEYWORDS){ if(keys.some(k=>new RegExp("\\b"+k+"\\b").test(n))) return icon; }
   const sum=[...n].reduce((a,c)=>a+c.charCodeAt(0),0);
   return CAT_ICONS[sum % CAT_ICONS.length];
 };
@@ -432,7 +436,7 @@ export default function FlowSpace() {
     setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
     if(view==="myday") markActiveDay();
     setTimeout(()=>setNewAnim(null),600);
-    if(user) db.insertTask(t,ownerId).catch(console.error);
+    if(user) db.insertTask(t,ownerId).catch(e=>{ setTasks(ts=>ts.filter(x=>x.id!==t.id)); showToast("Couldn't save task — database needs the latest SQL. ("+(e.message||e)+")"); });
   },[input,view,user,cats,awardXp,markActiveDay]);
 
   const toggleTask = id=>{
@@ -565,9 +569,16 @@ export default function FlowSpace() {
     const title=(text||"").trim(); if(!title) return;
     const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:guessCat(title,cats),due:null,starred:false,notes:"",color:null,subtasks:[],recurring:null,quadrant,remindAt:null,attachments:[],owner:user?.id,position:Date.now(),mydayDate:null};
     setTasks(ts=>[t,...ts]); awardXp("add-"+t.id,10);
-    if(user) db.insertTask(t,user.id).catch(console.error);
+    if(user) db.insertTask(t,user.id).catch(e=>showToast("Couldn't save: "+(e.message||e)));
   };
   const toggleMyDay=id=>{ const t=tasks.find(x=>x.id===id); if(!t)return; const inDay=t.mydayDate===todStr; navigator.vibrate?.(15); updateTask(id,{mydayDate:inDay?null:todStr}); if(!inDay) markActiveDay(); };
+  const addCanvasTask=(text,myDay)=>{
+    const title=(text||"").trim(); if(!title) return;
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:guessCat(title,cats),due:null,starred:false,notes:"From Canvas",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:null,attachments:[],owner:user?.id,position:Date.now(),mydayDate:myDay?todStr:null};
+    setTasks(ts=>[t,...ts]); awardXp("add-"+t.id,10); if(myDay) markActiveDay();
+    if(user) db.insertTask(t,user.id).catch(e=>showToast("Couldn't save: "+(e.message||e)));
+    showToast(myDay?"Added to My Day ☀️":"Added as a task ✓");
+  };
   const level=Math.floor(xp/100)+1, xpLvl=xp%100;
   const pmm=String(Math.floor(pomSecs/60)).padStart(2,"0"), pms=String(pomSecs%60).padStart(2,"0");
 
@@ -729,7 +740,7 @@ export default function FlowSpace() {
           </div>
         )}
         <div style={{flex:1,overflow:"hidden",display:"flex"}}>
-          {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} setTasks={setTasks}/>}
+          {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask}/>}
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} onGoToTask={t=>{setView("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
@@ -842,7 +853,9 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const labels={myday:"My Day",flagged:"Flagged",upcoming:"Upcoming",all:"All Tasks"};
   const catKey=view.startsWith("cat:")?view.slice(4):null;
   const sharedKey=view.startsWith("shared:")?view.slice(view.lastIndexOf(":")+1):null;
-  const titleLabel=catKey?`${cats[catKey]?.icon||"📁"} ${catKey.charAt(0).toUpperCase()+catKey.slice(1)}`:sharedKey?`🤝 ${sharedKey.charAt(0).toUpperCase()+sharedKey.slice(1)}`:labels[view];
+  const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
+  const titleIcon=catKey?(cats[catKey]?.icon||"📁"):sharedKey?"🤝":null;
+  const titleText=catKey?cap(catKey):sharedKey?cap(sharedKey):labels[view];
   let show=filter==="active"?tasks.filter(t=>!t.done):filter==="done"?tasks.filter(t=>t.done):tasks;
   if(view==="all"&&catFilter) show=show.filter(t=>t.tag===catFilter);
   const QRANK={q1:0,q3:1,q2:2,q4:3};
@@ -901,7 +914,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           {view==="myday"&&<div style={{fontSize:12,color:T.textMuted,fontWeight:500,marginBottom:3}}>{new Date().getHours()<12?"Good morning 🌤":new Date().getHours()<17?"Keep it up 💪":"Good evening 🌙"}</div>}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div style={{display:"flex",alignItems:"center",gap:12}}>
-              <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:22,fontWeight:700,letterSpacing:"-.5px"}}>{titleLabel}</h1>
+              <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:22,fontWeight:700,letterSpacing:"-.5px",display:"flex",alignItems:"center",gap:8}}>{titleIcon&&<CatIcon icon={titleIcon} size={20}/>}{titleText}</h1>
               {view==="myday"&&dayTotal>0&&(
                 <div style={{position:"relative",width:34,height:34}} title={`${dayDone}/${dayTotal} done`}>
                   <svg width="34" height="34" style={{transform:"rotate(-90deg)"}}>
@@ -1161,7 +1174,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
 }
 const DL=({label,T,children})=><div><span style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>{label}</span>{children}</div>;
 
-function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,canvasNotes,setCanvasNotes,setTasks}) {
+function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,canvasNotes,setCanvasNotes,onCanvasToTask}) {
   const [tab,setTab]=useState("matrix");
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
@@ -1182,7 +1195,7 @@ function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDa
       </div>
       {tab==="matrix"
         ?<EisenhowerMatrix T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay}/>
-        :<FreeformCanvas T={T} notes={canvasNotes} setNotes={setCanvasNotes} setTasks={setTasks}/>}
+        :<FreeformCanvas T={T} notes={canvasNotes} setNotes={setCanvasNotes} onCanvasToTask={onCanvasToTask}/>}
     </div>
   );
 }
@@ -1199,16 +1212,19 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
     window.addEventListener("keydown",fn); return ()=>window.removeEventListener("keydown",fn);
   },[]);
   const addNote=qid=>{const txt=newText.trim();if(!txt)return;addMatrixTask(qid,txt);setNewText("");setAddingIn(null);};
+  const didDragNote=useRef(false);
   const onNoteDown=(e,task)=>{
     if(e.target.closest("button")||e.target.tagName==="TEXTAREA") return;
+    didDragNote.current=false;
     startPressDrag(e,()=>{
       setDragId(task.id); navigator.vibrate?.(20);
       runDrag(
-        ev=>{ const el=document.elementFromPoint(ev.clientX,ev.clientY); const qd=el&&el.closest("[data-quadrant]"); dragOverRef.current=qd?qd.getAttribute("data-quadrant"):null; setDragOver(dragOverRef.current); },
+        ev=>{ didDragNote.current=true; const el=document.elementFromPoint(ev.clientX,ev.clientY); const qd=el&&el.closest("[data-quadrant]"); dragOverRef.current=qd?qd.getAttribute("data-quadrant"):null; setDragOver(dragOverRef.current); },
         ()=>{ const q=dragOverRef.current; if(q&&q!==task.quadrant) updateTask(task.id,{quadrant:q}); dragOverRef.current=null; setDragId(null); setDragOver(null); }
       );
     });
   };
+  const editNote=task=>{ if(didDragNote.current){ didDragNote.current=false; return; } setEditId(task.id); };
   return (
     <div style={{flex:1,display:"grid",gridTemplateColumns:"1fr 1fr",gridTemplateRows:"1fr 1fr",gap:1,background:T.border,overflow:"hidden"}}>
       {QUAD_ORDER.map(qid=>{const q=QUAD[qid];return(
@@ -1223,7 +1239,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
           </div>
           <div style={{flex:1,padding:10,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:7,alignContent:"flex-start"}}>
             {tasks.filter(t=>t.quadrant===qid&&!t.done).map(task=>(
-              <MNote key={task.id} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} dragging={dragId===task.id} inMyDay={task.mydayDate===tod()} onRemove={()=>updateTask(task.id,{quadrant:null})} onDelete={()=>deleteTask(task.id)} onToMyDay={()=>toggleMyDay(task.id)} editing={editId===task.id} onEdit={()=>setEditId(task.id)} onSave={txt=>{const t=txt.trim();if(t)updateTask(task.id,{title:t});setEditId(null);}}/>
+              <MNote key={task.id} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} onClickNote={()=>editNote(task)} dragging={dragId===task.id} inMyDay={task.mydayDate===tod()} onRemove={()=>updateTask(task.id,{quadrant:null})} onDelete={()=>deleteTask(task.id)} onToMyDay={()=>toggleMyDay(task.id)} editing={editId===task.id} onEdit={()=>setEditId(task.id)} onSave={txt=>{const t=txt.trim();if(t)updateTask(task.id,{title:t});setEditId(null);}}/>
             ))}
             {addingIn===qid&&(
               <div style={{width:"100%",animation:"slideIn .2s ease"}}>
@@ -1244,7 +1260,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
   );
 }
 
-function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit,onSave,onDown,dragging,inMyDay}) {
+function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit,onSave,onDown,onClickNote,dragging,inMyDay}) {
   const [hov,setHov]=useState(false);
   const [et,setEt]=useState(task.title);
   if (editing) return (
@@ -1253,7 +1269,7 @@ function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit
     </div>
   );
   return (
-    <div onPointerDown={e=>onDown?.(e,task)}
+    <div onPointerDown={e=>onDown?.(e,task)} onClick={()=>onClickNote?.()}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
       style={{padding:"7px 9px",borderRadius:8,background:qColor+"1a",border:`1px solid ${qColor}44`,fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:160,cursor:"grab",transition:"transform .15s,box-shadow .15s",transform:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",boxShadow:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
       <div style={{borderLeft:`3px solid ${qColor}`,paddingLeft:6}}>{task.title}</div>
@@ -1269,7 +1285,7 @@ function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit
   );
 }
 
-function FreeformCanvas({T,notes,setNotes,setTasks}) {
+function FreeformCanvas({T,notes,setNotes,onCanvasToTask}) {
   const canvasRef = useRef(null);
   const dragRef = useRef(null);
   const [editingId, setEditingId] = useState(null);
@@ -1278,16 +1294,19 @@ function FreeformCanvas({T,notes,setNotes,setTasks}) {
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     const rect = canvasRef.current.getBoundingClientRect();
-    dragRef.current = { id: note.id, ox: e.clientX - rect.left - note.x, oy: e.clientY - rect.top - note.y };
+    dragRef.current = { id: note.id, ox: e.clientX-rect.left-note.x, oy: e.clientY-rect.top-note.y, sx:e.clientX, sy:e.clientY, moved:false };
   }, []);
   const onPointerMove = useCallback((e) => {
     if (!dragRef.current || !canvasRef.current) return;
+    const d=dragRef.current;
+    if(Math.hypot(e.clientX-d.sx,e.clientY-d.sy)>4) d.moved=true;
+    if(!d.moved) return;
     const rect = canvasRef.current.getBoundingClientRect();
-    const x = Math.max(0, Math.min(e.clientX - rect.left - dragRef.current.ox, rect.width - 150));
-    const y = Math.max(0, Math.min(e.clientY - rect.top - dragRef.current.oy, rect.height - 90));
-    setNotes(ns => ns.map(n => n.id === dragRef.current.id ? {...n, x, y} : n));
+    const x = Math.max(0, Math.min(e.clientX-rect.left-d.ox, rect.width-150));
+    const y = Math.max(0, Math.min(e.clientY-rect.top-d.oy, rect.height-90));
+    setNotes(ns => ns.map(n => n.id===d.id ? {...n, x, y} : n));
   }, [setNotes]);
-  const onPointerUp = useCallback(() => { dragRef.current = null; }, []);
+  const onPointerUp = useCallback(() => { const d=dragRef.current; dragRef.current=null; if(d&&!d.moved) setEditingId(d.id); }, []);
   const editingRef = useRef(null);
   useEffect(()=>{ editingRef.current=editingId; },[editingId]);
   const onCanvasClick = useCallback((e) => {
@@ -1300,10 +1319,7 @@ function FreeformCanvas({T,notes,setNotes,setTasks}) {
     setNotes(ns => [...ns, newNote]);
     setEditingId(newNote.id);
   }, [notes.length, setNotes]);
-  const convertToTask = (note) => {
-    setTasks(ts => [{id:Date.now(),title:note.text,done:false,priority:"medium",tag:"work",due:tod(),starred:false,notes:"From Canvas",color:note.color,subtasks:[],recurring:null},...ts]);
-    setNotes(ns => ns.filter(n => n.id !== note.id));
-  };
+  const convertToTask = (note, myDay) => { onCanvasToTask?.(note.text, myDay); setNotes(ns => ns.filter(n => n.id !== note.id)); };
   return (
     <div ref={canvasRef} style={{flex:1,position:"relative",background:T.canvas,overflow:"hidden",cursor:"crosshair"}}
       onPointerMove={onPointerMove} onPointerUp={onPointerUp} onClick={onCanvasClick}>
@@ -1323,16 +1339,17 @@ function FreeformCanvas({T,notes,setNotes,setTasks}) {
           onPointerDown={e=>onPointerDown(e,note)} onEdit={()=>setEditingId(note.id)}
           onSave={txt=>{setNotes(ns=>ns.map(n=>n.id===note.id?{...n,text:txt}:n));setEditingId(null);}}
           onDelete={()=>setNotes(ns=>ns.filter(n=>n.id!==note.id))}
-          onConvert={()=>convertToTask(note)}
+          onToMyDay={()=>convertToTask(note,true)}
+          onConvert={()=>convertToTask(note,false)}
           onColorChange={c=>setNotes(ns=>ns.map(n=>n.id===note.id?{...n,color:c}:n))}
         />
       ))}
-      <div style={{position:"absolute",bottom:12,right:16,fontSize:10,color:T.textMuted,userSelect:"none",pointerEvents:"none"}}>Click canvas · drag notes · double-click a note to edit</div>
+      <div style={{position:"absolute",bottom:12,right:16,fontSize:10,color:T.textMuted,userSelect:"none",pointerEvents:"none"}}>Click empty space = new note · click a note to edit · drag to move</div>
     </div>
   );
 }
 
-function FreeNote({note,T,editing,onPointerDown,onEdit,onSave,onDelete,onConvert,onColorChange}) {
+function FreeNote({note,T,editing,onPointerDown,onEdit,onSave,onDelete,onToMyDay,onConvert,onColorChange}) {
   const [hov,setHov]=useState(false);
   const [txt,setTxt]=useState(note.text);
   useEffect(()=>setTxt(note.text),[note.text]);
@@ -1348,16 +1365,16 @@ function FreeNote({note,T,editing,onPointerDown,onEdit,onSave,onDelete,onConvert
             style={{minWidth:130,minHeight:70,padding:"8px",borderRadius:10,border:`2px solid ${note.color}`,background:note.color+"18",color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"both",lineHeight:1.5}}/>
         </div>
       ) : (
-        <div onPointerDown={onPointerDown} onDoubleClick={onEdit}
+        <div onPointerDown={onPointerDown}
           style={{minWidth:120,maxWidth:200,padding:"9px 11px",borderRadius:10,background:note.color+"20",border:`1px solid ${note.color}55`,fontSize:12,color:T.text,lineHeight:1.5,cursor:"grab",boxShadow:hov?`0 8px 20px ${note.color}44`:"0 2px 8px rgba(0,0,0,.2)",transform:hov?"scale(1.03) rotate(.5deg)":"scale(1)",transition:"transform .15s,box-shadow .15s",userSelect:"none",whiteSpace:"pre-wrap",wordBreak:"break-word"}}>
           <div style={{borderLeft:`3px solid ${note.color}`,paddingLeft:7}}>{note.text}</div>
         </div>
       )}
       {hov&&!editing&&(
         <div style={{position:"absolute",top:-28,left:0,display:"flex",gap:3,animation:"fadeIn .1s",zIndex:30,background:T.surface2,borderRadius:8,padding:"3px 5px",border:`1px solid ${T.border}`,boxShadow:"0 4px 12px rgba(0,0,0,.3)"}}>
-          <button title="Edit (dbl-click)" onClick={onEdit} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:"transparent",color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="zap" s={10}/></button>
+          <button title="Add to My Day" onClick={onToMyDay} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:"#f59e0b",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="sun" s={10} c="#fff"/></button>
           {NOTE_COLS.slice(0,5).map(c=><div key={c} onClick={()=>onColorChange(c)} style={{width:10,height:10,borderRadius:"50%",background:c,cursor:"pointer",border:`1px solid ${note.color===c?"#fff":"transparent"}`,marginTop:5}}/>)}
-          <button title="→ Task" onClick={onConvert} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:"#818cf8",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="arr" s={9} c="#fff"/></button>
+          <button title="Add as a task" onClick={onConvert} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:"#818cf8",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="arr" s={9} c="#fff"/></button>
           <button title="Delete" onClick={onDelete} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:"transparent",color:T.danger,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={10}/></button>
         </div>
       )}
