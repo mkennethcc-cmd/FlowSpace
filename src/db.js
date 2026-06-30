@@ -16,7 +16,7 @@ const DEFAULT_CAT_ICON = { work: "💼", school: "📚", health: "🏃", persona
 const healIcon = (name, icon) => (!icon || icon === "📌") ? (DEFAULT_CAT_ICON[name] || "📌") : icon;
 
 const fromDbCanvas = r => ({ id: r.id, text: r.text, x: r.x, y: r.y, color: r.color });
-const fromDbNote = r => ({ id: r.id, title: r.title, body: r.body || "", pinned: r.pinned, color: r.color, drawing: r.drawing || null, taskId: r.task_id || null, created: r.created_at?.split("T")[0] || "" });
+const fromDbNote = r => ({ id: r.id, title: r.title, body: r.body || "", pinned: r.pinned, color: r.color, drawing: r.drawing || null, created: r.created_at?.split("T")[0] || "" });
 
 export const db = {
   async loadTasks() {
@@ -114,7 +114,7 @@ export const db = {
   async syncNotes(notes, uid) {
     await supabase.from("notes").delete().eq("user_id", uid);
     if (notes.length) await supabase.from("notes").insert(
-      notes.map(n => ({ user_id: uid, title: n.title, body: n.body || "", pinned: n.pinned || false, color: n.color, drawing: n.drawing || null, task_id: n.taskId || null }))
+      notes.map(n => ({ user_id: uid, title: n.title, body: n.body || "", pinned: n.pinned || false, color: n.color, drawing: n.drawing || null }))
     );
   },
 

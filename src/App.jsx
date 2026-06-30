@@ -303,7 +303,6 @@ export default function FlowSpace() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [imgView, setImgView] = useState(null);
   const [linkPick, setLinkPick] = useState(null);
-  const [openNoteId, setOpenNoteId] = useState(null);
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
   const showToast = (msg, undo) => { setToast({msg, undo}); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(()=>setToast(null), 5000); };
@@ -620,14 +619,12 @@ export default function FlowSpace() {
   };
   const toggleMyDay=id=>{ const t=tasks.find(x=>x.id===id); if(!t)return; const inDay=t.mydayDate===todStr; navigator.vibrate?.(15); updateTask(id,{mydayDate:inDay?null:todStr}); if(!inDay) markActiveDay(); };
   const requestLink=cb=>setLinkPick({onPick:cb});
-  const smartTitle=t=>{ const f=(t||"").trim().split("\n")[0].trim(); return (f.length>46?f.slice(0,46)+"…":f)||"Untitled"; };
-  const addLinkedNote=(text,taskId)=>{
-    const NACC=["#3b82f6","#22c55e","#f59e0b","#ef4444","#a855f7","#ec4899","#14b8a6"];
-    const n={id:crypto.randomUUID(),title:smartTitle(text),body:(text||"").trim(),pinned:false,color:NACC[notes.length%NACC.length],drawing:null,taskId:taskId||null,created:todStr};
-    setNotes(ns=>[n,...ns]);
-    showToast(taskId?"Linked to task & saved in Notes":"Saved to Notes");
+  const linkIdeaToTask=(text,taskId)=>{
+    const t=tasks.find(x=>x.id===taskId); if(!t)return;
+    const merged=(t.notes&&t.notes.trim()?t.notes.trim()+"\n":"")+(text||"").trim();
+    updateTask(taskId,{notes:merged});
+    showToast(`Added to "${t.title}" — see it under Notes → Notes on tasks`);
   };
-  const openNoteFromTask=id=>{ setOpenNoteId(id); setView("notes"); };
   const addCanvasTask=(text,myDay)=>{
     const title=(text||"").trim(); if(!title) return;
     const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:guessCat(title,cats),due:null,starred:false,notes:"From Canvas",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:null,attachments:[],owner:user?.id,position:Date.now(),mydayDate:myDay?todStr:null};
@@ -799,12 +796,12 @@ export default function FlowSpace() {
           </div>
         )}
         <div style={{flex:1,overflow:"hidden",display:"flex"}}>
-          {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask} requestLink={requestLink} onCanvasToNote={addLinkedNote}/>}
-          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}} requestLink={requestLink} openNoteId={openNoteId} clearOpenNote={()=>setOpenNoteId(null)}/>}
+          {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask} requestLink={requestLink} onCanvasToNote={linkIdeaToTask}/>}
+          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
           {(["myday","flagged","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} notes={notes} onOpenNote={openNoteFromTask}/>
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView}/>
           )}
         </div>
       </main>
@@ -952,7 +949,7 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,notes,onOpenNote}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage}) {
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
   const [sort,setSort]=useState("smart");
@@ -1127,7 +1124,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           )}
         </div>
       </div>
-      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} linkedNotes={(notes||[]).filter(n=>n.taskId===selTask.id)} onOpenNote={onOpenNote} onClose={()=>setSelTask(null)}/>}
+      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} onClose={()=>setSelTask(null)}/>}
     </div>
   );
 }
@@ -1174,7 +1171,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
   );
 }
 
-function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,canDelete=true,onViewImage,linkedNotes=[],onOpenNote,onClose}) {
+function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,canDelete=true,onViewImage,onClose}) {
   const [uploading,setUploading]=useState(false);
   const fileRef=useRef(null);
   const doAttach=async files=>{ if(!files?.length)return; setUploading(true); try{ for(const f of files) await onAttach?.(task,f); }catch(e){ alert("Upload failed: "+(e.message||e)); } setUploading(false); };
@@ -1215,18 +1212,6 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
         <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple style={{display:"none"}} onChange={e=>{doAttach([...e.target.files]); e.target.value="";}}/>
         <button onClick={()=>fileRef.current?.click()} disabled={uploading} style={{marginTop:7,width:"100%",padding:"7px",borderRadius:8,border:`1px dashed ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{uploading?"Uploading…":"+ Add photo / screenshot"}</button>
       </DL>
-      {linkedNotes.length>0&&(
-        <DL label="Linked notes 🔗" T={T}>
-          <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:5}}>
-            {linkedNotes.map(n=>(
-              <button key={n.id} onClick={()=>onOpenNote?.(n.id)} title="Open in Notes" style={{textAlign:"left",padding:"7px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
-                <div style={{fontSize:12,fontWeight:600,color:T.text,display:"flex",alignItems:"center",gap:5}}>{n.title||"Untitled"}{n.drawing&&<span style={{fontSize:10}}>🎨</span>}</div>
-                {n.body&&<div style={{fontSize:11,color:T.textMuted,marginTop:2,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{n.body.slice(0,50)}</div>}
-              </button>
-            ))}
-          </div>
-        </DL>
-      )}
       <DL label="Color Label" T={T}>
         <div style={{display:"flex",gap:5,marginTop:5,flexWrap:"wrap"}}>
           {COLS.map(c=><div key={c||"none"} onClick={()=>onUpdate(task.id,{color:c})} style={{width:18,height:18,borderRadius:4,background:c||T.surface3,border:`2px solid ${task.color===c?T.text:"transparent"}`,cursor:"pointer"}}/>)}
@@ -1518,7 +1503,7 @@ function FreeNote({note,T,editing,onPointerDown,onEdit,onSave,onDelete,onToMyDay
         <div style={{position:"absolute",top:-28,left:0,display:"flex",gap:3,animation:"fadeIn .1s",zIndex:30,background:T.surface2,borderRadius:8,padding:"3px 5px",border:`1px solid ${T.border}`,boxShadow:"0 4px 12px rgba(0,0,0,.3)"}}>
           <button title="Add to My Day" onClick={onToMyDay} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:"#f59e0b",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="sun" s={10} c="#fff"/></button>
           {NOTE_COLS.slice(0,5).map(c=><div key={c} onClick={()=>onColorChange(c)} style={{width:10,height:10,borderRadius:"50%",background:c,cursor:"pointer",border:`1px solid ${note.color===c?"#fff":"transparent"}`,marginTop:5}}/>)}
-          <button title="Link to a task (kept as a note)" onClick={onLink} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:"#14b8a6",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="link" s={10} c="#fff"/></button>
+          <button title="Link to a task (adds it as a note on that task)" onClick={onLink} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:"#14b8a6",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="link" s={10} c="#fff"/></button>
           <button title="Add as a task" onClick={onConvert} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:"#818cf8",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="arr" s={9} c="#fff"/></button>
           <button title="Delete" onClick={onDelete} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:"transparent",color:T.danger,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={10}/></button>
         </div>
@@ -1564,12 +1549,11 @@ function DrawPad({value,T,onChange}) {
   );
 }
 
-function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,openNoteId,clearOpenNote}) {
+function NotesView({T,notes,setNotes,tasks,onGoToTask}) {
   const [sel,setSel]=useState(null);
   const [nt,setNt]=useState("");
   const [mode,setMode]=useState("text");
   const [listOpen,setListOpen]=useState(true);
-  useEffect(()=>{ if(openNoteId){ const n=notes.find(x=>x.id===openNoteId); if(n){ setSel(n); setListOpen(true); } clearOpenNote?.(); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[openNoteId]);
   const taskNotes=(tasks||[]).filter(t=>t.notes&&t.notes.trim());
   const onEditorDown=e=>{
     if(e.target.closest("input,textarea,select,button,a,canvas")) return;
@@ -1636,18 +1620,7 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,openNoteId,cle
               {ACC.slice(0,5).map(c=><div key={c} onClick={()=>upNote(sel.id,{color:c})} style={{width:14,height:14,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${sel.color===c?T.text:"transparent"}`,transition:"border-color .15s"}}/>)}
             </div>
           </div>
-          <div style={{height:3,width:36,borderRadius:2,background:sel.color,marginBottom:12}}/>
-          <div style={{marginBottom:14}}>
-            {sel.taskId?(()=>{ const lt=tasks?.find(t=>t.id===sel.taskId); return (
-              <div style={{display:"flex",alignItems:"center",gap:7,fontSize:12,flexWrap:"wrap"}}>
-                <Ico n="link" s={13} c={T.accent}/><span style={{color:T.textMuted}}>Linked to task:</span>
-                {lt?<button onClick={()=>onGoToTask?.(lt)} style={{background:"none",border:"none",cursor:"pointer",color:T.accent,fontWeight:700,fontSize:12,fontFamily:"'DM Sans',sans-serif",padding:0}}>{lt.title} →</button>:<span style={{color:T.textMuted}}>(removed)</span>}
-                <button onClick={()=>upNote(sel.id,{taskId:null})} style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,fontSize:11,textDecoration:"underline",fontFamily:"'DM Sans',sans-serif"}}>unlink</button>
-              </div>
-            ); })():(
-              <button onClick={()=>requestLink?.(t=>upNote(sel.id,{taskId:t.id}))} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 11px",borderRadius:8,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}><Ico n="link" s={12}/> Link to a task</button>
-            )}
-          </div>
+          <div style={{height:3,width:36,borderRadius:2,background:sel.color,marginBottom:14}}/>
           <div style={{display:"flex",gap:5,marginBottom:14}}>
             {[["text","✏️ Write"],["draw","🎨 Draw"]].map(([m,lbl])=>(
               <button key={m} onClick={()=>setMode(m)} style={{padding:"5px 14px",borderRadius:8,border:`1px solid ${mode===m?T.accent:T.border}`,background:mode===m?T.accentGlow:"transparent",color:mode===m?T.accent:T.textMuted,cursor:"pointer",fontSize:12,fontWeight:mode===m?700:500,fontFamily:"'DM Sans',sans-serif"}}>{lbl}{m==="draw"&&sel.drawing?" •":""}</button>
@@ -1677,7 +1650,6 @@ function NRow({note,T,sel,onSel,onUp,onDel}) {
       <div style={{display:"flex",alignItems:"center",gap:5}}>
         <div style={{width:7,height:7,borderRadius:"50%",background:note.color,flexShrink:0}}/>
         <span style={{fontSize:12,fontWeight:600,color:T.text,flex:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{note.title||"Untitled"}</span>
-        {note.taskId&&<Ico n="link" s={10} c={T.accent} st={{flexShrink:0}}/>}
       </div>
       <div style={{fontSize:11,color:T.textMuted,marginTop:2,marginLeft:12,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{note.body?note.body.slice(0,38)+"…":"Empty"}</div>
       {hov&&<div style={{position:"absolute",right:5,top:"50%",transform:"translateY(-50%)",display:"flex",gap:2}}>
