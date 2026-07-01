@@ -139,10 +139,17 @@ const fmtDate = s => {
 };
 
 const parseNL = raw => {
-  let title = raw.trim(), due = null;
-  const strip = s => s.replace(/\s+at\s+\d{1,2}(:\d{2})?\s*(am|pm)?/gi,"").trim();
-  if (/\btomorrow\b/i.test(title)) { due=addDays(1); title=title.replace(/\s*\btomorrow(\s+at\s+[\w:]+(\s*(am|pm))?)?\b/gi,""); }
-  else if (/\btoday\b/i.test(title)) { due=tod(); title=title.replace(/\s*\btoday(\s+at\s+[\w:]+(\s*(am|pm))?)?\b/gi,""); }
+  let title = raw.trim(), due = null, time = null;
+  // Time: "at 4pm", "4:30pm", "9am", "at 16:00"
+  const tm = title.match(/\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i) || title.match(/\bat\s+(\d{1,2}):(\d{2})\b/);
+  if (tm) {
+    let h=parseInt(tm[1]); const min=tm[2]?parseInt(tm[2]):0; const ap=(tm[3]||"").toLowerCase();
+    if(ap==="pm"&&h<12) h+=12; if(ap==="am"&&h===12) h=0;
+    if(h<24&&min<60){ time=`${String(h).padStart(2,"0")}:${String(min).padStart(2,"0")}`; title=title.replace(tm[0],""); }
+  }
+  if (/\btomorrow\b/i.test(title)) { due=addDays(1); title=title.replace(/\btomorrow\b/gi,""); }
+  else if (/\btonight\b/i.test(title)) { due=tod(); title=title.replace(/\btonight\b/gi,""); if(!time)time="20:00"; }
+  else if (/\btoday\b/i.test(title)) { due=tod(); title=title.replace(/\btoday\b/gi,""); }
   else if (/\bnext week\b/i.test(title)) { due=addDays(7); title=title.replace(/\bnext week\b/gi,""); }
   else if (title.match(/\b(?:this\s+)?(next\s+)?(?:on\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)\b/i)) {
     const wd = title.match(/\b(?:this\s+)?(next\s+)?(?:on\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)\b/i);
@@ -151,7 +158,7 @@ const parseNL = raw => {
     if (delta === 0) delta = 7;
     if (wd[1]) delta += 7;
     const d = new Date(); d.setDate(d.getDate() + delta);
-    due = d.toISOString().split("T")[0];
+    due = ymd(d);
     title = title.replace(wd[0], "");
   }
   else {
@@ -160,13 +167,13 @@ const parseNL = raw => {
       const mon=MONTHS[m[1].toLowerCase().substring(0,3)], day=parseInt(m[2]);
       let yr=new Date().getFullYear();
       if (new Date(yr,mon,day)<new Date()) yr++;
-      due=new Date(yr,mon,day).toISOString().split("T")[0];
-      title=title.replace(new RegExp("\\s*"+m[0].replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"(\\s+at\\s+[\\w:]+(\\s*(am|pm))?)?","gi"),"");
+      due=ymd(new Date(yr,mon,day));
+      title=title.replace(m[0],"");
     }
   }
-  title=strip(title).replace(/^[\s,\-–]+|[\s,\-–]+$/g,"").trim();
+  title=title.replace(/\s{2,}/g," ").replace(/^[\s,\-–]+|[\s,\-–]+$/g,"").trim();
   if (!title) title=raw.trim();
-  return {title, due};
+  return {title, due, time};
 };
 
 const DEFAULT_CATS = {
@@ -384,6 +391,7 @@ export default function FlowSpace() {
   },[user]);
 
   useEffect(()=>{ if(keepSelRef.current){ keepSelRef.current=false; return; } setSelTask(null); },[view]);
+  const goView=v=>{ setView(v); setSideOpen(false); };
 
   const refreshShares=useCallback(()=>{
     if(!user) return;
@@ -460,12 +468,14 @@ export default function FlowSpace() {
 
   const addTask = useCallback(()=>{
     if (!input.trim()) return;
-    const {title,due:parsed}=parseNL(input);
-    const due=parsed||null;
+    const {title,due:parsed,time}=parseNL(input);
+    let due=parsed||null;
+    if(time && !due) due=tod();
+    const remindAt=(time && due)?`${due}T${time}`:null;
     const inCat=view.startsWith("cat:")?view.slice(4):null;
     let ownerId=user?.id, tagForTask=inCat||guessCat(title,cats);
     if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"); ownerId=rest.slice(0,ci); tagForTask=rest.slice(ci+1); }
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="flagged",notes:"",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:null,attachments:[],owner:ownerId,position:Date.now(),mydayDate:view==="myday"?todStr:null};
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="flagged",notes:"",color:null,subtasks:[],recurring:null,quadrant:null,remindAt,attachments:[],owner:ownerId,position:Date.now(),mydayDate:view==="myday"?todStr:null};
     setTasks(ts=>[t,...ts]);
     setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
     if(view==="myday") markActiveDay();
@@ -657,7 +667,6 @@ export default function FlowSpace() {
     {id:"all",label:"All Tasks",icon:"layers",badge:null},
     {id:"flagged",label:"Flagged",icon:"flag",badge:myTasks.filter(t=>t.starred&&!t.done).length},
     {id:"notes",label:"Notes",icon:"note",badge:null},
-    {id:"analytics",label:"Analytics",icon:"bar",badge:null},
   ];
 
   if(confirmFlow==="signup") return <SignupSuccess onContinue={()=>{ try{window.history.replaceState(null,"",window.location.pathname);}catch{} setConfirmFlow(null); }}/>;
@@ -688,7 +697,8 @@ export default function FlowSpace() {
             </div>
             {sideOpen&&<span style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:16,letterSpacing:"-.4px",background:`linear-gradient(90deg,${T.accent},${T.accentAlt})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",whiteSpace:"nowrap"}}>FlowSpace</span>}
           </button>
-          {sideOpen&&<button onClick={()=>setView("settings")} title="Settings" style={{width:28,height:28,borderRadius:7,border:"none",cursor:"pointer",background:view==="settings"?T.accentGlow:"transparent",color:view==="settings"?T.accent:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ico n="cog" s={15}/></button>}
+          {sideOpen&&<button onClick={()=>goView("analytics")} title="Analytics" style={{width:28,height:28,borderRadius:7,border:"none",cursor:"pointer",background:view==="analytics"?T.accentGlow:"transparent",color:view==="analytics"?T.accent:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ico n="bar" s={15}/></button>}
+          {sideOpen&&<button onClick={()=>goView("settings")} title="Settings" style={{width:28,height:28,borderRadius:7,border:"none",cursor:"pointer",background:view==="settings"?T.accentGlow:"transparent",color:view==="settings"?T.accent:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ico n="cog" s={15}/></button>}
         </div>
         {sideOpen&&(
           <div style={{padding:"0 12px 14px"}}>
@@ -709,7 +719,7 @@ export default function FlowSpace() {
         )}
         <nav style={{flex:1,minHeight:0,padding:"0 6px",overflowY:"auto",overflowX:"hidden"}}>
           {navItems.map(item=>(
-            <button key={item.id} onClick={()=>setView(item.id)} style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:sideOpen?"8px 10px":"8px 0",justifyContent:sideOpen?"flex-start":"center",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,transition:"all .15s",background:view===item.id?T.accentGlow:"transparent",color:view===item.id?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:view===item.id?600:400}}>
+            <button key={item.id} onClick={()=>goView(item.id)} style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:sideOpen?"8px 10px":"8px 0",justifyContent:sideOpen?"flex-start":"center",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,transition:"all .15s",background:view===item.id?T.accentGlow:"transparent",color:view===item.id?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:view===item.id?600:400}}>
               <Ico n={item.icon} s={16} c={view===item.id?T.accent:T.textMuted}/>
               {sideOpen&&<span style={{flex:1,textAlign:"left",whiteSpace:"nowrap"}}>{item.label}</span>}
               {sideOpen&&item.badge>0&&<span style={{background:view===item.id?T.accent:T.surface3,color:view===item.id?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{item.badge}</span>}
@@ -719,7 +729,7 @@ export default function FlowSpace() {
             const FolderBtn=(name,meta,v,count,icon)=>{
               const active=view===v;
               return (
-                <button key={v} onClick={()=>setView(v)} style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:sideOpen?"8px 10px":"8px 0",justifyContent:sideOpen?"flex-start":"center",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,transition:"all .15s",background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
+                <button key={v} onClick={()=>goView(v)} style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:sideOpen?"8px 10px":"8px 0",justifyContent:sideOpen?"flex-start":"center",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,transition:"all .15s",background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
                   {isImgIcon(icon)?<img src={icon} alt="" style={{width:16,height:16,borderRadius:4,objectFit:"cover",flexShrink:0}}/>:<span style={{fontSize:15,width:16,textAlign:"center",flexShrink:0}}>{icon}</span>}
                   {sideOpen&&<span style={{flex:1,textAlign:"left",whiteSpace:"nowrap",textTransform:"capitalize"}}>{name}</span>}
                   {sideOpen&&count>0&&<span style={{background:active?T.accent:T.surface3,color:active?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{count}</span>}
@@ -990,11 +1000,13 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   };
   const beginSwipe=(id,sx)=>{
     didDragRef.current=true; setSwipeId(id); document.body.style.userSelect="none";
-    const mv=ev=>setSwipeX(Math.max(0,Math.min(ev.clientX-sx,130)));
+    const mv=ev=>setSwipeX(Math.max(-130,Math.min(ev.clientX-sx,130)));
     const up=ev=>{
       window.removeEventListener("pointermove",mv); window.removeEventListener("pointerup",up); window.removeEventListener("pointercancel",up);
       document.body.style.userSelect="";
-      if(ev.clientX-sx>70){ navigator.vibrate?.(20); onToggleMyDay?.(id); }
+      const dx=ev.clientX-sx;
+      if(dx>70){ navigator.vibrate?.(20); onToggleMyDay?.(id); }
+      else if(dx<-70){ navigator.vibrate?.(25); deleteTask(id); }
       setSwipeId(null); setSwipeX(0);
     };
     window.addEventListener("pointermove",mv); window.addEventListener("pointerup",up); window.addEventListener("pointercancel",up);
@@ -1010,7 +1022,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
       const dx=ev.clientX-sx, dy=ev.clientY-sy;
       if(Math.abs(dx)<8 && Math.abs(dy)<8) return;
       decided=true; teardown();
-      if(Math.abs(dx)>Math.abs(dy)){ if(dx>0) beginSwipe(id,sx); } // right swipe → My Day; left ignored
+      if(Math.abs(dx)>Math.abs(dy)) beginSwipe(id,sx); // horizontal → swipe (right = My Day, left = delete)
       else beginReorder(id);
     };
     const end=()=>teardown();
@@ -1104,7 +1116,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
         <div style={{display:"flex",flexDirection:"column",gap:4}}>
           {sortList(show.filter(t=>!t.done)).map(task=>(
             <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id} dropTarget={dropId===task.id}
-              onDown={sort==="smart"?onCardDown:undefined} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true}/>
+              onDown={sort==="smart"?onCardDown:undefined} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true} onToggleMyDay={onToggleMyDay}/>
           ))}
           {show.filter(t=>t.done).length>0&&<>
             <div style={{fontSize:10,color:T.textMuted,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",padding:"10px 2px 4px",display:"flex",alignItems:"center",gap:5}}>
@@ -1112,7 +1124,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
               <button onClick={()=>onClearDone?.(show.filter(t=>t.done).map(t=>t.id))} style={{marginLeft:"auto",background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:10,fontWeight:700,letterSpacing:".3px",fontFamily:"'DM Sans',sans-serif",textTransform:"none"}}>Clear all</button>
             </div>
             {show.filter(t=>t.done).map(task=>(
-              <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} canDelete={canDeleteFn?canDeleteFn(task):true}/>
+              <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} canDelete={canDeleteFn?canDeleteFn(task):true} onToggleMyDay={onToggleMyDay}/>
             ))}
           </>}
           {show.length===0&&(
@@ -1129,7 +1141,8 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   );
 }
 
-function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,onDown,swipeX=0,canDelete=true}) {
+function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,onDown,swipeX=0,canDelete=true,onToggleMyDay}) {
+  const inMyDay=task.mydayDate===tod();
   const [hov,setHov]=useState(false);
   const ov=task.due&&task.due<tod()&&!task.done;
   const catMeta=cats[task.tag];
@@ -1142,10 +1155,15 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
         <Ico n="sun" s={16} c={T.warning}/>{swipeX>70?"Release for My Day ☀️":"My Day"}
       </div>
     )}
+    {swipeX<0&&(
+      <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"flex-end",gap:6,paddingRight:16,background:`linear-gradient(270deg,${T.danger}44,transparent)`,color:T.danger,fontWeight:700,fontSize:12,pointerEvents:"none"}}>
+        {swipeX<-70?"Release to delete 🗑":"Delete"}<Ico n="trash" s={16} c={T.danger}/>
+      </div>
+    )}
     <div className={entering?"te":""} data-task-id={task.id}
       onPointerDown={onDown?e=>onDown(e,task.id):undefined}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)} onClick={()=>onSel(task)}
-      style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:swipeX>0?T.bg:(sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent"),border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:swipeX>0?"none":"all .12s",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:swipeX>0?`translateX(${swipeX}px)`:dragging?"scale(.98)":"scale(1)",userSelect:"none",WebkitUserSelect:"none",touchAction:"pan-y"}}>
+      style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:swipeX!==0?T.bg:(sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent"),border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:swipeX!==0?"none":"all .12s",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:swipeX!==0?`translateX(${swipeX}px)`:dragging?"scale(.98)":"scale(1)",userSelect:"none",WebkitUserSelect:"none",touchAction:"pan-y"}}>
       {task.color&&<div style={{position:"absolute",left:0,top:8,bottom:8,width:3,borderRadius:2,background:task.color}}/>}
       <div style={{color:T.textMuted,opacity:hov?.6:0,transition:"opacity .15s",flexShrink:0,marginTop:1,cursor:"grab",paddingLeft:task.color?4:0}}><Ico n="grip" s={14} c={T.textMuted}/></div>
       <button onClick={e=>{e.stopPropagation();onToggle(task.id);}} style={{width:19,height:19,borderRadius:5,border:`2px solid ${task.done?T.success:qColor||T.border}`,background:task.done?T.success:"transparent",cursor:"pointer",flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s"}}>
@@ -1164,8 +1182,11 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
           {task.subtasks?.length>0&&<span style={{fontSize:10,color:T.textMuted}}>{task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</span>}
         </div>
       </div>
-      {qColor&&<div title={QUAD[task.quadrant]?.label} style={{width:6,height:6,borderRadius:"50%",background:qColor,flexShrink:0,marginTop:6}}/>}
-      {hov&&canDelete&&<button onClick={e=>{e.stopPropagation();onDelete(task.id);}} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",width:24,height:24,borderRadius:6,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",animation:"fadeIn .1s"}}><Ico n="trash" s={11}/></button>}
+      <div style={{display:"flex",alignItems:"center",gap:2,flexShrink:0,marginTop:1}}>
+        {qColor&&<div title={QUAD[task.quadrant]?.label} style={{width:6,height:6,borderRadius:"50%",background:qColor,marginRight:3}}/>}
+        <button onClick={e=>{e.stopPropagation();onToggleMyDay?.(task.id);}} title={inMyDay?"Remove from My Day":"Add to My Day"} style={{width:22,height:22,borderRadius:6,border:"none",cursor:"pointer",background:inMyDay?"#f59e0b22":"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="sun" s={12} c={inMyDay?"#f59e0b":T.textMuted}/></button>
+        {canDelete&&<button onClick={e=>{e.stopPropagation();onDelete(task.id);}} title="Delete" style={{width:22,height:22,borderRadius:6,border:"none",cursor:"pointer",background:"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="trash" s={11} c={T.textMuted}/></button>}
+      </div>
     </div>
     </div>
   );
@@ -1402,8 +1423,8 @@ function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit
       style={{padding:"7px 9px",borderRadius:8,background:qColor+"1a",border:`1px solid ${qColor}44`,fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:160,cursor:"grab",transition:"transform .15s,box-shadow .15s",transform:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",boxShadow:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
       <div style={{borderLeft:`3px solid ${qColor}`,paddingLeft:6}}>{task.title}</div>
       {catMeta&&<div style={{marginTop:4,fontSize:9,color:catMeta.color,fontWeight:600}}>{catMeta.icon} {task.tag}</div>}
-      {hov&&(
-        <div style={{position:"absolute",top:-10,right:-4,display:"flex",gap:2,zIndex:10,animation:"fadeIn .1s"}}>
+      {!editing&&(
+        <div style={{position:"absolute",top:-10,right:-4,display:"flex",gap:2,zIndex:10}}>
           <button title={inMyDay?"Remove from My Day":"Add to My Day"} onClick={e=>{e.stopPropagation();onToMyDay();}} style={{width:18,height:18,borderRadius:4,border:`1px solid ${inMyDay?"#f59e0b":T.border}`,cursor:"pointer",background:inMyDay?"#f59e0b":T.surface,color:inMyDay?"#fff":T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="sun" s={9} c={inMyDay?"#fff":T.textMuted}/></button>
           <button title="Remove from board" onClick={e=>{e.stopPropagation();onRemove();}} style={{width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:T.surface,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="x" s={9}/></button>
         </div>
