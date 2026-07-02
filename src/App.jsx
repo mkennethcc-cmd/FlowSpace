@@ -352,6 +352,7 @@ export default function FlowSpace() {
   const [delCatModal, setDelCatModal] = useState(null);
   const [canvasNotes, setCanvasNotes] = useState([]);
   const [notes, setNotes] = useState([]);
+  const [habits, setHabits] = useState([]);
   const [cats, setCats] = useState(DEFAULT_CATS);
   const [sideOpen, setSideOpen] = useState(true);
   const [defOpen, setDefOpen] = useState(true);
@@ -404,8 +405,9 @@ export default function FlowSpace() {
   },[]);
 
   useEffect(()=>{
-    if(!user){setTasks([]);setCanvasNotes([]);setNotes([]);setCats(DEFAULT_CATS);setOwnedShares([]);setSharedWithMe([]);return;}
+    if(!user){setTasks([]);setCanvasNotes([]);setNotes([]);setHabits([]);setCats(DEFAULT_CATS);setOwnedShares([]);setSharedWithMe([]);return;}
     isLoadingData.current=true; setSyncing(true);
+    db.loadHabits(user.id).then(setHabits).catch(()=>{});
     Promise.all([db.loadTasks(),db.loadCanvas(user.id),db.loadNotes(user.id),db.loadCats(user.id),db.loadOwnedShares(user.id),db.loadSharedWithMe(user.email)])
       .then(([t,c,n,cats,os,sm])=>{
         setTasks(t); setCanvasNotes(c); setNotes(n);
@@ -437,6 +439,7 @@ export default function FlowSpace() {
 
   useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.c);syncTimers.current.c=setTimeout(()=>db.syncCanvas(canvasNotes,user.id).catch(console.error),1500);},[canvasNotes]);
   useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.n);syncTimers.current.n=setTimeout(()=>db.syncNotes(notes,user.id).catch(console.error),1500);},[notes]);
+  useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.h);syncTimers.current.h=setTimeout(()=>db.syncHabits(habits,user.id).catch(console.error),1500);},[habits]);
   useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.k);syncTimers.current.k=setTimeout(()=>db.syncCats(cats,user.id).catch(console.error),1500);},[cats]);
 
   useEffect(()=>{
@@ -706,6 +709,7 @@ export default function FlowSpace() {
     {id:"matrix",label:"Priority Matrix",icon:"grid",badge:null},
     {id:"all",label:"All Tasks",icon:"layers",badge:null},
     {id:"flagged",label:"Flagged",icon:"flag",badge:myTasks.filter(t=>t.starred&&!t.done).length},
+    {id:"habits",label:"Habits",icon:"repeat",badge:habits.filter(h=>!h.log?.includes(todStr)).length||null},
     {id:"notes",label:"Notes",icon:"note",badge:null},
   ];
 
@@ -849,6 +853,7 @@ export default function FlowSpace() {
           {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask} requestLink={requestLink} onCanvasToNote={linkIdeaToTask} onOpenTask={setSelTask} selId={selTask?.id}/>}
           {view==="matrix"&&selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={id=>{deleteTask(id);setSelTask(null);}} onDuplicate={duplicateTask} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} canDelete={canDeleteTask(selTask)} onViewImage={setImgView} onClose={()=>setSelTask(null)}/>}
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
+          {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} onCheckin={key=>{awardXp("habit-"+key,15);markActiveDay();navigator.vibrate?.(20);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
           {(["myday","flagged","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
@@ -969,7 +974,7 @@ function ImgViewer({T,url,onClose}) {
 
 function CmdPalette({T,tasks,onClose,onGo,onAdd}) {
   const [q,setQ]=useState("");
-  const pages=["myday","upcoming","all","completed","matrix","notes","analytics","settings"];
+  const pages=["myday","upcoming","all","completed","matrix","habits","notes","analytics","settings"];
   const ft=tasks.filter(t=>!t.done&&q&&t.title.toLowerCase().includes(q.toLowerCase())).slice(0,4);
   const fp=pages.filter(p=>p.includes(q.toLowerCase()));
   return (
@@ -1383,7 +1388,7 @@ function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDa
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
           <div>
             <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:19,fontWeight:700,letterSpacing:"-.4px"}}>{tab==="matrix"?"Priority Matrix":"Freeform Canvas"}</h1>
-            <p style={{fontSize:11,color:T.textMuted,marginTop:1}}>{tab==="matrix"?"Real tasks · drag between quadrants to set priority · also shown in All Tasks":"Double-click to create note · drag freely · purple → converts to task"}</p>
+            <p style={{fontSize:11,color:T.textMuted,marginTop:1}}>{tab==="matrix"?"Tap a card for details · hold & drag between quadrants · swipe ← delete, → My Day":"Double-click to create note · drag freely · purple → converts to task"}</p>
           </div>
           <div style={{display:"flex",gap:4,paddingBottom:2}}>
             {["matrix","canvas"].map(t=>(
@@ -1414,16 +1419,38 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
   },[]);
   const addNote=qid=>{const txt=newText.trim();if(!txt)return;addMatrixTask(qid,txt);setNewText("");setAddingIn(null);};
   const didDragNote=useRef(false);
+  const [swipeId,setSwipeId]=useState(null);
+  const [swipeX,setSwipeX]=useState(0);
+  // Quick horizontal flick = swipe (left delete / right My Day). Press-and-hold = drag between quadrants. Both coexist.
   const onNoteDown=(e,task)=>{
     if(e.target.closest("button")||e.target.tagName==="TEXTAREA") return;
     didDragNote.current=false;
-    startPressDrag(e,()=>{
-      setDragId(task.id); navigator.vibrate?.(20);
+    const sx=e.clientX,sy=e.clientY,type=e.pointerType; let mode=null,hold=null;
+    const cleanup=()=>{ clearTimeout(hold); window.removeEventListener("pointermove",mv); window.removeEventListener("pointerup",up); window.removeEventListener("pointercancel",up); };
+    const startDrag=()=>{ if(mode)return; mode="drag"; clearTimeout(hold); setDragId(task.id); navigator.vibrate?.(20);
       runDrag(
         ev=>{ didDragNote.current=true; const el=document.elementFromPoint(ev.clientX,ev.clientY); const qd=el&&el.closest("[data-quadrant]"); dragOverRef.current=qd?qd.getAttribute("data-quadrant"):null; setDragOver(dragOverRef.current); },
         ()=>{ const q=dragOverRef.current; if(q&&q!==task.quadrant) updateTask(task.id,{quadrant:q}); dragOverRef.current=null; setDragId(null); setDragOver(null); }
       );
-    });
+    };
+    const mv=ev=>{
+      const dx=ev.clientX-sx,dy=ev.clientY-sy;
+      if(mode==="swipe"){ didDragNote.current=true; setSwipeX(Math.max(-120,Math.min(dx,120))); return; }
+      if(mode) return;
+      if(Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)){ mode="swipe"; clearTimeout(hold); setSwipeId(task.id); setSwipeX(dx); }
+      else if(Math.abs(dy)>10&&type!=="mouse"){ cleanup(); } // vertical → let the quadrant scroll
+      else if(type==="mouse"&&(Math.abs(dx)>4||Math.abs(dy)>4)){ startDrag(); }
+    };
+    const up=ev=>{
+      if(mode==="swipe"){ const dx=ev.clientX-sx; cleanup(); setSwipeId(null); setSwipeX(0);
+        if(dx<-70){ navigator.vibrate?.(25); deleteTask(task.id); }
+        else if(dx>70){ navigator.vibrate?.(20); toggleMyDay(task.id); }
+        return;
+      }
+      cleanup();
+    };
+    if(type!=="mouse") hold=setTimeout(startDrag,150);
+    window.addEventListener("pointermove",mv); window.addEventListener("pointerup",up); window.addEventListener("pointercancel",up);
   };
   const openNote=task=>{ if(didDragNote.current){ didDragNote.current=false; return; } onOpenTask?.(task); };
   return (
@@ -1440,7 +1467,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
           </div>
           <div onClick={e=>{if(e.target===e.currentTarget&&addingIn!==qid){setAddingIn(qid);setNewText("");}}} style={{flex:1,padding:10,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:7,alignContent:"flex-start",cursor:"text"}}>
             {tasks.filter(t=>t.quadrant===qid&&!t.done).map(task=>(
-              <MNote key={task.id} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} onClickNote={()=>openNote(task)} dragging={dragId===task.id} sel={selId===task.id} inMyDay={task.mydayDate===tod()} onRemove={()=>updateTask(task.id,{quadrant:null})} onDelete={()=>deleteTask(task.id)} onToMyDay={()=>toggleMyDay(task.id)} editing={editId===task.id} onEdit={()=>setEditId(task.id)} onSave={txt=>{const t=txt.trim();if(t)updateTask(task.id,{title:t});setEditId(null);}}/>
+              <MNote key={task.id} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} onClickNote={()=>openNote(task)} dragging={dragId===task.id} sel={selId===task.id} swipeX={swipeId===task.id?swipeX:0} inMyDay={task.mydayDate===tod()} onRemove={()=>updateTask(task.id,{quadrant:null})} onDelete={()=>deleteTask(task.id)} onToMyDay={()=>toggleMyDay(task.id)} editing={editId===task.id} onEdit={()=>setEditId(task.id)} onSave={txt=>{const t=txt.trim();if(t)updateTask(task.id,{title:t});setEditId(null);}}/>
             ))}
             {addingIn===qid&&(
               <div style={{width:"100%",animation:"slideIn .2s ease"}}>
@@ -1461,7 +1488,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
   );
 }
 
-function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit,onSave,onDown,onClickNote,dragging,inMyDay,sel}) {
+function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit,onSave,onDown,onClickNote,dragging,inMyDay,sel,swipeX=0}) {
   const [hov,setHov]=useState(false);
   const [et,setEt]=useState(task.title);
   if (editing) return (
@@ -1472,15 +1499,13 @@ function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit
   return (
     <div onPointerDown={e=>onDown?.(e,task)} onClick={()=>onClickNote?.()}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
-      style={{padding:"7px 9px",borderRadius:8,background:qColor+"1a",border:`1px solid ${sel?qColor:qColor+"44"}`,boxShadow:sel?`0 0 0 2px ${qColor}55`:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:160,cursor:"grab",transition:"transform .15s,box-shadow .15s",transform:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
+      style={{padding:"7px 9px",borderRadius:8,background:swipeX<-30?T.danger+"22":swipeX>30?"#f59e0b22":qColor+"1a",border:`1px solid ${swipeX<-30?T.danger:swipeX>30?"#f59e0b":sel?qColor:qColor+"44"}`,boxShadow:sel?`0 0 0 2px ${qColor}55`:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:160,cursor:"grab",transition:swipeX?"none":"transform .15s,box-shadow .15s",transform:swipeX?`translateX(${swipeX}px)`:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
       <div style={{borderLeft:`3px solid ${qColor}`,paddingLeft:6}}>{task.title}</div>
       {catMeta&&<div style={{marginTop:4,fontSize:9,color:catMeta.color,fontWeight:600}}>{catMeta.icon} {task.tag}</div>}
-      {!editing&&(
-        <div style={{position:"absolute",top:-10,right:-4,display:"flex",gap:2,zIndex:10}}>
-          <button title={inMyDay?"Remove from My Day":"Add to My Day"} onClick={e=>{e.stopPropagation();onToMyDay();}} style={{width:18,height:18,borderRadius:4,border:`1px solid ${inMyDay?"#f59e0b":T.border}`,cursor:"pointer",background:inMyDay?"#f59e0b":T.surface,color:inMyDay?"#fff":T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="sun" s={9} c={inMyDay?"#fff":T.textMuted}/></button>
-          <button title="Remove from board" onClick={e=>{e.stopPropagation();onRemove();}} style={{width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:T.surface,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)"}}><Ico n="x" s={9}/></button>
-        </div>
-      )}
+      {inMyDay&&swipeX===0&&<div style={{position:"absolute",top:-7,left:-4,width:16,height:16,borderRadius:"50%",background:"#f59e0b",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 5px rgba(0,0,0,.3)"}}><Ico n="sun" s={9} c="#fff"/></div>}
+      {swipeX<-30&&<div style={{position:"absolute",top:4,right:6,fontSize:12}}>🗑</div>}
+      {swipeX>30&&<div style={{position:"absolute",top:4,left:6,fontSize:12}}>☀️</div>}
+      {hov&&!editing&&swipeX===0&&<button title="Remove from board (keep task)" onClick={e=>{e.stopPropagation();onRemove();}} style={{position:"absolute",top:-8,right:-6,width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:T.surface,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)",zIndex:10}}><Ico n="x" s={9}/></button>}
     </div>
   );
 }
@@ -1769,6 +1794,97 @@ function NRow({note,T,sel,onSel,onUp,onDel}) {
   );
 }
 
+const HABIT_EMOJI=["💧","📖","🏃","🧘","😴","🥗","💪","🚶","📝","☀️","🦷","💊","🎯","🧹","💰","🚭","🎸","🌱"];
+const HABIT_COLORS=["#22c55e","#3b82f6","#f59e0b","#ef4444","#a855f7","#ec4899","#14b8a6","#eab308"];
+const HABIT_SUGGEST=[["Drink water","💧"],["Read","📖"],["Exercise","🏃"],["Meditate","🧘"],["Sleep early","😴"],["Eat healthy","🥗"]];
+function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
+  const [name,setName]=useState("");
+  const [icon,setIcon]=useState("💧");
+  const [color,setColor]=useState(HABIT_COLORS[0]);
+  const [cadence,setCadence]=useState(7);
+  const [pick,setPick]=useState(false);
+  const has=(h,d)=>(h.log||[]).includes(d);
+  const add=(nm,ic)=>{ const n=(nm??name).trim(); if(!n)return; const h={id:Date.now(),name:n,icon:ic||icon,color:color,cadence,log:[],created:todStr}; setHabits(hs=>[...hs,h]); setName(""); };
+  const toggle=h=>{ const done=has(h,todStr); setHabits(hs=>hs.map(x=>x.id===h.id?{...x,log:done?(x.log||[]).filter(d=>d!==todStr):[...(x.log||[]),todStr]}:x)); if(!done) onCheckin?.(h.id); else navigator.vibrate?.(8); };
+  const del=id=>setHabits(hs=>hs.filter(h=>h.id!==id));
+  const streakOf=h=>{ const set=new Set(h.log||[]); let i=set.has(todStr)?0:1, s=0; for(;;){ if(set.has(addDays(-i))){s++;i++;} else break; if(s>999)break; } return s; };
+  const weekCount=h=>{ const set=new Set(h.log||[]); let c=0; for(let i=0;i<7;i++) if(set.has(addDays(-i))) c++; return c; };
+  const last=n=>[...Array(n)].map((_,i)=>addDays(-(n-1-i)));
+  const doneToday=habits.filter(h=>has(h,todStr)).length;
+  const allDone=habits.length>0&&doneToday===habits.length;
+  const msg=habits.length===0?"Build a habit — small, daily, unstoppable.":allDone?"🎉 Every habit done today. Incredible consistency!":doneToday===0?"A fresh day. Check off your first habit 👇":`${doneToday}/${habits.length} done today — keep the momentum!`;
+  return (
+    <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
+      <div style={{marginBottom:16}}>
+        <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:22,fontWeight:700,letterSpacing:"-.5px",display:"flex",alignItems:"center",gap:8}}>Habits {habits.length>0&&<span style={{fontSize:12,fontWeight:600,color:T.textMuted,background:T.surface2,border:`1px solid ${T.border}`,borderRadius:20,padding:"2px 10px"}}>{doneToday}/{habits.length} today</span>}</h1>
+        <p style={{fontSize:13,color:allDone?"#22c55e":T.textMuted,marginTop:3,fontWeight:allDone?600:400}}>{msg}</p>
+      </div>
+
+      {/* Add habit */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:"12px 14px",marginBottom:16}}>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <button onClick={()=>setPick(p=>!p)} title="Pick an icon" style={{width:40,height:40,borderRadius:10,border:`1px solid ${T.border}`,background:color+"18",cursor:"pointer",fontSize:20,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{icon}</button>
+          <input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="New habit… e.g. Drink water" style={{flex:1,minWidth:0,padding:"10px 12px",borderRadius:10,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:14,outline:"none"}}/>
+          <button onClick={()=>add()} disabled={!name.trim()} style={{padding:"10px 16px",borderRadius:10,border:"none",cursor:name.trim()?"pointer":"default",background:name.trim()?T.grad:T.surface3,color:"#fff",fontWeight:700,fontSize:13,fontFamily:"'DM Sans',sans-serif",flexShrink:0,opacity:name.trim()?1:.5}}>Add</button>
+        </div>
+        {pick&&(
+          <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:10}}>
+            {HABIT_EMOJI.map(e=><button key={e} onClick={()=>{setIcon(e);setPick(false);}} style={{width:34,height:34,borderRadius:8,border:`1px solid ${icon===e?T.accent:T.border}`,background:icon===e?T.accentGlow:"transparent",cursor:"pointer",fontSize:17}}>{e}</button>)}
+          </div>
+        )}
+        <div style={{display:"flex",alignItems:"center",gap:10,marginTop:10,flexWrap:"wrap"}}>
+          <div style={{display:"flex",gap:5}}>
+            {HABIT_COLORS.map(c=><div key={c} onClick={()=>setColor(c)} style={{width:18,height:18,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${color===c?T.text:"transparent"}`}}/>)}
+          </div>
+          <div style={{marginLeft:"auto",display:"flex",gap:4,alignItems:"center"}}>
+            <span style={{fontSize:11,color:T.textMuted}}>Goal:</span>
+            {[[7,"Daily"],[5,"5×/wk"],[3,"3×/wk"]].map(([v,l])=>(
+              <button key={v} onClick={()=>setCadence(v)} style={{padding:"4px 10px",borderRadius:20,border:`1px solid ${cadence===v?T.accent:T.border}`,background:cadence===v?T.accentGlow:"transparent",color:cadence===v?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:cadence===v?700:500,fontFamily:"'DM Sans',sans-serif"}}>{l}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {habits.length===0&&(
+        <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+          <div style={{width:"100%",fontSize:12,color:T.textMuted,marginBottom:2}}>Quick start:</div>
+          {HABIT_SUGGEST.map(([nm,ic])=>(
+            <button key={nm} onClick={()=>add(nm,ic)} style={{display:"flex",alignItems:"center",gap:6,padding:"8px 13px",borderRadius:20,border:`1px solid ${T.border}`,background:T.surface,color:T.text,cursor:"pointer",fontSize:13,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{ic} {nm}</button>
+          ))}
+        </div>
+      )}
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12}}>
+        {habits.map(h=>{ const done=has(h,todStr); const st=streakOf(h); const wc=weekCount(h);
+          return (
+          <div key={h.id} style={{background:T.surface,border:`1px solid ${done?h.color+"66":T.border}`,borderRadius:14,padding:14,position:"relative",transition:"border-color .2s"}}>
+            <div style={{display:"flex",alignItems:"center",gap:11}}>
+              <button onClick={()=>toggle(h)} title={done?"Undo today":"Mark done today"} style={{width:46,height:46,borderRadius:"50%",flexShrink:0,cursor:"pointer",border:`2px solid ${h.color}`,background:done?h.color:"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,transition:"all .18s",transform:done?"scale(1)":"scale(1)"}}>
+                <span style={{filter:done?"grayscale(0)":"grayscale(.1)",opacity:done?1:.85}}>{done?"✓":h.icon}</span>
+              </button>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:700,fontSize:15,fontFamily:"'Sora',sans-serif",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{h.icon} {h.name}</div>
+                <div style={{fontSize:12,color:T.textMuted,marginTop:2,display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{color:st>0?"#f59e0b":T.textMuted,fontWeight:st>0?700:400}}>{st>0?`🔥 ${st} day${st>1?"s":""}`:"No streak yet"}</span>
+                  <span>· {wc}/{h.cadence} this wk</span>
+                </div>
+              </div>
+              <button onClick={()=>del(h.id)} title="Delete habit" style={{width:24,height:24,borderRadius:6,border:"none",background:"transparent",color:T.textMuted,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="trash" s={12} c={T.textMuted}/></button>
+            </div>
+            {/* 14-day trail */}
+            <div style={{display:"flex",gap:3,marginTop:12,alignItems:"flex-end"}}>
+              {last(14).map(d=>{ const on=has(h,d); const isToday=d===todStr;
+                return <div key={d} title={d} onClick={()=>{ setHabits(hs=>hs.map(x=>x.id===h.id?{...x,log:on?(x.log||[]).filter(z=>z!==d):[...(x.log||[]),d]}:x)); }} style={{flex:1,height:on?18:10,borderRadius:3,background:on?h.color:T.surface3,border:isToday?`1.5px solid ${h.color}`:"none",cursor:"pointer",transition:"height .15s,background .15s"}}/>;
+              })}
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:T.textMuted,marginTop:4}}><span>2 weeks ago</span><span>Today</span></div>
+          </div>
+        );})}
+      </div>
+    </div>
+  );
+}
+
 const ACHIEVEMENTS=[
   {emoji:"🔥",name:"On Fire",desc:"Keep a daily streak going by checking off a task each day."},
   {emoji:"⚡",name:"Quick Start",desc:"Reach Level 2 — earn 100 XP from adding and finishing tasks."},
@@ -1873,6 +1989,11 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
   const [shareFolderName,setShareFolderName]=useState("");
   const [shareEmail,setShareEmail]=useState("");
   const [sharePerm,setSharePerm]=useState("edit");
+  const [contacts,setContacts]=useState(()=>{try{return JSON.parse(localStorage.getItem("fs_contacts")||"{}");}catch{return{};}});
+  useEffect(()=>{try{localStorage.setItem("fs_contacts",JSON.stringify(contacts));}catch{}},[contacts]);
+  const knownEmails=[...new Set([...(ownedShares||[]).map(s=>s.shared_with_email),...Object.keys(contacts)])].filter(Boolean);
+  const setNick=(em,nm)=>setContacts(c=>({...c,[em]:nm}));
+  const doInvite=()=>{ const em=shareEmail.trim().toLowerCase(); if(shareFolderName&&em){ onShareFolder(shareFolderName,em,sharePerm==="delete"); setContacts(c=>em in c?c:{...c,[em]:""}); setShareEmail(""); } };
   const [iconPicked,setIconPicked]=useState(false);
   const [notifs,setNotifs]=useState(true);
   const [focus,setFocus]=useState(false);
@@ -1960,8 +2081,26 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
             <option value="edit">Edit & add</option>
             <option value="delete">Edit, add & delete</option>
           </select>
-          <button onClick={()=>{if(shareFolderName&&shareEmail.trim()){onShareFolder(shareFolderName,shareEmail,sharePerm==="delete");setShareEmail("");}}} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Invite</button>
+          <button onClick={doInvite} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Invite</button>
         </div>
+        {knownEmails.length>0&&(
+          <div style={{paddingBottom:12}}>
+            <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>Saved people — tap “Use” to reuse, add a nickname</div>
+            <div style={{display:"flex",flexDirection:"column",gap:5}}>
+              {knownEmails.map(em=>(
+                <div key={em} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 8px",borderRadius:8,background:T.surface2,border:`1px solid ${shareEmail.trim().toLowerCase()===em?T.accent:T.border}`}}>
+                  <span style={{fontSize:14}}>{contacts[em]?"⭐":"👤"}</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <input value={contacts[em]||""} onChange={e=>setNick(em,e.target.value)} placeholder="Add a nickname…" style={{width:"100%",padding:"2px 0",border:"none",borderBottom:`1px dashed ${T.border}`,background:"transparent",color:T.text,fontSize:12,fontWeight:600,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+                    <div style={{fontSize:10,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{em}</div>
+                  </div>
+                  <button onClick={()=>setShareEmail(em)} style={{padding:"4px 12px",borderRadius:7,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Use</button>
+                  <button onClick={()=>setContacts(c=>{const n={...c};delete n[em];return n;})} title="Forget this person" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex"}}><Ico n="x" s={11}/></button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {ownedShares&&ownedShares.length>0&&(
           <div style={{paddingBottom:12,display:"flex",flexDirection:"column",gap:5}}>
             {ownedShares.map(s=>(
