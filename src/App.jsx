@@ -138,6 +138,15 @@ const fmtDate = s => {
   return d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
 };
 
+// Reminder time "…THH:MM" → "4:00 PM"
+const fmtClock = iso => {
+  if (!iso || !iso.includes("T")) return "";
+  const t = iso.split("T")[1]; if (!t) return "";
+  let [h,m] = t.split(":"); h = parseInt(h,10); if (isNaN(h)) return "";
+  const ap = h>=12 ? "PM" : "AM"; h = h%12 || 12;
+  return `${h}:${m||"00"} ${ap}`;
+};
+
 const parseNL = raw => {
   let title = raw.trim(), due = null, time = null;
   // Time: "at 4pm", "4:30pm", "9am", "at 16:00"
@@ -392,6 +401,19 @@ export default function FlowSpace() {
 
   useEffect(()=>{ if(keepSelRef.current){ keepSelRef.current=false; return; } setSelTask(null); },[view]);
   const goView=v=>{ setView(v); setSideOpen(false); };
+
+  // Edge swipe: start near the left screen edge, drag right = open sidebar, left = close.
+  // Edge-only so it never conflicts with task-card / canvas swipes further inside the screen.
+  useEffect(()=>{
+    let sx=0,sy=0,edge=false,active=false;
+    const down=e=>{ sx=e.clientX; sy=e.clientY; edge=e.clientX<30; active=true; };
+    const move=e=>{ if(!active||!edge)return; const dx=e.clientX-sx,dy=e.clientY-sy; if(Math.abs(dx)<45||Math.abs(dx)<Math.abs(dy))return; active=false; navigator.vibrate?.(12); setSideOpen(dx>0); };
+    const up=()=>{ active=false; };
+    window.addEventListener("pointerdown",down,{passive:true});
+    window.addEventListener("pointermove",move,{passive:true});
+    window.addEventListener("pointerup",up,{passive:true});
+    return ()=>{ window.removeEventListener("pointerdown",down); window.removeEventListener("pointermove",move); window.removeEventListener("pointerup",up); };
+  },[]);
 
   const refreshShares=useCallback(()=>{
     if(!user) return;
@@ -807,7 +829,7 @@ export default function FlowSpace() {
         )}
         <div style={{flex:1,overflow:"hidden",display:"flex"}}>
           {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask} requestLink={requestLink} onCanvasToNote={linkIdeaToTask}/>}
-          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
+          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
           {(["myday","flagged","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
@@ -1032,7 +1054,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const selectCard=task=>{ if(didDragRef.current){ didDragRef.current=false; return; } setSelTask(task); };
   return (
     <div style={{flex:1,display:"flex",overflow:"hidden"}}>
-      <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
+      <div onClick={e=>{ if(selTask && !e.target.closest("[data-task-id],button,input,select,textarea,a")) setSelTask(null); }} style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
         <div style={{marginBottom:18}}>
           {view==="myday"&&<div style={{fontSize:12,color:T.textMuted,fontWeight:500,marginBottom:3}}>{new Date().getHours()<12?"Good morning 🌤":new Date().getHours()<17?"Keep it up 💪":"Good evening 🌙"}</div>}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -1179,6 +1201,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
         <div style={{display:"flex",alignItems:"center",gap:5,marginTop:3,flexWrap:"wrap"}}>
           {task.tag&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:catColor+"22",color:catColor,fontWeight:600,display:"inline-flex",alignItems:"center",gap:3}}>{catMeta?.icon&&<CatIcon icon={catMeta.icon} size={10}/>}{task.tag}</span>}
           {task.due&&<span style={{fontSize:11,color:ov?T.danger:T.textMuted,fontWeight:ov?700:400}}>{fmtDate(task.due)}</span>}
+          {task.remindAt&&fmtClock(task.remindAt)&&<span style={{fontSize:10,color:T.accent,fontWeight:600,display:"inline-flex",alignItems:"center",gap:2}}>⏰ {fmtClock(task.remindAt)}</span>}
           {task.subtasks?.length>0&&<span style={{fontSize:10,color:T.textMuted}}>{task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</span>}
         </div>
       </div>
@@ -1197,8 +1220,9 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
   const fileRef=useRef(null);
   const doAttach=async files=>{ if(!files?.length)return; setUploading(true); try{ for(const f of files) await onAttach?.(task,f); }catch(e){ alert("Upload failed: "+(e.message||e)); } setUploading(false); };
   const [nts,setNts]=useState(task.notes||"");
+  const [ttl,setTtl]=useState(task.title||"");
   const [ns,setNs]=useState("");
-  useEffect(()=>setNts(task.notes||""),[task.id]);
+  useEffect(()=>{setNts(task.notes||"");setTtl(task.title||"");},[task.id]);
   const addSub=()=>{if(!ns.trim())return;onUpdate(task.id,{subtasks:[...(task.subtasks||[]),{id:Date.now(),title:ns.trim(),done:false}]});setNs("");};
   const COLS=[null,"#ef4444","#f97316","#f59e0b","#22c55e","#3b82f6","#a855f7"];
   const [closeX,setCloseX]=useState(0);
@@ -1213,7 +1237,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
   return (
     <div onPointerDown={panelDown} style={{width:280,borderLeft:`1px solid ${T.border}`,background:T.surface,overflowY:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:9,animation:closeX?"none":"slideIn .2s ease",flexShrink:0,transform:closeX?`translateX(${closeX}px)`:"none",transition:closeX?"none":"transform .2s ease"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-        <h3 style={{fontFamily:"'Sora',sans-serif",fontSize:13,fontWeight:600,flex:1,lineHeight:1.4}}>{task.title}</h3>
+        <input value={ttl} onChange={e=>setTtl(e.target.value)} onBlur={()=>{const v=ttl.trim();if(v&&v!==task.title)onUpdate(task.id,{title:v});else if(!v)setTtl(task.title||"");}} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();}} placeholder="Task name" title="Tap to rename" style={{fontFamily:"'Sora',sans-serif",fontSize:13,fontWeight:600,flex:1,lineHeight:1.4,background:"transparent",border:"none",borderBottom:`1px dashed ${T.border}`,outline:"none",color:T.text,minWidth:0,padding:"1px 0"}}/>
         <button onClick={onClose} style={{width:24,height:24,borderRadius:6,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginLeft:6}}><Ico n="x" s={13}/></button>
       </div>
       <DL label="Notes" T={T}>
@@ -1469,9 +1493,22 @@ function FreeformCanvas({T,notes,setNotes,onCanvasToTask,requestLink,onCanvasToN
   }, [notes.length, setNotes]);
   const convertToTask = (note, myDay) => { onCanvasToTask?.(note.text, myDay); setNotes(ns => ns.filter(n => n.id !== note.id)); };
   const linkToTask = (note) => { requestLink?.(t=>{ onCanvasToNote?.(note.text, t.id); setNotes(ns => ns.filter(n => n.id !== note.id)); }); };
+  const [cleared,setCleared]=useState(null);
+  const clearTimer=useRef(null);
+  const clearAll=()=>{ if(!notes.length)return; setCleared(notes); setNotes([]); setEditingId(null); navigator.vibrate?.(20); clearTimeout(clearTimer.current); clearTimer.current=setTimeout(()=>setCleared(null),8000); };
+  const undoClear=()=>{ if(cleared){ setNotes(cleared); setCleared(null); clearTimeout(clearTimer.current); } };
   return (
     <div ref={canvasRef} style={{flex:1,position:"relative",background:T.canvas,overflow:"hidden",cursor:"crosshair"}}
       onPointerMove={onPointerMove} onPointerUp={onPointerUp} onClick={onCanvasClick}>
+      {notes.length>0&&(
+        <button onClick={e=>{e.stopPropagation();clearAll();}} title="Clear all freeform notes" style={{position:"absolute",top:12,right:16,zIndex:20,display:"flex",alignItems:"center",gap:6,padding:"7px 12px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface,color:T.danger,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif",boxShadow:"0 2px 8px rgba(0,0,0,.15)"}}><Ico n="trash" s={12} c={T.danger}/> Clear all</button>
+      )}
+      {cleared&&(
+        <div onClick={e=>e.stopPropagation()} style={{position:"absolute",top:12,left:"50%",transform:"translateX(-50%)",zIndex:21,display:"flex",alignItems:"center",gap:10,padding:"8px 14px",borderRadius:10,background:T.text,color:T.bg,fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif",boxShadow:"0 4px 16px rgba(0,0,0,.3)"}}>
+          Cleared {cleared.length} {cleared.length===1?"note":"notes"}
+          <button onClick={undoClear} style={{background:T.accent,color:"#fff",border:"none",borderRadius:7,padding:"4px 12px",cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Undo</button>
+        </div>
+      )}
       <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none",opacity:.15}}>
         <defs><pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><path d="M 28 0 L 0 0 0 28" fill="none" stroke={T.textMuted} strokeWidth=".5"/></pattern></defs>
         <rect width="100%" height="100%" fill="url(#grid)"/>
@@ -1570,12 +1607,14 @@ function DrawPad({value,T,onChange}) {
   );
 }
 
-function NotesView({T,notes,setNotes,tasks,onGoToTask}) {
+function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink}) {
   const [sel,setSel]=useState(null);
   const [nt,setNt]=useState("");
   const [mode,setMode]=useState("text");
   const [listOpen,setListOpen]=useState(true);
   const taskNotes=(tasks||[]).filter(t=>t.notes&&t.notes.trim());
+  const linkedNotes=(notes||[]).map(n=>({note:n,task:n.taskId!=null?(tasks||[]).find(t=>t.id===n.taskId):null})).filter(x=>x.task);
+  const selTask=sel&&sel.taskId!=null?(tasks||[]).find(t=>t.id===sel.taskId):null;
   const onEditorDown=e=>{
     if(e.target.closest("input,textarea,select,button,a,canvas")) return;
     const sx=e.clientX,sy=e.clientY; let decided=false;
@@ -1612,9 +1651,18 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask}) {
           {notes.filter(n=>n.pinned).length>0&&<div style={{padding:"6px 4px 2px",fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted}}>All Notes</div>}
           {notes.filter(n=>!n.pinned).map(n=><NRow key={n.id} note={n} T={T} sel={sel} onSel={setSel} onUp={upNote} onDel={delNote}/>)}
         </div>
-        {taskNotes.length>0&&(
+        {(taskNotes.length>0||linkedNotes.length>0)&&(
           <div style={{padding:"4px 8px 16px",borderTop:`1px solid ${T.border}`}}>
             <div style={{padding:"10px 4px 4px",fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted}}>📋 Notes on tasks</div>
+            {linkedNotes.map(({note,task})=>(
+              <div key={"ln"+note.id} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 8px",borderRadius:8,marginBottom:2,background:"transparent"}} onMouseEnter={e=>e.currentTarget.style.background=T.surface2} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                <button onClick={()=>setSel(note)} title="Edit this note here" style={{flex:1,minWidth:0,textAlign:"left",background:"none",border:"none",cursor:"pointer",padding:0,display:"flex",alignItems:"center",gap:5}}>
+                  <span style={{fontSize:11}}>🔗</span>
+                  <span style={{fontSize:12,fontWeight:600,color:T.text,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{note.title||"Untitled"}</span>
+                </button>
+                <button onClick={()=>onGoToTask?.(task)} title={"Go to task: "+task.title} style={{background:"none",border:"none",cursor:"pointer",color:T.accent,fontWeight:700,fontSize:9,whiteSpace:"nowrap",fontFamily:"'DM Sans',sans-serif",padding:"2px 4px"}}>{task.title.slice(0,10)} →</button>
+              </div>
+            ))}
             {taskNotes.map(t=>(
               <div key={t.id} onClick={()=>onGoToTask?.(t)} title="Go to task" style={{padding:"8px",borderRadius:8,cursor:"pointer",marginBottom:2,background:"transparent",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background=T.surface2} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                 <div style={{display:"flex",alignItems:"center",gap:5}}>
@@ -1642,6 +1690,18 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask}) {
             </div>
           </div>
           <div style={{height:3,width:36,borderRadius:2,background:sel.color,marginBottom:14}}/>
+          <div style={{marginBottom:14}}>
+            {selTask?(
+              <div style={{display:"inline-flex",alignItems:"center",gap:7,padding:"6px 10px",borderRadius:9,background:T.accentGlow,border:`1px solid ${T.accent}44`}}>
+                <span style={{fontSize:12}}>🔗</span>
+                <span style={{fontSize:12,color:T.textMuted}}>Linked to task:</span>
+                <button onClick={()=>onGoToTask?.(selTask)} style={{background:"none",border:"none",cursor:"pointer",color:T.accent,fontWeight:700,fontSize:12,fontFamily:"'DM Sans',sans-serif",padding:0}}>{selTask.title} →</button>
+                <button onClick={()=>upNote(sel.id,{taskId:null})} title="Unlink" style={{width:18,height:18,borderRadius:5,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={10}/></button>
+              </div>
+            ):(
+              <button onClick={()=>requestLink?.(t=>upNote(sel.id,{taskId:t.id}))} style={{display:"inline-flex",alignItems:"center",gap:6,padding:"6px 12px",borderRadius:9,border:`1px dashed ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>🔗 Link this note to a task</button>
+            )}
+          </div>
           <div style={{display:"flex",gap:5,marginBottom:14}}>
             {[["text","✏️ Write"],["draw","🎨 Draw"]].map(([m,lbl])=>(
               <button key={m} onClick={()=>setMode(m)} style={{padding:"5px 14px",borderRadius:8,border:`1px solid ${mode===m?T.accent:T.border}`,background:mode===m?T.accentGlow:"transparent",color:mode===m?T.accent:T.textMuted,cursor:"pointer",fontSize:12,fontWeight:mode===m?700:500,fontFamily:"'DM Sans',sans-serif"}}>{lbl}{m==="draw"&&sel.drawing?" •":""}</button>
