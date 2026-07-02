@@ -361,6 +361,8 @@ export default function FlowSpace() {
   const [canvasNotes, setCanvasNotes] = useState([]);
   const [notes, setNotes] = useState([]);
   const [habits, setHabits] = useState([]);
+  const [folderOrg, setFolderOrg] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_folderorg")||'{"order":[],"fg":{},"groups":[]}'); }catch{ return {order:[],fg:{},groups:[]}; } });
+  useEffect(()=>{ try{ localStorage.setItem("fs_folderorg",JSON.stringify(folderOrg)); }catch{} },[folderOrg]);
   const [cats, setCats] = useState(DEFAULT_CATS);
   const [sideOpen, setSideOpen] = useState(true);
   const [defOpen, setDefOpen] = useState(true);
@@ -809,12 +811,8 @@ export default function FlowSpace() {
                 </button>
               )}
               {(defOpen||!sideOpen)&&defaults.map(([name,meta])=>FolderBtn(name,meta,`cat:${name}`,myTasks.filter(t=>t.tag===name&&!t.done).length,meta.icon))}
-              {sideOpen&&customs.length>0&&(
-                <button onClick={()=>setCustomOpen(o=>!o)} style={{width:"100%",display:"flex",alignItems:"center",gap:5,padding:"12px 10px 4px",background:"none",border:"none",cursor:"pointer",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,fontFamily:"'DM Sans',sans-serif"}}>
-                  <Ico n="chevron" s={10} c={T.textMuted} st={{transform:customOpen?"rotate(90deg)":"none",transition:"transform .15s"}}/> My lists
-                </button>
-              )}
-              {(customOpen||!sideOpen)&&customs.map(([name,meta])=>FolderBtn(name,meta,`cat:${name}`,myTasks.filter(t=>t.tag===name&&!t.done).length,meta.icon))}
+              <FolderTree T={T} sideOpen={sideOpen} customs={customs} view={view} onOpen={goView}
+                count={n=>myTasks.filter(t=>t.tag===n&&!t.done).length} org={folderOrg} setOrg={setFolderOrg}/>
               {sideOpen&&(
                 <div style={{padding:"12px 10px 4px",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>Shared with me</div>
               )}
@@ -1999,6 +1997,104 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
         {aiMsg&&<p style={{fontSize:12,lineHeight:1.7,animation:"fadeIn .5s"}}>{aiMsg}</p>}
         {!aiMsg&&!aiLoad&&<p style={{fontSize:12,color:T.textMuted}}>Click "Get Insights" for personalized productivity analysis.</p>}
       </div>
+    </div>
+  );
+}
+
+// Reorderable / groupable "My lists" tree (MS-To-Do style). Order + groups persist in localStorage.
+function FolderTree({T,sideOpen,customs,view,onOpen,count,org,setOrg}) {
+  const [dragName,setDragName]=useState(null);
+  const [drop,setDrop]=useState(null);
+  const dropRef=useRef(null);
+  const [adding,setAdding]=useState(false);
+  const [gName,setGName]=useState("");
+  const [renaming,setRenaming]=useState(null);
+  const [hovName,setHovName]=useState(null);
+  const didDrag=useRef(false);
+
+  const names=customs.map(([n])=>n);
+  const groups=(org.groups||[]).filter(g=>g&&g.id);
+  const gids=new Set(groups.map(g=>g.id));
+  const fg=org.fg||{};
+  const groupOf=n=>gids.has(fg[n])?fg[n]:null;
+  const order=[...(org.order||[]).filter(n=>names.includes(n)),...names.filter(n=>!(org.order||[]).includes(n))];
+  const ungrouped=order.filter(n=>!groupOf(n));
+  const membersOf=id=>order.filter(n=>groupOf(n)===id);
+
+  const applyDrop=(name,d)=>{
+    if(!d) return;
+    let no=order.filter(n=>n!==name); const nf={...fg};
+    if(d.before&&d.before!==name){ const g=groupOf(d.before); if(g)nf[name]=g; else delete nf[name]; const i=no.indexOf(d.before); no.splice(i<0?no.length:i,0,name); }
+    else if(d.group!==undefined){ if(d.group==="__none__")delete nf[name]; else nf[name]=d.group; no.push(name); }
+    else no.push(name);
+    setOrg(o=>({...o,order:no,fg:nf})); navigator.vibrate?.(12);
+  };
+  const startDrag=(e,name)=>{
+    if(e.target.closest("[data-nodrag]")) return;
+    startPressDrag(e,()=>{
+      didDrag.current=true; setDragName(name); navigator.vibrate?.(15);
+      runDrag(
+        ev=>{ const el=document.elementFromPoint(ev.clientX,ev.clientY); const row=el&&el.closest("[data-folderrow]"); const gz=el&&el.closest("[data-groupzone]");
+          if(row) dropRef.current={before:row.getAttribute("data-folderrow")};
+          else if(gz) dropRef.current={group:gz.getAttribute("data-groupzone")};
+          else dropRef.current=null;
+          setDrop(dropRef.current);
+        },
+        ()=>{ const d=dropRef.current; dropRef.current=null; setDrop(null); setDragName(null); applyDrop(name,d); }
+      );
+    });
+  };
+  const addGroup=()=>{ const n=gName.trim(); if(!n){setAdding(false);return;} setOrg(o=>({...o,groups:[...(o.groups||[]),{id:"g"+Date.now(),name:n,collapsed:false}]})); setGName(""); setAdding(false); };
+  const renGroup=(id,n)=>setOrg(o=>({...o,groups:(o.groups||[]).map(g=>g.id===id?{...g,name:n}:g)}));
+  const delGroup=id=>setOrg(o=>({...o,groups:(o.groups||[]).filter(g=>g.id!==id),fg:Object.fromEntries(Object.entries(o.fg||{}).filter(([k,v])=>v!==id))}));
+  const toggleGroup=id=>setOrg(o=>({...o,groups:(o.groups||[]).map(g=>g.id===id?{...g,collapsed:!g.collapsed}:g)}));
+
+  const Row=(name,indent)=>{ const v=`cat:${name}`,active=view===v,meta=customs.find(([n])=>n===name)?.[1]||{},c=count(name),isDrag=dragName===name,isTarget=drop?.before===name;
+    return (
+      <div key={name} data-folderrow={name} onPointerDown={e=>startDrag(e,name)} onMouseEnter={()=>setHovName(name)} onMouseLeave={()=>setHovName(null)}
+        style={{opacity:isDrag?.4:1,borderTop:isTarget?`2px solid ${T.accent}`:"2px solid transparent",touchAction:"none"}}>
+        <button onClick={()=>{ if(didDrag.current){didDrag.current=false;return;} onOpen(v); }} style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:sideOpen?`8px 10px 8px ${10+(indent?16:0)}px`:"8px 0",justifyContent:sideOpen?"flex-start":"center",borderRadius:9,border:"none",cursor:"grab",marginBottom:1,background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
+          {sideOpen&&<Ico n="grip" s={11} c={T.textMuted} st={{opacity:hovName===name?.5:.2,flexShrink:0}}/>}
+          {isImgIcon(meta.icon)?<img src={meta.icon} alt="" style={{width:16,height:16,borderRadius:4,objectFit:"cover",flexShrink:0}}/>:<span style={{fontSize:15,width:16,textAlign:"center",flexShrink:0}}>{meta.icon}</span>}
+          {sideOpen&&<span style={{flex:1,textAlign:"left",whiteSpace:"nowrap",textTransform:"capitalize",overflow:"hidden",textOverflow:"ellipsis"}}>{name}</span>}
+          {sideOpen&&c>0&&<span style={{background:active?T.accent:T.surface3,color:active?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{c}</span>}
+        </button>
+      </div>
+    );
+  };
+
+  if(!sideOpen) return <>{order.map(n=>Row(n,false))}</>;
+  return (
+    <div data-groupzone="__none__">
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 10px 4px"}}>
+        <span style={{fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>My lists</span>
+        <button onClick={()=>setAdding(a=>!a)} title="New group" data-nodrag style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",alignItems:"center",gap:3,fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}><Ico n="plus" s={11}/> Group</button>
+      </div>
+      {adding&&(
+        <div style={{display:"flex",gap:5,padding:"2px 10px 8px"}}>
+          <input autoFocus value={gName} onChange={e=>setGName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addGroup();if(e.key==="Escape")setAdding(false);}} onBlur={addGroup} placeholder="Group name…" style={{flex:1,padding:"5px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+        </div>
+      )}
+      {ungrouped.map(n=>Row(n,false))}
+      {ungrouped.length===0&&order.length>0&&<div style={{padding:"2px 10px 4px",fontSize:10,color:T.textMuted,opacity:.5}}>All lists are grouped ↓</div>}
+      {groups.map(g=>{ const mem=membersOf(g.id),isZone=drop?.group===g.id;
+        return (
+        <div key={g.id} data-groupzone={g.id} style={{marginTop:4,borderRadius:9,background:isZone?T.accentGlow:"transparent",transition:"background .12s"}}>
+          <div onMouseEnter={()=>setHovName("__g"+g.id)} onMouseLeave={()=>setHovName(null)} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 10px 4px"}}>
+            <button onClick={()=>toggleGroup(g.id)} data-nodrag style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0}}><Ico n="chevron" s={11} c={T.textMuted} st={{transform:g.collapsed?"none":"rotate(90deg)",transition:"transform .15s"}}/></button>
+            <span style={{fontSize:14}}>📂</span>
+            {renaming===g.id
+              ? <input autoFocus defaultValue={g.name} onKeyDown={e=>{if(e.key==="Enter"){renGroup(g.id,e.target.value.trim()||g.name);setRenaming(null);}if(e.key==="Escape")setRenaming(null);}} onBlur={e=>{renGroup(g.id,e.target.value.trim()||g.name);setRenaming(null);}} data-nodrag style={{flex:1,minWidth:0,padding:"2px 6px",borderRadius:6,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,fontWeight:700,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+              : <button onClick={()=>toggleGroup(g.id)} onDoubleClick={()=>setRenaming(g.id)} data-nodrag style={{flex:1,minWidth:0,textAlign:"left",background:"none",border:"none",cursor:"pointer",color:T.text,fontSize:11,fontWeight:700,letterSpacing:".3px",textTransform:"uppercase",fontFamily:"'DM Sans',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name} {mem.length>0&&<span style={{color:T.textMuted,fontWeight:600}}>({mem.length})</span>}</button>}
+            {hovName==="__g"+g.id&&<>
+              <button onClick={()=>setRenaming(g.id)} title="Rename group" data-nodrag style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex"}}><Ico n="edit" s={11}/></button>
+              <button onClick={()=>delGroup(g.id)} title="Delete group (keeps lists)" data-nodrag style={{background:"none",border:"none",cursor:"pointer",color:T.danger,display:"flex"}}><Ico n="x" s={11}/></button>
+            </>}
+          </div>
+          {!g.collapsed&&mem.map(n=>Row(n,true))}
+          {!g.collapsed&&mem.length===0&&<div style={{padding:`3px 10px 6px 30px`,fontSize:10,color:T.textMuted,opacity:.5}}>Drag a list here</div>}
+        </div>
+      );})}
     </div>
   );
 }
