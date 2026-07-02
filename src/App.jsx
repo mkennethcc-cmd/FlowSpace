@@ -171,16 +171,24 @@ const parseNL = raw => {
     title = title.replace(wd[0], "");
   }
   else {
-    const m = title.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})\b/i);
-    if (m) {
-      const mon=MONTHS[m[1].toLowerCase().substring(0,3)], day=parseInt(m[2]);
+    const MO="jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+    // "on July 17th," / "July 17"  (month-day) OR  "17th of July" / "17 July"  (day-month). Handles ordinals + a leading "on" + trailing comma.
+    let mon=null, day=null, matched=null;
+    let m = title.match(new RegExp("\\b(?:on\\s+)?("+MO+")\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?","i"));
+    if (m) { mon=MONTHS[m[1].toLowerCase().substring(0,3)]; day=parseInt(m[2]); matched=m[0]; }
+    else {
+      m = title.match(new RegExp("\\b(?:on\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?("+MO+")\\s*,?","i"));
+      if (m) { mon=MONTHS[m[2].toLowerCase().substring(0,3)]; day=parseInt(m[1]); matched=m[0]; }
+    }
+    if (matched!=null && mon!=null && day>=1 && day<=31) {
       let yr=new Date().getFullYear();
-      if (new Date(yr,mon,day)<new Date()) yr++;
+      if (new Date(yr,mon,day)<new Date(new Date().toDateString())) yr++;
       due=ymd(new Date(yr,mon,day));
-      title=title.replace(m[0],"");
+      title=title.replace(matched,"");
     }
   }
-  title=title.replace(/\s{2,}/g," ").replace(/^[\s,\-–]+|[\s,\-–]+$/g,"").trim();
+  // Tidy up leftover spaces / stray commas from stripped date & time tokens (kept conservative so real words like a trailing "on" survive).
+  title=title.replace(/\s{2,}/g," ").replace(/\s+,/g,",").replace(/,\s*,/g,",").replace(/\b(on|at|by)\s+,/gi,",").replace(/\s{2,}/g," ").replace(/^[\s,\-–]+|[\s,\-–]+$/g,"").trim();
   if (!title) title=raw.trim();
   return {title, due, time};
 };
@@ -298,16 +306,23 @@ function nextDue(due, rec){
 
 // Joyful little major-arpeggio chime via Web Audio (no asset). (#29)
 let _actx=null;
-function playComplete(){
+const SOUND_OPTIONS=[
+  {id:"off",label:"Off",hint:"Silent (default)"},
+  {id:"tick",label:"Soft tick",hint:"A quiet, subtle click"},
+  {id:"pop",label:"Pop",hint:"A short bubble pop"},
+  {id:"ding",label:"Ding",hint:"A clean single bell"},
+  {id:"chime",label:"Chime",hint:"Playful 3-note rise"},
+];
+function playComplete(mode){
+  if(!mode||mode==="off") return;
   try{
     _actx=_actx||new (window.AudioContext||window.webkitAudioContext)();
-    const ctx=_actx, now=ctx.currentTime, notes=[523.25,659.25,783.99];
-    notes.forEach((f,i)=>{
-      const o=ctx.createOscillator(), g=ctx.createGain(), t=now+i*0.08;
-      o.type="triangle"; o.frequency.value=f;
-      g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.18,t+0.02); g.gain.exponentialRampToValueAtTime(0.0008,t+0.35);
-      o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t+0.4);
-    });
+    const ctx=_actx, now=ctx.currentTime;
+    const beep=(f,t,dur,vol,type)=>{ const o=ctx.createOscillator(),g=ctx.createGain(); o.type=type||"sine"; o.frequency.value=f; g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vol,t+0.012); g.gain.exponentialRampToValueAtTime(0.0006,t+dur); o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t+dur+0.05); };
+    if(mode==="chime") [523.25,659.25,783.99].forEach((f,i)=>beep(f,now+i*0.08,0.32,0.15,"triangle"));
+    else if(mode==="pop") beep(392,now,0.13,0.13,"sine");
+    else if(mode==="ding") beep(880,now,0.4,0.13,"sine");
+    else beep(600,now,0.07,0.09,"sine"); // tick
   }catch{}
 }
 
@@ -315,6 +330,8 @@ export default function FlowSpace() {
   const [dark, setDark] = useState(true);
   const [scheme, setScheme] = useState(()=>localStorage.getItem("fs_scheme")||"lavender");
   useEffect(()=>{ try{localStorage.setItem("fs_scheme",scheme);}catch{} },[scheme]);
+  const [sound, setSound] = useState(()=>localStorage.getItem("fs_sound")||"off");
+  useEffect(()=>{ try{localStorage.setItem("fs_sound",sound);}catch{} },[sound]);
   const T = mkT(dark, PALETTES[scheme]||PALETTES.lavender);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [imgView, setImgView] = useState(null);
@@ -402,18 +419,15 @@ export default function FlowSpace() {
   useEffect(()=>{ if(keepSelRef.current){ keepSelRef.current=false; return; } setSelTask(null); },[view]);
   const goView=v=>{ setView(v); setSideOpen(false); };
 
-  // Edge swipe: start near the left screen edge, drag right = open sidebar, left = close.
-  // Edge-only so it never conflicts with task-card / canvas swipes further inside the screen.
-  useEffect(()=>{
-    let sx=0,sy=0,edge=false,active=false;
-    const down=e=>{ sx=e.clientX; sy=e.clientY; edge=e.clientX<30; active=true; };
-    const move=e=>{ if(!active||!edge)return; const dx=e.clientX-sx,dy=e.clientY-sy; if(Math.abs(dx)<45||Math.abs(dx)<Math.abs(dy))return; active=false; navigator.vibrate?.(12); setSideOpen(dx>0); };
-    const up=()=>{ active=false; };
-    window.addEventListener("pointerdown",down,{passive:true});
-    window.addEventListener("pointermove",move,{passive:true});
-    window.addEventListener("pointerup",up,{passive:true});
-    return ()=>{ window.removeEventListener("pointerdown",down); window.removeEventListener("pointermove",move); window.removeEventListener("pointerup",up); };
-  },[]);
+  // Swipe anywhere on the sidebar itself: drag right = open, drag left = collapse.
+  // The rail is always visible (60px), so it's always grabbable — no fiddly screen-edge needed.
+  const sideSwipe=e=>{
+    const sx=e.clientX,sy=e.clientY; let done=false;
+    const cleanup=()=>{window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up);window.removeEventListener("pointercancel",up);};
+    const mv=ev=>{ if(done)return; const dx=ev.clientX-sx,dy=ev.clientY-sy; if(Math.abs(dx)<45||Math.abs(dx)<Math.abs(dy)*1.2)return; done=true; cleanup(); navigator.vibrate?.(12); setSideOpen(dx>0); };
+    const up=()=>cleanup();
+    window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up);window.addEventListener("pointercancel",up);
+  };
 
   const refreshShares=useCallback(()=>{
     if(!user) return;
@@ -493,6 +507,8 @@ export default function FlowSpace() {
     const {title,due:parsed,time}=parseNL(input);
     let due=parsed||null;
     if(time && !due) due=tod();
+    // Upcoming lists only future-dated tasks — if none was parsed, default to tomorrow so it actually appears.
+    if(view==="upcoming" && (!due || due<=todStr)) due=addDays(1);
     const remindAt=(time && due)?`${due}T${time}`:null;
     const inCat=view.startsWith("cat:")?view.slice(4):null;
     let ownerId=user?.id, tagForTask=inCat||guessCat(title,cats);
@@ -511,7 +527,7 @@ export default function FlowSpace() {
     const newDone=!task.done;
     setTasks(ts=>ts.map(t=>t.id===id?{...t,done:newDone}:t));
     if(newDone){
-      awardXp("done-"+id,20); markActiveDay(); navigator.vibrate?.(30); playComplete();
+      awardXp("done-"+id,20); markActiveDay(); navigator.vibrate?.(30); playComplete(sound);
       if(task.recurring && !awardedRef.current.has("recur-"+id)){
         awardedRef.current.add("recur-"+id);
         const nd=nextDue(task.due,task.recurring);
@@ -630,7 +646,7 @@ export default function FlowSpace() {
         if(t.remindAt && !t.done && !remindedRef.current.has(t.id) && new Date(t.remindAt).getTime()<=now){
           remindedRef.current.add(t.id);
           try{ localStorage.setItem("fs_reminded",JSON.stringify([...remindedRef.current])); }catch{}
-          navigator.vibrate?.([30,40,30]); playComplete();
+          navigator.vibrate?.([30,40,30]); playComplete(localStorage.getItem("fs_sound")||"off");
           try{ if("Notification"in window&&Notification.permission==="granted") new Notification("FlowSpace reminder ⏰",{body:t.title}); }catch{}
           showToast(`⏰ Reminder: ${t.title}`);
         }
@@ -653,9 +669,11 @@ export default function FlowSpace() {
   const requestLink=cb=>setLinkPick({onPick:cb});
   const linkIdeaToTask=(text,taskId)=>{
     const t=tasks.find(x=>x.id===taskId); if(!t)return;
-    const merged=(t.notes&&t.notes.trim()?t.notes.trim()+"\n":"")+(text||"").trim();
-    updateTask(taskId,{notes:merged});
-    showToast(`Added to "${t.title}" — see it under Notes → Notes on tasks`);
+    const body=(text||"").trim();
+    const ACC=["#3b82f6","#22c55e","#f59e0b","#ef4444","#a855f7","#ec4899","#14b8a6"];
+    const n={id:Date.now(),title:body.slice(0,42)||"Linked note",body,pinned:false,color:ACC[(notes?.length||0)%ACC.length],drawing:null,taskId,created:tod()};
+    setNotes(ns=>[n,...ns]);
+    showToast(`Linked to "${t.title}" — edit it in Notes, or tap it to open the task`);
   };
   const addCanvasTask=(text,myDay)=>{
     const title=(text||"").trim(); if(!title) return;
@@ -711,7 +729,7 @@ export default function FlowSpace() {
       {delCatModal&&<DelCatModal T={T} name={delCatModal} count={tasks.filter(t=>t.owner===user?.id&&t.tag===delCatModal).length} onConfirm={a=>confirmDeleteCat(delCatModal,a)} onClose={()=>setDelCatModal(null)}/>}
       {linkPick&&<LinkPicker T={T} tasks={myTasks.filter(t=>!t.done)} onPick={t=>{linkPick.onPick(t);setLinkPick(null);}} onClose={()=>setLinkPick(null)}/>}
       {cmdOpen&&<CmdPalette T={T} tasks={tasks} onClose={()=>setCmdOpen(false)} onGo={v=>{setView(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}}/>}
-      <aside style={{width:sideOpen?224:60,transition:"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:30}}>
+      <aside onPointerDown={sideSwipe} style={{width:sideOpen?224:60,transition:"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:30,touchAction:"pan-y"}}>
         <div style={{padding:"18px 14px",display:"flex",alignItems:"center",gap:9}}>
           <button onClick={()=>setAboutOpen(true)} title="About FlowSpace" style={{display:"flex",alignItems:"center",gap:9,background:"none",border:"none",cursor:"pointer",padding:0,flex:1,minWidth:0}}>
             <div style={{width:30,height:30,borderRadius:9,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:`0 3px 12px ${T.accent}55`}}>
@@ -828,10 +846,11 @@ export default function FlowSpace() {
           </div>
         )}
         <div style={{flex:1,overflow:"hidden",display:"flex"}}>
-          {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask} requestLink={requestLink} onCanvasToNote={linkIdeaToTask}/>}
+          {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask} requestLink={requestLink} onCanvasToNote={linkIdeaToTask} onOpenTask={setSelTask} selId={selTask?.id}/>}
+          {view==="matrix"&&selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={id=>{deleteTask(id);setSelTask(null);}} onDuplicate={duplicateTask} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} canDelete={canDeleteTask(selTask)} onViewImage={setImgView} onClose={()=>setSelTask(null)}/>}
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
-          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
+          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
           {(["myday","flagged","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView}/>
           )}
@@ -1237,7 +1256,16 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
   return (
     <div onPointerDown={panelDown} style={{width:280,borderLeft:`1px solid ${T.border}`,background:T.surface,overflowY:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:9,animation:closeX?"none":"slideIn .2s ease",flexShrink:0,transform:closeX?`translateX(${closeX}px)`:"none",transition:closeX?"none":"transform .2s ease"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-        <input value={ttl} onChange={e=>setTtl(e.target.value)} onBlur={()=>{const v=ttl.trim();if(v&&v!==task.title)onUpdate(task.id,{title:v});else if(!v)setTtl(task.title||"");}} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();}} placeholder="Task name" title="Tap to rename" style={{fontFamily:"'Sora',sans-serif",fontSize:13,fontWeight:600,flex:1,lineHeight:1.4,background:"transparent",border:"none",borderBottom:`1px dashed ${T.border}`,outline:"none",color:T.text,minWidth:0,padding:"1px 0"}}/>
+        <input value={ttl} onChange={e=>setTtl(e.target.value)} onBlur={()=>{
+          const raw=ttl.trim();
+          if(!raw){setTtl(task.title||"");return;}
+          const p=parseNL(raw); const newTitle=p.title||raw; const patch={};
+          if(newTitle!==task.title) patch.title=newTitle;
+          if(p.due && p.due!==task.due) patch.due=p.due;
+          if(p.time){ const d=p.due||task.due||tod(); const ra=`${d}T${p.time}`; if(ra!==task.remindAt){ patch.remindAt=ra; if(!task.due&&!p.due&&!patch.due) patch.due=d; } }
+          if(Object.keys(patch).length) onUpdate(task.id,patch);
+          setTtl(newTitle);
+        }} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();}} placeholder="Task name" title="Tap to rename — you can retype a date/time and it re-schedules" style={{fontFamily:"'Sora',sans-serif",fontSize:13,fontWeight:600,flex:1,lineHeight:1.4,background:"transparent",border:"none",borderBottom:`1px dashed ${T.border}`,outline:"none",color:T.text,minWidth:0,padding:"1px 0"}}/>
         <button onClick={onClose} style={{width:24,height:24,borderRadius:6,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginLeft:6}}><Ico n="x" s={13}/></button>
       </div>
       <DL label="Notes" T={T}>
@@ -1347,7 +1375,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
 }
 const DL=({label,T,children})=><div><span style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>{label}</span>{children}</div>;
 
-function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,canvasNotes,setCanvasNotes,onCanvasToTask,requestLink,onCanvasToNote}) {
+function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,canvasNotes,setCanvasNotes,onCanvasToTask,requestLink,onCanvasToNote,onOpenTask,selId}) {
   const [tab,setTab]=useState("matrix");
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
@@ -1367,13 +1395,13 @@ function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDa
         </div>
       </div>
       {tab==="matrix"
-        ?<EisenhowerMatrix T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay}/>
+        ?<EisenhowerMatrix T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} onOpenTask={onOpenTask} selId={selId}/>
         :<FreeformCanvas T={T} notes={canvasNotes} setNotes={setCanvasNotes} onCanvasToTask={onCanvasToTask} requestLink={requestLink} onCanvasToNote={onCanvasToNote}/>}
     </div>
   );
 }
 
-function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay}) {
+function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,onOpenTask,selId}) {
   const [addingIn,setAddingIn]=useState(null);
   const [newText,setNewText]=useState("");
   const [dragOver,setDragOver]=useState(null);
@@ -1397,7 +1425,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
       );
     });
   };
-  const editNote=task=>{ if(didDragNote.current){ didDragNote.current=false; return; } setEditId(task.id); };
+  const openNote=task=>{ if(didDragNote.current){ didDragNote.current=false; return; } onOpenTask?.(task); };
   return (
     <div style={{flex:1,display:"grid",gridTemplateColumns:"1fr 1fr",gridTemplateRows:"1fr 1fr",gap:1,background:T.border,overflow:"hidden"}}>
       {QUAD_ORDER.map(qid=>{const q=QUAD[qid];return(
@@ -1412,7 +1440,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
           </div>
           <div onClick={e=>{if(e.target===e.currentTarget&&addingIn!==qid){setAddingIn(qid);setNewText("");}}} style={{flex:1,padding:10,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:7,alignContent:"flex-start",cursor:"text"}}>
             {tasks.filter(t=>t.quadrant===qid&&!t.done).map(task=>(
-              <MNote key={task.id} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} onClickNote={()=>editNote(task)} dragging={dragId===task.id} inMyDay={task.mydayDate===tod()} onRemove={()=>updateTask(task.id,{quadrant:null})} onDelete={()=>deleteTask(task.id)} onToMyDay={()=>toggleMyDay(task.id)} editing={editId===task.id} onEdit={()=>setEditId(task.id)} onSave={txt=>{const t=txt.trim();if(t)updateTask(task.id,{title:t});setEditId(null);}}/>
+              <MNote key={task.id} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} onClickNote={()=>openNote(task)} dragging={dragId===task.id} sel={selId===task.id} inMyDay={task.mydayDate===tod()} onRemove={()=>updateTask(task.id,{quadrant:null})} onDelete={()=>deleteTask(task.id)} onToMyDay={()=>toggleMyDay(task.id)} editing={editId===task.id} onEdit={()=>setEditId(task.id)} onSave={txt=>{const t=txt.trim();if(t)updateTask(task.id,{title:t});setEditId(null);}}/>
             ))}
             {addingIn===qid&&(
               <div style={{width:"100%",animation:"slideIn .2s ease"}}>
@@ -1433,7 +1461,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
   );
 }
 
-function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit,onSave,onDown,onClickNote,dragging,inMyDay}) {
+function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit,onSave,onDown,onClickNote,dragging,inMyDay,sel}) {
   const [hov,setHov]=useState(false);
   const [et,setEt]=useState(task.title);
   if (editing) return (
@@ -1444,7 +1472,7 @@ function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit
   return (
     <div onPointerDown={e=>onDown?.(e,task)} onClick={()=>onClickNote?.()}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
-      style={{padding:"7px 9px",borderRadius:8,background:qColor+"1a",border:`1px solid ${qColor}44`,fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:160,cursor:"grab",transition:"transform .15s,box-shadow .15s",transform:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",boxShadow:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
+      style={{padding:"7px 9px",borderRadius:8,background:qColor+"1a",border:`1px solid ${sel?qColor:qColor+"44"}`,boxShadow:sel?`0 0 0 2px ${qColor}55`:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:160,cursor:"grab",transition:"transform .15s,box-shadow .15s",transform:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
       <div style={{borderLeft:`3px solid ${qColor}`,paddingLeft:6}}>{task.title}</div>
       {catMeta&&<div style={{marginTop:4,fontSize:9,color:catMeta.color,fontWeight:600}}>{catMeta.icon} {task.tag}</div>}
       {!editing&&(
@@ -1839,7 +1867,7 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
   );
 }
 
-function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon,onDeleteCat,deletedCats,onRestoreCat,onPurgeCat}) {
+function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSound,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon,onDeleteCat,deletedCats,onRestoreCat,onPurgeCat}) {
   const importRef=useRef(null);
   const iconFileRef=useRef(null);
   const [shareFolderName,setShareFolderName]=useState("");
@@ -1955,6 +1983,15 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,onExport,onI
             <div style={{display:"flex",gap:6}}>
               {Object.entries(PALETTES).map(([key,p])=>(
                 <button key={key} title={p.name} onClick={()=>setScheme(key)} style={{width:24,height:24,borderRadius:"50%",cursor:"pointer",background:`linear-gradient(135deg,${p.accent},${p.accentAlt})`,border:`2px solid ${scheme===key?T.text:"transparent"}`,boxShadow:scheme===key?`0 0 0 2px ${T.surface}`:"none"}}/>
+              ))}
+            </div>
+          )},
+        ]},
+        {title:"Sounds",rows:[
+          {label:"Complete sound",desc:"Plays when you check off a task — off by default",el:(
+            <div style={{display:"flex",flexWrap:"wrap",gap:5,justifyContent:"flex-end",maxWidth:230}}>
+              {SOUND_OPTIONS.map(o=>(
+                <button key={o.id} title={o.hint} onClick={()=>{setSound(o.id);playComplete(o.id);}} style={{padding:"5px 10px",borderRadius:8,border:`1px solid ${sound===o.id?T.accent:T.border}`,background:sound===o.id?T.accentGlow:"transparent",color:sound===o.id?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:sound===o.id?700:500,fontFamily:"'DM Sans',sans-serif"}}>{o.label}</button>
               ))}
             </div>
           )},
