@@ -160,8 +160,8 @@ const parseNL = raw => {
   else if (/\btonight\b/i.test(title)) { due=tod(); title=title.replace(/\btonight\b/gi,""); if(!time)time="20:00"; }
   else if (/\btoday\b/i.test(title)) { due=tod(); title=title.replace(/\btoday\b/gi,""); }
   else if (/\bnext week\b/i.test(title)) { due=addDays(7); title=title.replace(/\bnext week\b/gi,""); }
-  else if (title.match(/\b(?:this\s+)?(next\s+)?(?:on\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)\b/i)) {
-    const wd = title.match(/\b(?:this\s+)?(next\s+)?(?:on\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)\b/i);
+  else if (title.match(/\b(?:this\s+)?(next\s+)?(?:(?:on|at)\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)\b/i)) {
+    const wd = title.match(/\b(?:this\s+)?(next\s+)?(?:(?:on|at)\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)\b/i);
     const key = wd[2].toLowerCase().substring(0,3), target = WEEKDAYS[key], cur = new Date().getDay();
     let delta = (target - cur + 7) % 7;
     if (delta === 0) delta = 7;
@@ -174,10 +174,10 @@ const parseNL = raw => {
     const MO="jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
     // "on July 17th," / "July 17"  (month-day) OR  "17th of July" / "17 July"  (day-month). Handles ordinals + a leading "on" + trailing comma.
     let mon=null, day=null, matched=null;
-    let m = title.match(new RegExp("\\b(?:on\\s+)?("+MO+")\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?","i"));
+    let m = title.match(new RegExp("\\b(?:(?:on|at)\\s+)?("+MO+")\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?","i"));
     if (m) { mon=MONTHS[m[1].toLowerCase().substring(0,3)]; day=parseInt(m[2]); matched=m[0]; }
     else {
-      m = title.match(new RegExp("\\b(?:on\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?("+MO+")\\s*,?","i"));
+      m = title.match(new RegExp("\\b(?:(?:on|at)\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?("+MO+")\\s*,?","i"));
       if (m) { mon=MONTHS[m[2].toLowerCase().substring(0,3)]; day=parseInt(m[1]); matched=m[0]; }
     }
     if (matched!=null && mon!=null && day>=1 && day<=31) {
@@ -307,19 +307,27 @@ function nextDue(due, rec){
 // Joyful little major-arpeggio chime via Web Audio (no asset). (#29)
 let _actx=null;
 const SOUND_OPTIONS=[
-  {id:"off",label:"Off",hint:"Silent (default)"},
-  {id:"tick",label:"Soft tick",hint:"A quiet, subtle click"},
-  {id:"pop",label:"Pop",hint:"A short bubble pop"},
+  {id:"soft",label:"Soft chime",hint:"Quick 2-note chime (default)"},
   {id:"ding",label:"Ding",hint:"A clean single bell"},
-  {id:"chime",label:"Chime",hint:"Playful 3-note rise"},
+  {id:"pop",label:"Pop",hint:"A short bubble pop"},
+  {id:"tick",label:"Tick",hint:"A tiny, subtle click"},
+  {id:"chime",label:"Full chime",hint:"Playful 3-note rise"},
+  {id:"custom",label:"My sound ⬆",hint:"Upload your own audio clip"},
+  {id:"off",label:"Off",hint:"Silent"},
 ];
+let _customAudio=null;
 function playComplete(mode){
   if(!mode||mode==="off") return;
+  if(mode==="custom"){
+    try{ const url=localStorage.getItem("fs_sound_custom"); if(!url) return; _customAudio=_customAudio||new Audio(); _customAudio.src=url; _customAudio.currentTime=0; _customAudio.play().catch(()=>{}); }catch{}
+    return;
+  }
   try{
     _actx=_actx||new (window.AudioContext||window.webkitAudioContext)();
     const ctx=_actx, now=ctx.currentTime;
     const beep=(f,t,dur,vol,type)=>{ const o=ctx.createOscillator(),g=ctx.createGain(); o.type=type||"sine"; o.frequency.value=f; g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vol,t+0.012); g.gain.exponentialRampToValueAtTime(0.0006,t+dur); o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t+dur+0.05); };
-    if(mode==="chime") [523.25,659.25,783.99].forEach((f,i)=>beep(f,now+i*0.08,0.32,0.15,"triangle"));
+    if(mode==="soft"){ beep(659.25,now,0.14,0.13,"sine"); beep(987.77,now+0.085,0.16,0.12,"sine"); } // short rising 2-note chime (default)
+    else if(mode==="chime") [523.25,659.25,783.99].forEach((f,i)=>beep(f,now+i*0.08,0.32,0.15,"triangle"));
     else if(mode==="pop") beep(392,now,0.13,0.13,"sine");
     else if(mode==="ding") beep(880,now,0.4,0.13,"sine");
     else beep(600,now,0.07,0.09,"sine"); // tick
@@ -330,8 +338,8 @@ export default function FlowSpace() {
   const [dark, setDark] = useState(true);
   const [scheme, setScheme] = useState(()=>localStorage.getItem("fs_scheme")||"lavender");
   useEffect(()=>{ try{localStorage.setItem("fs_scheme",scheme);}catch{} },[scheme]);
-  const [sound, setSound] = useState(()=>localStorage.getItem("fs_sound")||"off");
-  useEffect(()=>{ try{localStorage.setItem("fs_sound",sound);}catch{} },[sound]);
+  const [sound, setSound] = useState(()=>localStorage.getItem("fs_sound2")||"soft");
+  useEffect(()=>{ try{localStorage.setItem("fs_sound2",sound);}catch{} },[sound]);
   const T = mkT(dark, PALETTES[scheme]||PALETTES.lavender);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [imgView, setImgView] = useState(null);
@@ -649,7 +657,7 @@ export default function FlowSpace() {
         if(t.remindAt && !t.done && !remindedRef.current.has(t.id) && new Date(t.remindAt).getTime()<=now){
           remindedRef.current.add(t.id);
           try{ localStorage.setItem("fs_reminded",JSON.stringify([...remindedRef.current])); }catch{}
-          navigator.vibrate?.([30,40,30]); playComplete(localStorage.getItem("fs_sound")||"off");
+          navigator.vibrate?.([30,40,30]); playComplete(localStorage.getItem("fs_sound2")||"soft");
           try{ if("Notification"in window&&Notification.permission==="granted") new Notification("FlowSpace reminder ⏰",{body:t.title}); }catch{}
           showToast(`⏰ Reminder: ${t.title}`);
         }
@@ -672,11 +680,23 @@ export default function FlowSpace() {
   const requestLink=cb=>setLinkPick({onPick:cb});
   const linkIdeaToTask=(text,taskId)=>{
     const t=tasks.find(x=>x.id===taskId); if(!t)return;
-    const body=(text||"").trim();
+    const txt=(text||"").trim();
     const ACC=["#3b82f6","#22c55e","#f59e0b","#ef4444","#a855f7","#ec4899","#14b8a6"];
-    const n={id:Date.now(),title:body.slice(0,42)||"Linked note",body,pinned:false,color:ACC[(notes?.length||0)%ACC.length],drawing:null,taskId,created:tod()};
+    const n={id:Date.now(),title:txt||"Linked note",body:"",pinned:false,color:ACC[(notes?.length||0)%ACC.length],drawing:null,taskId,created:tod()};
     setNotes(ns=>[n,...ns]);
-    showToast(`Linked to "${t.title}" — edit it in Notes, or tap it to open the task`);
+    foldNoteIntoTask(n,t);
+    showToast(`Linked to "${t.title}" — pulled its date/time into the task`);
+  };
+  // When a note links to a task, surface it on the task and parse any date/time out of it.
+  const foldNoteIntoTask=(note,task)=>{
+    if(!note||!task) return;
+    const src=`${note.title||""} ${note.body||""}`.trim();
+    const p=parseNL(src); const patch={};
+    if(p.due && p.due!==task.due) patch.due=p.due;
+    if(p.time){ const d=p.due||task.due||tod(); const ra=`${d}T${p.time}`; if(ra!==task.remindAt){ patch.remindAt=ra; if(!patch.due&&!task.due) patch.due=d; } }
+    const noteText=(note.body&&note.body.trim())?note.body.trim():(note.title||"").trim();
+    if(noteText){ const existing=(task.notes||"").trim(); if(!existing.includes(noteText)) patch.notes=(existing?existing+"\n":"")+noteText; }
+    if(Object.keys(patch).length) updateTask(task.id,patch);
   };
   const addCanvasTask=(text,myDay)=>{
     const title=(text||"").trim(); if(!title) return;
@@ -852,7 +872,7 @@ export default function FlowSpace() {
         <div style={{flex:1,overflow:"hidden",display:"flex"}}>
           {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask} requestLink={requestLink} onCanvasToNote={linkIdeaToTask} onOpenTask={setSelTask} selId={selTask?.id}/>}
           {view==="matrix"&&selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={id=>{deleteTask(id);setSelTask(null);}} onDuplicate={duplicateTask} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} canDelete={canDeleteTask(selTask)} onViewImage={setImgView} onClose={()=>setSelTask(null)}/>}
-          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
+          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onLinkNote={foldNoteIntoTask} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} onCheckin={key=>{awardXp("habit-"+key,15);markActiveDay();navigator.vibrate?.(20);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
@@ -1660,7 +1680,7 @@ function DrawPad({value,T,onChange}) {
   );
 }
 
-function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink}) {
+function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,onLinkNote}) {
   const [sel,setSel]=useState(null);
   const [nt,setNt]=useState("");
   const [mode,setMode]=useState("text");
@@ -1752,7 +1772,7 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink}) {
                 <button onClick={()=>upNote(sel.id,{taskId:null})} title="Unlink" style={{width:18,height:18,borderRadius:5,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={10}/></button>
               </div>
             ):(
-              <button onClick={()=>requestLink?.(t=>upNote(sel.id,{taskId:t.id}))} style={{display:"inline-flex",alignItems:"center",gap:6,padding:"6px 12px",borderRadius:9,border:`1px dashed ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>🔗 Link this note to a task</button>
+              <button onClick={()=>requestLink?.(t=>{upNote(sel.id,{taskId:t.id});onLinkNote?.(sel,t);})} style={{display:"inline-flex",alignItems:"center",gap:6,padding:"6px 12px",borderRadius:9,border:`1px dashed ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>🔗 Link this note to a task</button>
             )}
           </div>
           <div style={{display:"flex",gap:5,marginBottom:14}}>
@@ -1986,6 +2006,14 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
 function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSound,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon,onDeleteCat,deletedCats,onRestoreCat,onPurgeCat}) {
   const importRef=useRef(null);
   const iconFileRef=useRef(null);
+  const soundFileRef=useRef(null);
+  const onSoundFile=file=>{
+    if(!file) return;
+    if(file.size>900000){ alert("That audio file is a bit large (keep it under ~0.9 MB / a 1–2 second clip). Try a shorter sound."); return; }
+    const r=new FileReader();
+    r.onload=()=>{ try{ localStorage.setItem("fs_sound_custom",r.result); setSound("custom"); playComplete("custom"); }catch{ alert("Couldn't save that sound — try a smaller clip."); } };
+    r.readAsDataURL(file);
+  };
   const [shareFolderName,setShareFolderName]=useState("");
   const [shareEmail,setShareEmail]=useState("");
   const [sharePerm,setSharePerm]=useState("edit");
@@ -2127,11 +2155,13 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
           )},
         ]},
         {title:"Sounds",rows:[
-          {label:"Complete sound",desc:"Plays when you check off a task — off by default",el:(
-            <div style={{display:"flex",flexWrap:"wrap",gap:5,justifyContent:"flex-end",maxWidth:230}}>
+          {label:"Complete sound",desc:"Plays when you check off a task. Tap one to preview.",el:(
+            <div style={{display:"flex",flexWrap:"wrap",gap:5,justifyContent:"flex-end",maxWidth:250}}>
+              <input ref={soundFileRef} type="file" accept="audio/*" style={{display:"none"}} onChange={e=>{if(e.target.files[0])onSoundFile(e.target.files[0]);e.target.value="";}}/>
               {SOUND_OPTIONS.map(o=>(
-                <button key={o.id} title={o.hint} onClick={()=>{setSound(o.id);playComplete(o.id);}} style={{padding:"5px 10px",borderRadius:8,border:`1px solid ${sound===o.id?T.accent:T.border}`,background:sound===o.id?T.accentGlow:"transparent",color:sound===o.id?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:sound===o.id?700:500,fontFamily:"'DM Sans',sans-serif"}}>{o.label}</button>
+                <button key={o.id} title={o.hint} onClick={()=>{ if(o.id==="custom"){ if(localStorage.getItem("fs_sound_custom")){ setSound("custom"); playComplete("custom"); } else soundFileRef.current?.click(); } else { setSound(o.id); playComplete(o.id); } }} style={{padding:"5px 10px",borderRadius:8,border:`1px solid ${sound===o.id?T.accent:T.border}`,background:sound===o.id?T.accentGlow:"transparent",color:sound===o.id?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:sound===o.id?700:500,fontFamily:"'DM Sans',sans-serif"}}>{o.label}</button>
               ))}
+              {localStorage.getItem("fs_sound_custom")&&<button onClick={()=>soundFileRef.current?.click()} style={{padding:"5px 10px",borderRadius:8,border:`1px dashed ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:500,fontFamily:"'DM Sans',sans-serif"}}>Replace file</button>}
             </div>
           )},
         ]},
