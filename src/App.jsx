@@ -1078,24 +1078,25 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
     };
     window.addEventListener("pointermove",mv); window.addEventListener("pointerup",up); window.addEventListener("pointercancel",up);
   };
+  // Card body = swipe only (horizontal). Vertical is left to the browser so the list scrolls on mobile.
+  // Reordering is initiated from the dedicated grip handle (gripDown) so it never fights the scroll.
   const onCardDown=(e,id)=>{
-    if(e.target.closest("button")) return;
+    if(e.target.closest("button,[data-grip]")) return;
     didDragRef.current=false;
-    const sx=e.clientX, sy=e.clientY, type=e.pointerType;
-    let decided=false, timer=null;
-    const teardown=()=>{ clearTimeout(timer); window.removeEventListener("pointermove",probe); window.removeEventListener("pointerup",end); window.removeEventListener("pointercancel",end); };
+    const sx=e.clientX, sy=e.clientY;
+    let decided=false;
+    const teardown=()=>{ window.removeEventListener("pointermove",probe); window.removeEventListener("pointerup",end); window.removeEventListener("pointercancel",end); };
     const probe=ev=>{
       if(decided) return;
       const dx=ev.clientX-sx, dy=ev.clientY-sy;
       if(Math.abs(dx)<8 && Math.abs(dy)<8) return;
       decided=true; teardown();
       if(Math.abs(dx)>Math.abs(dy)) beginSwipe(id,sx); // horizontal → swipe (right = My Day, left = delete)
-      else beginReorder(id);
     };
     const end=()=>teardown();
-    if(type!=="mouse") timer=setTimeout(()=>{ if(!decided){ decided=true; teardown(); beginReorder(id); } }, 220);
     window.addEventListener("pointermove",probe); window.addEventListener("pointerup",end); window.addEventListener("pointercancel",end);
   };
+  const gripDown=(e,id)=>{ e.stopPropagation(); e.preventDefault(); beginReorder(id); };
   const selectCard=task=>{ if(didDragRef.current){ didDragRef.current=false; return; } setSelTask(task); };
   return (
     <div style={{flex:1,display:"flex",overflow:"hidden"}}>
@@ -1183,7 +1184,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
         <div style={{display:"flex",flexDirection:"column",gap:4}}>
           {sortList(show.filter(t=>!t.done)).map(task=>(
             <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id} dropTarget={dropId===task.id}
-              onDown={sort==="smart"?onCardDown:undefined} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true} onToggleMyDay={onToggleMyDay}/>
+              onDown={onCardDown} onGrip={sort==="smart"?gripDown:undefined} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true} onToggleMyDay={onToggleMyDay}/>
           ))}
           {show.filter(t=>t.done).length>0&&<>
             <div style={{fontSize:10,color:T.textMuted,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",padding:"10px 2px 4px",display:"flex",alignItems:"center",gap:5}}>
@@ -1208,7 +1209,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   );
 }
 
-function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,onDown,swipeX=0,canDelete=true,onToggleMyDay}) {
+function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,onDown,onGrip,swipeX=0,canDelete=true,onToggleMyDay}) {
   const inMyDay=task.mydayDate===tod();
   const [hov,setHov]=useState(false);
   const ov=task.due&&task.due<tod()&&!task.done;
@@ -1232,7 +1233,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)} onClick={()=>onSel(task)}
       style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:swipeX!==0?T.bg:(sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent"),border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:swipeX!==0?"none":"all .12s",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:swipeX!==0?`translateX(${swipeX}px)`:dragging?"scale(.98)":"scale(1)",userSelect:"none",WebkitUserSelect:"none",touchAction:"pan-y"}}>
       {task.color&&<div style={{position:"absolute",left:0,top:8,bottom:8,width:3,borderRadius:2,background:task.color}}/>}
-      <div style={{color:T.textMuted,opacity:hov?.6:0,transition:"opacity .15s",flexShrink:0,marginTop:1,cursor:"grab",paddingLeft:task.color?4:0}}><Ico n="grip" s={14} c={T.textMuted}/></div>
+      {onGrip&&<div data-grip onPointerDown={e=>onGrip(e,task.id)} onClick={e=>e.stopPropagation()} title="Drag to reorder" style={{color:T.textMuted,opacity:hov?.7:.35,transition:"opacity .15s",flexShrink:0,alignSelf:"center",cursor:"grab",padding:"6px 2px",margin:"-6px 0",paddingLeft:task.color?4:2,touchAction:"none"}}><Ico n="grip" s={16} c={T.textMuted}/></div>}
       <button onClick={e=>{e.stopPropagation();onToggle(task.id);}} style={{width:19,height:19,borderRadius:5,border:`2px solid ${task.done?T.success:qColor||T.border}`,background:task.done?T.success:"transparent",cursor:"pointer",flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s"}}>
         {task.done&&<Ico n="check" s={10} c="#fff" st={{animation:"checkB .25s ease"}}/>}
       </button>
@@ -1249,6 +1250,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
           {task.remindAt&&fmtClock(task.remindAt)&&<span style={{fontSize:10,color:T.accent,fontWeight:600,display:"inline-flex",alignItems:"center",gap:2}}>⏰ {fmtClock(task.remindAt)}</span>}
           {task.subtasks?.length>0&&<span style={{fontSize:10,color:T.textMuted}}>{task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</span>}
         </div>
+        {task.notes&&task.notes.trim()&&<div style={{fontSize:11,color:T.textMuted,marginTop:3,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",opacity:.85,display:"flex",alignItems:"center",gap:4}}><Ico n="note" s={10} c={T.textMuted}/>{task.notes.trim().split("\n")[0].slice(0,70)}</div>}
       </div>
       <div style={{display:"flex",alignItems:"center",gap:2,flexShrink:0,marginTop:1}}>
         {qColor&&<div title={QUAD[task.quadrant]?.label} style={{width:6,height:6,borderRadius:"50%",background:qColor,marginRight:3}}/>}
@@ -1460,8 +1462,8 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
       if(mode==="swipe"){ didDragNote.current=true; setSwipeX(Math.max(-120,Math.min(dx,120))); return; }
       if(mode) return;
       if(Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)){ mode="swipe"; clearTimeout(hold); setSwipeId(task.id); setSwipeX(dx); }
-      else if(Math.abs(dy)>10&&type!=="mouse"){ cleanup(); } // vertical → let the quadrant scroll
       else if(type==="mouse"&&(Math.abs(dx)>4||Math.abs(dy)>4)){ startDrag(); }
+      // touch: vertical movement no longer cancels — the card is touchAction:none, so the hold-timer starts the drag reliably
     };
     const up=ev=>{
       if(mode==="swipe"){ const dx=ev.clientX-sx; cleanup(); setSwipeId(null); setSwipeX(0);
@@ -1687,8 +1689,11 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,onLinkNote}) {
   const [nt,setNt]=useState("");
   const [mode,setMode]=useState("text");
   const [listOpen,setListOpen]=useState(true);
-  const taskNotes=(tasks||[]).filter(t=>t.notes&&t.notes.trim());
   const linkedNotes=(notes||[]).map(n=>({note:n,task:n.taskId!=null?(tasks||[]).find(t=>t.id===n.taskId):null})).filter(x=>x.task);
+  const linkedTaskIds=new Set(linkedNotes.map(x=>x.task.id));
+  // A linked note lives only in the "Notes on tasks" section — keep it out of the main list, and out of the task-notes rows (no dupes).
+  const plainNotes=(notes||[]).filter(n=>n.taskId==null);
+  const taskNotes=(tasks||[]).filter(t=>t.notes&&t.notes.trim()&&!linkedTaskIds.has(t.id));
   const selTask=sel&&sel.taskId!=null?(tasks||[]).find(t=>t.id===sel.taskId):null;
   const onEditorDown=e=>{
     if(e.target.closest("input,textarea,select,button,a,canvas")) return;
@@ -1718,13 +1723,13 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,onLinkNote}) {
             <button onClick={addNote} style={{width:30,height:30,borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="plus" s={14} c="#fff"/></button>
           </div>
         </div>
-        {notes.filter(n=>n.pinned).length>0&&<>
+        {plainNotes.filter(n=>n.pinned).length>0&&<>
           <div style={{padding:"0 12px 2px",fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted}}>📌 Pinned</div>
-          <div style={{padding:"0 8px"}}>{notes.filter(n=>n.pinned).map(n=><NRow key={n.id} note={n} T={T} sel={sel} onSel={setSel} onUp={upNote} onDel={delNote}/>)}</div>
+          <div style={{padding:"0 8px"}}>{plainNotes.filter(n=>n.pinned).map(n=><NRow key={n.id} note={n} T={T} sel={sel} onSel={setSel} onUp={upNote} onDel={delNote}/>)}</div>
         </>}
         <div style={{padding:"0 8px 10px"}}>
-          {notes.filter(n=>n.pinned).length>0&&<div style={{padding:"6px 4px 2px",fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted}}>All Notes</div>}
-          {notes.filter(n=>!n.pinned).map(n=><NRow key={n.id} note={n} T={T} sel={sel} onSel={setSel} onUp={upNote} onDel={delNote}/>)}
+          {plainNotes.filter(n=>n.pinned).length>0&&<div style={{padding:"6px 4px 2px",fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted}}>All Notes</div>}
+          {plainNotes.filter(n=>!n.pinned).map(n=><NRow key={n.id} note={n} T={T} sel={sel} onSel={setSel} onUp={upNote} onDel={delNote}/>)}
         </div>
         {(taskNotes.length>0||linkedNotes.length>0)&&(
           <div style={{padding:"4px 8px 16px",borderTop:`1px solid ${T.border}`}}>
@@ -1829,6 +1834,15 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
   const add=(nm,ic)=>{ const n=(nm??name).trim(); if(!n)return; const h={id:Date.now(),name:n,icon:ic||icon,color:color,cadence,log:[],created:todStr}; setHabits(hs=>[...hs,h]); setName(""); };
   const toggle=h=>{ const done=has(h,todStr); setHabits(hs=>hs.map(x=>x.id===h.id?{...x,log:done?(x.log||[]).filter(d=>d!==todStr):[...(x.log||[]),todStr]}:x)); if(!done) onCheckin?.(h.id); else navigator.vibrate?.(8); };
   const del=id=>setHabits(hs=>hs.filter(h=>h.id!==id));
+  const [dragId,setDragId]=useState(null);
+  const dropRef=useRef(null);
+  const gripDown=(e,id)=>{ e.stopPropagation(); e.preventDefault(); setDragId(id); navigator.vibrate?.(15);
+    runDrag(
+      ev=>{ const el=document.elementFromPoint(ev.clientX,ev.clientY); const c=el&&el.closest("[data-habit-id]"); dropRef.current=c?c.getAttribute("data-habit-id"):null; },
+      ()=>{ const from=id,to=dropRef.current; dropRef.current=null; setDragId(null);
+        if(to&&String(from)!==String(to)) setHabits(hs=>{ const arr=[...hs]; const fi=arr.findIndex(x=>String(x.id)===String(from)),ti=arr.findIndex(x=>String(x.id)===String(to)); if(fi<0||ti<0)return hs; const [m]=arr.splice(fi,1); arr.splice(ti,0,m); return arr; }); }
+    );
+  };
   const streakOf=h=>{ const set=new Set(h.log||[]); let i=set.has(todStr)?0:1, s=0; for(;;){ if(set.has(addDays(-i))){s++;i++;} else break; if(s>999)break; } return s; };
   const weekCount=h=>{ const set=new Set(h.log||[]); let c=0; for(let i=0;i<7;i++) if(set.has(addDays(-i))) c++; return c; };
   const last=n=>[...Array(n)].map((_,i)=>addDays(-(n-1-i)));
@@ -1879,8 +1893,9 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12}}>
         {habits.map(h=>{ const done=has(h,todStr); const st=streakOf(h); const wc=weekCount(h);
           return (
-          <div key={h.id} style={{background:T.surface,border:`1px solid ${done?h.color+"66":T.border}`,borderRadius:14,padding:14,position:"relative",transition:"border-color .2s"}}>
-            <div style={{display:"flex",alignItems:"center",gap:11}}>
+          <div key={h.id} data-habit-id={h.id} style={{background:T.surface,border:`1px solid ${dragId===h.id?T.accent:done?h.color+"66":T.border}`,borderRadius:14,padding:14,position:"relative",transition:"border-color .2s",opacity:dragId===h.id?.5:1}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div data-grip onPointerDown={e=>gripDown(e,h.id)} title="Drag to reorder" style={{cursor:"grab",color:T.textMuted,opacity:.4,flexShrink:0,touchAction:"none",padding:"8px 2px",margin:"-8px 0"}}><Ico n="grip" s={16} c={T.textMuted}/></div>
               <button onClick={()=>toggle(h)} title={done?"Undo today":"Mark done today"} style={{width:46,height:46,borderRadius:"50%",flexShrink:0,cursor:"pointer",border:`2px solid ${h.color}`,background:done?h.color:"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,transition:"all .18s",transform:done?"scale(1)":"scale(1)"}}>
                 <span style={{filter:done?"grayscale(0)":"grayscale(.1)",opacity:done?1:.85}}>{done?"✓":h.icon}</span>
               </button>
@@ -2087,7 +2102,7 @@ function FolderTree({T,sideOpen,customs,view,onOpen,count,org,setOrg,onAddList})
         <div key={g.id} data-groupzone={g.id} style={{marginTop:4,borderRadius:9,background:isZone?T.accentGlow:"transparent",transition:"background .12s"}}>
           <div onMouseEnter={()=>setHovName("__g"+g.id)} onMouseLeave={()=>setHovName(null)} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 10px 4px"}}>
             <button onClick={()=>toggleGroup(g.id)} data-nodrag style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0}}><Ico n="chevron" s={11} c={T.textMuted} st={{transform:g.collapsed?"none":"rotate(90deg)",transition:"transform .15s"}}/></button>
-            <span style={{fontSize:14}}>📂</span>
+            <span style={{fontSize:14}}>{guessIcon(g.name)}</span>
             {renaming===g.id
               ? <input autoFocus defaultValue={g.name} onKeyDown={e=>{if(e.key==="Enter"){renGroup(g.id,e.target.value.trim()||g.name);setRenaming(null);}if(e.key==="Escape")setRenaming(null);}} onBlur={e=>{renGroup(g.id,e.target.value.trim()||g.name);setRenaming(null);}} data-nodrag style={{flex:1,minWidth:0,padding:"2px 6px",borderRadius:6,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,fontWeight:700,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
               : <button onClick={()=>toggleGroup(g.id)} onDoubleClick={()=>setRenaming(g.id)} data-nodrag style={{flex:1,minWidth:0,textAlign:"left",background:"none",border:"none",cursor:"pointer",color:T.text,fontSize:11,fontWeight:700,letterSpacing:".3px",textTransform:"uppercase",fontFamily:"'DM Sans',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name} {mem.length>0&&<span style={{color:T.textMuted,fontWeight:600}}>({mem.length})</span>}</button>}
@@ -2126,7 +2141,21 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
   useEffect(()=>{try{localStorage.setItem("fs_contacts",JSON.stringify(contacts));}catch{}},[contacts]);
   const knownEmails=[...new Set([...(ownedShares||[]).map(s=>s.shared_with_email),...Object.keys(contacts)])].filter(Boolean);
   const setNick=(em,nm)=>setContacts(c=>({...c,[em]:nm}));
-  const doInvite=()=>{ const em=shareEmail.trim().toLowerCase(); if(shareFolderName&&em){ onShareFolder(shareFolderName,em,sharePerm==="delete"); setContacts(c=>em in c?c:{...c,[em]:""}); setShareEmail(""); } };
+  const doInvite=()=>{
+    if(!shareFolderName){ alert("Pick a folder to share first."); return; }
+    const raw=shareEmail.trim(); if(!raw) return;
+    const isEmail=/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw);
+    let em=raw.toLowerCase();
+    if(!isEmail){
+      // Typed a nickname instead of an email? Resolve it to that person's saved email.
+      const match=Object.entries(contacts).find(([mail,nick])=>nick&&nick.trim().toLowerCase()===raw.toLowerCase());
+      if(match) em=match[0];
+      else { alert(`"${raw}" isn't a valid email or a saved nickname. Enter an email like name@example.com.`); return; }
+    }
+    onShareFolder(shareFolderName,em,sharePerm==="delete");
+    setContacts(c=>em in c?c:{...c,[em]:""});
+    setShareEmail("");
+  };
   const [iconPicked,setIconPicked]=useState(false);
   const [notifs,setNotifs]=useState(true);
   const [focus,setFocus]=useState(false);
