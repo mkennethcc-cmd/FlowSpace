@@ -402,7 +402,7 @@ export default function FlowSpace() {
   useEffect(()=>{
     const fn=e=>{
       if((e.metaKey||e.ctrlKey)&&e.key==="k"){e.preventDefault();setCmdOpen(c=>!c);}
-      if(e.key==="Escape"){setCmdOpen(false);setShowSearch(false);}
+      if(e.key==="Escape"){ setCmdOpen(false); setShowSearch(false); const ae=document.activeElement; if(!ae||!/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) setSelTask(null); }
     };
     window.addEventListener("keydown",fn);
     return ()=>window.removeEventListener("keydown",fn);
@@ -434,6 +434,8 @@ export default function FlowSpace() {
   // Swipe anywhere on the sidebar itself: drag right = open, drag left = collapse.
   // The rail is always visible (60px), so it's always grabbable — no fiddly screen-edge needed.
   const sideSwipe=e=>{
+    // Don't hijack folder drag-and-drop (folders live inside data-folderrow / data-groupzone).
+    if(e.target.closest("[data-folderrow],[data-groupzone]")) return;
     const sx=e.clientX,sy=e.clientY; let done=false;
     const cleanup=()=>{window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up);window.removeEventListener("pointercancel",up);};
     const mv=ev=>{ if(done)return; const dx=ev.clientX-sx,dy=ev.clientY-sy; if(Math.abs(dx)<45||Math.abs(dx)<Math.abs(dy)*1.2)return; done=true; cleanup(); navigator.vibrate?.(12); setSideOpen(dx>0); };
@@ -812,7 +814,8 @@ export default function FlowSpace() {
               )}
               {(defOpen||!sideOpen)&&defaults.map(([name,meta])=>FolderBtn(name,meta,`cat:${name}`,myTasks.filter(t=>t.tag===name&&!t.done).length,meta.icon))}
               <FolderTree T={T} sideOpen={sideOpen} customs={customs} view={view} onOpen={goView}
-                count={n=>myTasks.filter(t=>t.tag===n&&!t.done).length} org={folderOrg} setOrg={setFolderOrg}/>
+                count={n=>myTasks.filter(t=>t.tag===n&&!t.done).length} org={folderOrg} setOrg={setFolderOrg}
+                onAddList={name=>{ const n=(name||"").trim().toLowerCase(); if(!n||cats[n]) return false; setCats(c=>({...c,[n]:{color:CAT_COLORS[Object.keys(c).length%CAT_COLORS.length],icon:guessIcon(n)}})); return true; }}/>
               {sideOpen&&(
                 <div style={{padding:"12px 10px 4px",fontSize:9,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>Shared with me</div>
               )}
@@ -871,7 +874,7 @@ export default function FlowSpace() {
           {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask} requestLink={requestLink} onCanvasToNote={linkIdeaToTask} onOpenTask={setSelTask} selId={selTask?.id}/>}
           {view==="matrix"&&selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={id=>{deleteTask(id);setSelTask(null);}} onDuplicate={duplicateTask} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} canDelete={canDeleteTask(selTask)} onViewImage={setImgView} onClose={()=>setSelTask(null)}/>}
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onLinkNote={foldNoteIntoTask} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
-          {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} onCheckin={key=>{awardXp("habit-"+key,15);markActiveDay();navigator.vibrate?.(20);}}/>}
+          {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} onCheckin={key=>{awardXp("habit-"+key+"-"+todStr,15);markActiveDay();navigator.vibrate?.(20);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
           {(["myday","flagged","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
@@ -1282,6 +1285,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
         <input value={ttl} onChange={e=>setTtl(e.target.value)} onBlur={()=>{
           const raw=ttl.trim();
           if(!raw){setTtl(task.title||"");return;}
+          if(raw===(task.title||"")) return; // unchanged → don't re-parse (avoids stripping a legit word on a no-op blur)
           const p=parseNL(raw); const newTitle=p.title||raw; const patch={};
           if(newTitle!==task.title) patch.title=newTitle;
           if(p.due && p.due!==task.due) patch.due=p.due;
@@ -2002,12 +2006,13 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
 }
 
 // Reorderable / groupable "My lists" tree (MS-To-Do style). Order + groups persist in localStorage.
-function FolderTree({T,sideOpen,customs,view,onOpen,count,org,setOrg}) {
+function FolderTree({T,sideOpen,customs,view,onOpen,count,org,setOrg,onAddList}) {
   const [dragName,setDragName]=useState(null);
   const [drop,setDrop]=useState(null);
   const dropRef=useRef(null);
   const [adding,setAdding]=useState(false);
   const [gName,setGName]=useState("");
+  const [newList,setNewList]=useState("");
   const [renaming,setRenaming]=useState(null);
   const [hovName,setHovName]=useState(null);
   const didDrag=useRef(false);
@@ -2095,6 +2100,10 @@ function FolderTree({T,sideOpen,customs,view,onOpen,count,org,setOrg}) {
           {!g.collapsed&&mem.length===0&&<div style={{padding:`3px 10px 6px 30px`,fontSize:10,color:T.textMuted,opacity:.5}}>Drag a list here</div>}
         </div>
       );})}
+      <div style={{display:"flex",alignItems:"center",gap:6,padding:"6px 10px 4px"}}>
+        <Ico n="plus" s={12} c={T.textMuted}/>
+        <input value={newList} onChange={e=>setNewList(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"&&newList.trim()){ if(onAddList?.(newList)!==false){ setNewList(""); } } }} placeholder="New list…" style={{flex:1,minWidth:0,padding:"4px 6px",borderRadius:6,border:"none",borderBottom:`1px dashed ${T.border}`,background:"transparent",color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+      </div>
     </div>
   );
 }

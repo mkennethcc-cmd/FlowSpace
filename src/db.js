@@ -115,7 +115,7 @@ export const db = {
   async syncNotes(notes, uid) {
     await supabase.from("notes").delete().eq("user_id", uid);
     if (notes.length) await supabase.from("notes").insert(
-      notes.map(n => ({ user_id: uid, title: n.title, body: n.body || "", pinned: n.pinned || false, color: n.color, drawing: n.drawing || null, task_id: n.taskId != null ? n.taskId : null }))
+      notes.map(n => ({ user_id: uid, title: n.title, body: n.body || "", pinned: n.pinned || false, color: n.color, drawing: n.drawing || null, task_id: n.taskId != null ? n.taskId : null, ...(n.created ? { created_at: new Date(n.created + "T12:00:00").toISOString() } : {}) }))
     );
   },
 
