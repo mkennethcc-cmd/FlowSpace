@@ -149,46 +149,39 @@ const fmtClock = iso => {
 
 const parseNL = raw => {
   let title = raw.trim(), due = null, time = null;
-  // Time: "at 4pm", "4:30pm", "9am", "at 16:00"
-  const tm = title.match(/\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i) || title.match(/\bat\s+(\d{1,2}):(\d{2})\b/);
-  if (tm) {
-    let h=parseInt(tm[1]); const min=tm[2]?parseInt(tm[2]):0; const ap=(tm[3]||"").toLowerCase();
-    if(ap==="pm"&&h<12) h+=12; if(ap==="am"&&h===12) h=0;
-    if(h<24&&min<60){ time=`${String(h).padStart(2,"0")}:${String(min).padStart(2,"0")}`; title=title.replace(tm[0],""); }
+  // Time — a range first ("6-8pm" → starts 6pm), then a single time ("at 4pm", "9am", "at 16:00").
+  const pad=x=>String(x).padStart(2,"0");
+  const setTime=(h,m,ap)=>{ h=parseInt(h); m=m?parseInt(m):0; ap=(ap||"").toLowerCase(); if(ap==="pm"&&h<12)h+=12; if(ap==="am"&&h===12)h=0; if(h<24&&m<60) time=`${pad(h)}:${pad(m)}`; };
+  const rg = title.match(/\b(?:from\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:[-–—]|to)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+  if (rg) { setTime(rg[1],rg[2],rg[5]); title=title.replace(rg[0],""); }
+  else {
+    const tm = title.match(/\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i) || title.match(/\bat\s+(\d{1,2}):(\d{2})\b/);
+    if (tm) { setTime(tm[1],tm[2],tm[3]); title=title.replace(tm[0],""); }
   }
+  const MO="jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+  const WD="sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?";
   if (/\btomorrow\b/i.test(title)) { due=addDays(1); title=title.replace(/\btomorrow\b/gi,""); }
   else if (/\btonight\b/i.test(title)) { due=tod(); title=title.replace(/\btonight\b/gi,""); if(!time)time="20:00"; }
   else if (/\btoday\b/i.test(title)) { due=tod(); title=title.replace(/\btoday\b/gi,""); }
   else if (/\bnext week\b/i.test(title)) { due=addDays(7); title=title.replace(/\bnext week\b/gi,""); }
-  else if (title.match(/\b(?:this\s+)?(next\s+)?(?:(?:on|at)\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)\b/i)) {
-    const wd = title.match(/\b(?:this\s+)?(next\s+)?(?:(?:on|at)\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)\b/i);
-    const key = wd[2].toLowerCase().substring(0,3), target = WEEKDAYS[key], cur = new Date().getDay();
-    let delta = (target - cur + 7) % 7;
-    if (delta === 0) delta = 7;
-    if (wd[1]) delta += 7;
-    const d = new Date(); d.setDate(d.getDate() + delta);
-    due = ymd(d);
-    title = title.replace(wd[0], "");
-  }
   else {
-    const MO="jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
-    // "on July 17th," / "July 17"  (month-day) OR  "17th of July" / "17 July"  (day-month). Handles ordinals + a leading "on" + trailing comma.
+    // Explicit month-date wins over a bare weekday: "Friday July 24" means July 24 (which is a Friday), not "next Friday".
     let mon=null, day=null, matched=null;
     let m = title.match(new RegExp("\\b(?:(?:on|at)\\s+)?("+MO+")\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?","i"));
     if (m) { mon=MONTHS[m[1].toLowerCase().substring(0,3)]; day=parseInt(m[2]); matched=m[0]; }
-    else {
-      m = title.match(new RegExp("\\b(?:(?:on|at)\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?("+MO+")\\s*,?","i"));
-      if (m) { mon=MONTHS[m[2].toLowerCase().substring(0,3)]; day=parseInt(m[1]); matched=m[0]; }
-    }
+    else { m = title.match(new RegExp("\\b(?:(?:on|at)\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?("+MO+")\\s*,?","i")); if (m) { mon=MONTHS[m[2].toLowerCase().substring(0,3)]; day=parseInt(m[1]); matched=m[0]; } }
     if (matched!=null && mon!=null && day>=1 && day<=31) {
       let yr=new Date().getFullYear();
       if (new Date(yr,mon,day)<new Date(new Date().toDateString())) yr++;
       due=ymd(new Date(yr,mon,day));
-      title=title.replace(matched,"");
+      title=title.replace(matched,"").replace(new RegExp("\\b(?:this\\s+)?(?:next\\s+)?(?:(?:on|at)\\s+)?(?:"+WD+")\\b","i"),""); // drop a redundant weekday word
+    } else {
+      const wd = title.match(new RegExp("\\b(?:this\\s+)?(next\\s+)?(?:(?:on|at)\\s+)?("+WD+")\\b","i"));
+      if (wd) { const key=wd[2].toLowerCase().substring(0,3), target=WEEKDAYS[key], cur=new Date().getDay(); let delta=(target-cur+7)%7; if(delta===0)delta=7; if(wd[1])delta+=7; const d=new Date(); d.setDate(d.getDate()+delta); due=ymd(d); title=title.replace(wd[0],""); }
     }
   }
   // Tidy up leftover spaces / stray commas from stripped date & time tokens (kept conservative so real words like a trailing "on" survive).
-  title=title.replace(/\s{2,}/g," ").replace(/\s+,/g,",").replace(/,\s*,/g,",").replace(/\b(on|at|by)\s+,/gi,",").replace(/\s{2,}/g," ").replace(/^[\s,\-–]+|[\s,\-–]+$/g,"").trim();
+  title=title.replace(/\s{2,}/g," ").replace(/\s+,/g,",").replace(/,\s*,/g,",").replace(/\b(on|at|by)\s+,/gi,",").replace(/\s{2,}/g," ").replace(/^[\s,\-–—]+|[\s,\-–—]+$/g,"").trim();
   if (!title) title=raw.trim();
   return {title, due, time};
 };
@@ -694,12 +687,12 @@ export default function FlowSpace() {
   // When a note links to a task, surface it on the task and parse any date/time out of it.
   const foldNoteIntoTask=(note,task)=>{
     if(!note||!task) return;
-    const src=`${note.title||""} ${note.body||""}`.trim();
-    const p=parseNL(src); const patch={};
+    const p=parseNL((note.title||"").trim()); const patch={};
     if(p.due && p.due!==task.due) patch.due=p.due;
     if(p.time){ const d=p.due||task.due||tod(); const ra=`${d}T${p.time}`; if(ra!==task.remindAt){ patch.remindAt=ra; if(!patch.due&&!task.due) patch.due=d; } }
-    const noteText=(note.body&&note.body.trim())?note.body.trim():(note.title||"").trim();
-    if(noteText){ const existing=(task.notes||"").trim(); if(!existing.includes(noteText)) patch.notes=(existing?existing+"\n":"")+noteText; }
+    // Store the CLEANED text (date/time stripped) so the task preview reads "go to shop", not "go to shop at 4pm".
+    const noteText=[p.title,(note.body||"").trim()].filter(Boolean).join(" — ").trim();
+    if(noteText){ const existing=(task.notes||"").trim(); if(!existing.includes(p.title||noteText)) patch.notes=(existing?existing+"\n":"")+noteText; }
     if(Object.keys(patch).length) updateTask(task.id,patch);
   };
   const addCanvasTask=(text,myDay)=>{
@@ -1304,8 +1297,11 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
             <button key={lbl} onClick={()=>onUpdate(task.id,{due:val||null})} style={{padding:"3px 9px",borderRadius:7,border:`1px solid ${task.due===val&&val?T.accent:T.border}`,background:task.due===val&&val?T.accentGlow:"transparent",color:task.due===val&&val?T.accent:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{lbl}</button>
           ))}
         </div>
-        <div style={{display:"flex",gap:6}}>
+        <div style={{display:"flex",gap:6,marginBottom:6}}>
           <input type="date" value={task.due||""} onChange={e=>onUpdate(task.id,{due:e.target.value})} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+          <input type="time" title="Set a time (also sets a reminder)" value={task.remindAt&&task.remindAt.includes("T")?task.remindAt.split("T")[1].slice(0,5):""} onChange={e=>{ const t=e.target.value; if(t){ const d=task.due||tod(); onUpdate(task.id,{remindAt:`${d}T${t}`,...(task.due?{}:{due:d})}); } else onUpdate(task.id,{remindAt:null}); }} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${task.remindAt?T.accent:T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+        </div>
+        <div style={{display:"flex",gap:6}}>
           <select value={task.recurring&&task.recurring.startsWith("custom:")?"custom":(task.recurring||"")} onChange={e=>onUpdate(task.id,{recurring:e.target.value==="custom"?"custom:1:weeks":(e.target.value||null)})} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",cursor:"pointer"}}>
             <option value="">No repeat</option>
             <option value="daily">Daily</option>
@@ -1800,7 +1796,7 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
   const [cadence,setCadence]=useState(7);
   const [pick,setPick]=useState(false);
   const has=(h,d)=>(h.log||[]).includes(d);
-  const add=(nm,ic)=>{ const n=(nm??name).trim(); if(!n)return; const h={id:Date.now(),name:n,icon:ic||icon,color:color,cadence,log:[],created:todStr}; setHabits(hs=>[...hs,h]); setName(""); };
+  const add=(nm,ic)=>{ const n=(nm??name).trim(); if(!n)return; setHabits(hs=>{ const id=Math.max(Date.now(),hs.reduce((m,h)=>Math.max(m,h.id||0),0)+1); return [...hs,{id,name:n,icon:ic||icon,color,cadence,log:[],created:todStr}]; }); setName(""); };
   const toggle=h=>{ const done=has(h,todStr); setHabits(hs=>hs.map(x=>x.id===h.id?{...x,log:done?(x.log||[]).filter(d=>d!==todStr):[...(x.log||[]),todStr]}:x)); if(!done) onCheckin?.(h.id); else navigator.vibrate?.(8); };
   const del=id=>setHabits(hs=>hs.filter(h=>h.id!==id));
   const [dragId,setDragId]=useState(null);
