@@ -8,7 +8,10 @@
       "Bash(npm --version)",
       "Bash(unzip -l files.zip)",
       "Bash(unzip -o files.zip -d ./extracted/)",
-      "PowerShell(npm run build 2>&1)"
+      "PowerShell(npm run build 2>&1)",
+      "Bash(rm -f .claude/launch.json)",
+      "Bash(npm run *)",
+      "Bash(cd \"/c/Claude Files Download/FlowSpace Project\" && tail -5 \"/c/Users/mkenn/.claude/projects/C--Claude-Files-Download-FlowSpace-Project/memory/flowspace-phase1-decisions.md\")"
     ]
   }
 }

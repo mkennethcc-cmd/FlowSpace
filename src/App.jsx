@@ -138,25 +138,26 @@ const fmtDate = s => {
   return d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
 };
 
-// Reminder time "…THH:MM" → "4:00 PM"
-const fmtClock = iso => {
-  if (!iso || !iso.includes("T")) return "";
-  const t = iso.split("T")[1]; if (!t) return "";
+// "…THH:MM" or bare "HH:MM" → "4:00 PM"
+const fmtClock = s => {
+  if (!s) return "";
+  const t = s.includes("T") ? s.split("T")[1] : s; if (!t) return "";
   let [h,m] = t.split(":"); h = parseInt(h,10); if (isNaN(h)) return "";
   const ap = h>=12 ? "PM" : "AM"; h = h%12 || 12;
   return `${h}:${m||"00"} ${ap}`;
 };
 
 const parseNL = raw => {
-  let title = raw.trim(), due = null, time = null;
-  // Time — a range first ("6-8pm" → starts 6pm), then a single time ("at 4pm", "9am", "at 16:00").
+  let title = raw.trim(), due = null, time = null, endTime = null;
+  // Time — a range first ("6-8pm" → 6pm start + 8pm end), then a single time, then a bare "at 4" (assume PM for 1–6).
   const pad=x=>String(x).padStart(2,"0");
-  const setTime=(h,m,ap)=>{ h=parseInt(h); m=m?parseInt(m):0; ap=(ap||"").toLowerCase(); if(ap==="pm"&&h<12)h+=12; if(ap==="am"&&h===12)h=0; if(h<24&&m<60) time=`${pad(h)}:${pad(m)}`; };
+  const to24=(h,m,ap)=>{ h=parseInt(h); m=m?parseInt(m):0; ap=(ap||"").toLowerCase(); if(ap==="pm"&&h<12)h+=12; if(ap==="am"&&h===12)h=0; return (h>=0&&h<24&&m<60)?`${pad(h)}:${pad(m)}`:null; };
   const rg = title.match(/\b(?:from\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:[-–—]|to)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
-  if (rg) { setTime(rg[1],rg[2],rg[5]); title=title.replace(rg[0],""); }
+  if (rg) { time=to24(rg[1],rg[2],rg[5]); endTime=to24(rg[3],rg[4],rg[5]); title=title.replace(rg[0],""); }
   else {
     const tm = title.match(/\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i) || title.match(/\bat\s+(\d{1,2}):(\d{2})\b/);
-    if (tm) { setTime(tm[1],tm[2],tm[3]); title=title.replace(tm[0],""); }
+    if (tm) { time=to24(tm[1],tm[2],tm[3]); title=title.replace(tm[0],""); }
+    else { const bh = title.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\b/i); if (bh) { let h=parseInt(bh[1]); const m=bh[2]||"00"; if(h>=1&&h<=6)h+=12; if(h>=0&&h<24){ time=`${pad(h)}:${pad(parseInt(m))}`; title=title.replace(bh[0],""); } } }
   }
   const MO="jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
   const WD="sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?";
@@ -183,7 +184,7 @@ const parseNL = raw => {
   // Tidy up leftover spaces / stray commas from stripped date & time tokens (kept conservative so real words like a trailing "on" survive).
   title=title.replace(/\s{2,}/g," ").replace(/\s+,/g,",").replace(/,\s*,/g,",").replace(/\b(on|at|by)\s+,/gi,",").replace(/\s{2,}/g," ").replace(/^[\s,\-–—]+|[\s,\-–—]+$/g,"").trim();
   if (!title) title=raw.trim();
-  return {title, due, time};
+  return {title, due, time, endTime};
 };
 
 const DEFAULT_CATS = {
@@ -512,7 +513,7 @@ export default function FlowSpace() {
 
   const addTask = useCallback(()=>{
     if (!input.trim()) return;
-    const {title,due:parsed,time}=parseNL(input);
+    const {title,due:parsed,time,endTime}=parseNL(input);
     let due=parsed||null;
     if(time && !due) due=tod();
     // Upcoming lists only future-dated tasks — if none was parsed, default to tomorrow so it actually appears.
@@ -521,7 +522,7 @@ export default function FlowSpace() {
     const inCat=view.startsWith("cat:")?view.slice(4):null;
     let ownerId=user?.id, tagForTask=inCat||guessCat(title,cats);
     if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"); ownerId=rest.slice(0,ci); tagForTask=rest.slice(ci+1); }
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="flagged",notes:"",color:null,subtasks:[],recurring:null,quadrant:null,remindAt,attachments:[],owner:ownerId,position:Date.now(),mydayDate:view==="myday"?todStr:null};
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="flagged",notes:"",color:null,subtasks:[],recurring:null,quadrant:null,remindAt,endTime:(time&&endTime)?endTime:null,attachments:[],owner:ownerId,position:Date.now(),mydayDate:view==="myday"?todStr:null};
     setTasks(ts=>[t,...ts]);
     setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
     if(view==="myday") markActiveDay();
@@ -689,7 +690,7 @@ export default function FlowSpace() {
     if(!note||!task) return;
     const p=parseNL((note.title||"").trim()); const patch={};
     if(p.due && p.due!==task.due) patch.due=p.due;
-    if(p.time){ const d=p.due||task.due||tod(); const ra=`${d}T${p.time}`; if(ra!==task.remindAt){ patch.remindAt=ra; if(!patch.due&&!task.due) patch.due=d; } }
+    if(p.time){ const d=p.due||task.due||tod(); const ra=`${d}T${p.time}`; if(ra!==task.remindAt){ patch.remindAt=ra; if(!patch.due&&!task.due) patch.due=d; } if(p.endTime&&p.endTime!==task.endTime) patch.endTime=p.endTime; }
     // Store the CLEANED text (date/time stripped) so the task preview reads "go to shop", not "go to shop at 4pm".
     const noteText=[p.title,(note.body||"").trim()].filter(Boolean).join(" — ").trim();
     if(noteText){ const existing=(task.notes||"").trim(); if(!existing.includes(p.title||noteText)) patch.notes=(existing?existing+"\n":"")+noteText; }
@@ -1040,22 +1041,26 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
     };
     window.addEventListener("pointermove",mv); window.addEventListener("pointerup",up); window.addEventListener("pointercancel",up);
   };
-  // Card body = swipe only (horizontal). Vertical is left to the browser so the list scrolls on mobile.
-  // Reordering is initiated from the dedicated grip handle (gripDown) so it never fights the scroll.
+  // Card body gestures: desktop → drag vertically anywhere to reorder, horizontally to swipe.
+  // Mobile → quick horizontal = swipe, quick vertical = scroll, press-and-hold anywhere = reorder.
+  // (The grip handle also reorders, for discoverability.)
   const onCardDown=(e,id)=>{
     if(e.target.closest("button,[data-grip]")) return;
     didDragRef.current=false;
-    const sx=e.clientX, sy=e.clientY;
-    let decided=false;
-    const teardown=()=>{ window.removeEventListener("pointermove",probe); window.removeEventListener("pointerup",end); window.removeEventListener("pointercancel",end); };
+    const sx=e.clientX, sy=e.clientY, type=e.pointerType;
+    let decided=false, timer=null;
+    const teardown=()=>{ clearTimeout(timer); window.removeEventListener("pointermove",probe); window.removeEventListener("pointerup",end); window.removeEventListener("pointercancel",end); };
     const probe=ev=>{
       if(decided) return;
       const dx=ev.clientX-sx, dy=ev.clientY-sy;
       if(Math.abs(dx)<8 && Math.abs(dy)<8) return;
       decided=true; teardown();
-      if(Math.abs(dx)>Math.abs(dy)) beginSwipe(id,sx); // horizontal → swipe (right = My Day, left = delete)
+      if(Math.abs(dx)>Math.abs(dy)) beginSwipe(id,sx);   // horizontal → swipe
+      else if(type==="mouse") beginReorder(id);          // desktop vertical drag anywhere → reorder
+      // touch vertical: let the list scroll (reorder comes from the hold timer below)
     };
     const end=()=>teardown();
+    if(type!=="mouse") timer=setTimeout(()=>{ if(!decided){ decided=true; teardown(); beginReorder(id); } }, 260); // touch long-press anywhere → reorder
     window.addEventListener("pointermove",probe); window.addEventListener("pointerup",end); window.addEventListener("pointercancel",end);
   };
   const gripDown=(e,id)=>{ e.stopPropagation(); e.preventDefault(); beginReorder(id); };
@@ -1209,7 +1214,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
         <div style={{display:"flex",alignItems:"center",gap:5,marginTop:3,flexWrap:"wrap"}}>
           {task.tag&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:catColor+"22",color:catColor,fontWeight:600,display:"inline-flex",alignItems:"center",gap:3}}>{catMeta?.icon&&<CatIcon icon={catMeta.icon} size={10}/>}{task.tag}</span>}
           {task.due&&<span style={{fontSize:11,color:ov?T.danger:T.textMuted,fontWeight:ov?700:400}}>{fmtDate(task.due)}</span>}
-          {task.remindAt&&fmtClock(task.remindAt)&&<span style={{fontSize:10,color:T.accent,fontWeight:600,display:"inline-flex",alignItems:"center",gap:2}}>⏰ {fmtClock(task.remindAt)}</span>}
+          {task.remindAt&&fmtClock(task.remindAt)&&<span style={{fontSize:10,color:T.accent,fontWeight:600,display:"inline-flex",alignItems:"center",gap:2}}>⏰ {fmtClock(task.remindAt)}{task.endTime?` – ${fmtClock(task.endTime)}`:""}</span>}
           {task.subtasks?.length>0&&<span style={{fontSize:10,color:T.textMuted}}>{task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</span>}
         </div>
         {task.notes&&task.notes.trim()&&<div style={{fontSize:11,color:T.textMuted,marginTop:3,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",opacity:.85,display:"flex",alignItems:"center",gap:4}}><Ico n="note" s={10} c={T.textMuted}/>{task.notes.trim().split("\n")[0].slice(0,70)}</div>}
@@ -1402,6 +1407,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
   const [dragId,setDragId]=useState(null);
   const [editId,setEditId]=useState(null);
   const dragOverRef=useRef(null);
+  const dropCardRef=useRef(null);
   useEffect(()=>{
     const fn=e=>{if(e.key==="n"&&!e.metaKey&&!e.ctrlKey&&document.activeElement.tagName!=="INPUT"&&document.activeElement.tagName!=="TEXTAREA")setAddingIn("q1");};
     window.addEventListener("keydown",fn); return ()=>window.removeEventListener("keydown",fn);
@@ -1418,8 +1424,16 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
     const cleanup=()=>{ clearTimeout(hold); window.removeEventListener("pointermove",mv); window.removeEventListener("pointerup",up); window.removeEventListener("pointercancel",up); };
     const startDrag=()=>{ if(mode)return; mode="drag"; clearTimeout(hold); setDragId(task.id); navigator.vibrate?.(20);
       runDrag(
-        ev=>{ didDragNote.current=true; const el=document.elementFromPoint(ev.clientX,ev.clientY); const qd=el&&el.closest("[data-quadrant]"); dragOverRef.current=qd?qd.getAttribute("data-quadrant"):null; setDragOver(dragOverRef.current); },
-        ()=>{ const q=dragOverRef.current; if(q&&q!==task.quadrant) updateTask(task.id,{quadrant:q}); dragOverRef.current=null; setDragId(null); setDragOver(null); }
+        ev=>{ didDragNote.current=true; const el=document.elementFromPoint(ev.clientX,ev.clientY); const qd=el&&el.closest("[data-quadrant]"); const card=el&&el.closest("[data-mnote-id]"); dragOverRef.current=qd?qd.getAttribute("data-quadrant"):null; dropCardRef.current=(card&&card.getAttribute("data-mnote-id")!==String(task.id))?card.getAttribute("data-mnote-id"):null; setDragOver(dragOverRef.current); },
+        ()=>{ const q=dragOverRef.current, over=dropCardRef.current; dragOverRef.current=null; dropCardRef.current=null; setDragId(null); setDragOver(null);
+          if(over){ // dropped on another card → reorder within that card's quadrant (also moves quadrant if different)
+            const tgt=tasks.find(t=>String(t.id)===over); if(tgt){ const quad=tgt.quadrant;
+              const cards=tasks.filter(t=>t.quadrant===quad&&!t.done&&t.id!==task.id).sort((a,b)=>(b.position||0)-(a.position||0));
+              const ti=cards.findIndex(t=>String(t.id)===over); const above=cards[ti-1];
+              const newPos=above?((above.position||0)+(tgt.position||0))/2:(tgt.position||0)+1;
+              updateTask(task.id,{position:newPos,...(quad!==task.quadrant?{quadrant:quad}:{})}); }
+          } else if(q&&q!==task.quadrant){ updateTask(task.id,{quadrant:q}); }
+        }
       );
     };
     const mv=ev=>{
@@ -1455,7 +1469,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
             <button onClick={()=>{setAddingIn(qid);setNewText("");}} style={{width:22,height:22,borderRadius:5,border:"none",cursor:"pointer",background:q.color+"22",color:q.color,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="plus" s={12} c={q.color}/></button>
           </div>
           <div onClick={e=>{if(e.target===e.currentTarget&&addingIn!==qid){setAddingIn(qid);setNewText("");}}} style={{flex:1,padding:10,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:7,alignContent:"flex-start",cursor:"text"}}>
-            {tasks.filter(t=>t.quadrant===qid&&!t.done).map(task=>(
+            {tasks.filter(t=>t.quadrant===qid&&!t.done).sort((a,b)=>(b.position||0)-(a.position||0)).map(task=>(
               <MNote key={task.id} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} onClickNote={()=>openNote(task)} dragging={dragId===task.id} sel={selId===task.id} swipeX={swipeId===task.id?swipeX:0} inMyDay={task.mydayDate===tod()} onRemove={()=>updateTask(task.id,{quadrant:null})} onDelete={()=>deleteTask(task.id)} onToMyDay={()=>toggleMyDay(task.id)} editing={editId===task.id} onEdit={()=>setEditId(task.id)} onSave={txt=>{const t=txt.trim();if(t)updateTask(task.id,{title:t});setEditId(null);}}/>
             ))}
             {addingIn===qid&&(
@@ -1486,7 +1500,7 @@ function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit
     </div>
   );
   return (
-    <div onPointerDown={e=>onDown?.(e,task)} onClick={()=>onClickNote?.()}
+    <div data-mnote-id={task.id} onPointerDown={e=>onDown?.(e,task)} onClick={()=>onClickNote?.()}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
       style={{padding:"7px 9px",borderRadius:8,background:swipeX<-30?T.danger+"22":swipeX>30?"#f59e0b22":qColor+"1a",border:`1px solid ${swipeX<-30?T.danger:swipeX>30?"#f59e0b":sel?qColor:qColor+"44"}`,boxShadow:sel?`0 0 0 2px ${qColor}55`:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:160,cursor:"grab",transition:swipeX?"none":"transform .15s,box-shadow .15s",transform:swipeX?`translateX(${swipeX}px)`:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
       <div style={{borderLeft:`3px solid ${qColor}`,paddingLeft:6}}>{task.title}</div>
@@ -1771,17 +1785,34 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,onLinkNote}) {
 }
 function NRow({note,T,sel,onSel,onUp,onDel}) {
   const [hov,setHov]=useState(false);
+  const [sx,setSx]=useState(0);
+  const didSwipe=useRef(false);
+  const down=e=>{
+    if(e.target.closest("button")) return;
+    didSwipe.current=false;
+    const startX=e.clientX,startY=e.clientY; let mode=null;
+    const cleanup=()=>{ window.removeEventListener("pointermove",mv); window.removeEventListener("pointerup",up); window.removeEventListener("pointercancel",up); };
+    const mv=ev=>{ const dx=ev.clientX-startX,dy=ev.clientY-startY;
+      if(mode==="swipe"){ didSwipe.current=true; setSx(Math.min(0,Math.max(dx,-140))); return; }
+      if(Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)&&dx<0){ mode="swipe"; setSx(dx); }
+      else if(Math.abs(dy)>10){ cleanup(); } };
+    const up=ev=>{ cleanup(); if(mode==="swipe"){ const dx=ev.clientX-startX; if(dx<-70){ navigator.vibrate?.(20); onDel(note.id); } setSx(0); } };
+    window.addEventListener("pointermove",mv); window.addEventListener("pointerup",up); window.addEventListener("pointercancel",up);
+  };
   return (
-    <div onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)} onClick={()=>onSel(note)} style={{padding:"8px",borderRadius:8,background:sel?.id===note.id?T.accentGlow:hov?T.surface2:"transparent",border:`1px solid ${sel?.id===note.id?T.accent+"44":"transparent"}`,cursor:"pointer",marginBottom:2,position:"relative",transition:"all .12s"}}>
-      <div style={{display:"flex",alignItems:"center",gap:5}}>
-        <div style={{width:7,height:7,borderRadius:"50%",background:note.color,flexShrink:0}}/>
-        <span style={{fontSize:12,fontWeight:600,color:T.text,flex:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{note.title||"Untitled"}</span>
+    <div style={{position:"relative",borderRadius:8,overflow:"hidden",marginBottom:2}}>
+      {sx<0&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"flex-end",paddingRight:14,gap:5,background:`linear-gradient(270deg,${T.danger}55,transparent)`,color:T.danger,fontWeight:700,fontSize:11,pointerEvents:"none"}}>{sx<-70?"Release to delete":"Delete"}<Ico n="trash" s={13} c={T.danger}/></div>}
+      <div onPointerDown={down} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)} onClick={()=>{ if(didSwipe.current){didSwipe.current=false;return;} onSel(note); }} style={{padding:"8px",borderRadius:8,background:sx?T.bg:(sel?.id===note.id?T.accentGlow:hov?T.surface2:"transparent"),border:`1px solid ${sel?.id===note.id?T.accent+"44":"transparent"}`,cursor:"pointer",position:"relative",transform:sx?`translateX(${sx}px)`:"none",transition:sx?"none":"all .12s",touchAction:"pan-y"}}>
+        <div style={{display:"flex",alignItems:"center",gap:5}}>
+          <div style={{width:7,height:7,borderRadius:"50%",background:note.color,flexShrink:0}}/>
+          <span style={{fontSize:12,fontWeight:600,color:T.text,flex:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{note.title||"Untitled"}</span>
+        </div>
+        <div style={{fontSize:11,color:T.textMuted,marginTop:2,marginLeft:12,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{note.body?note.body.slice(0,38)+"…":"Empty"}</div>
+        {hov&&sx===0&&<div style={{position:"absolute",right:5,top:"50%",transform:"translateY(-50%)",display:"flex",gap:2}}>
+          <button onClick={e=>{e.stopPropagation();onUp(note.id,{pinned:!note.pinned});}} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:T.surface3,color:note.pinned?"#f59e0b":T.textMuted,fontSize:10,display:"flex",alignItems:"center",justifyContent:"center"}}>📌</button>
+          <button onClick={e=>{e.stopPropagation();onDel(note.id);}} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:T.surface3,color:T.danger,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={10}/></button>
+        </div>}
       </div>
-      <div style={{fontSize:11,color:T.textMuted,marginTop:2,marginLeft:12,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{note.body?note.body.slice(0,38)+"…":"Empty"}</div>
-      {hov&&<div style={{position:"absolute",right:5,top:"50%",transform:"translateY(-50%)",display:"flex",gap:2}}>
-        <button onClick={e=>{e.stopPropagation();onUp(note.id,{pinned:!note.pinned});}} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:T.surface3,color:note.pinned?"#f59e0b":T.textMuted,fontSize:10,display:"flex",alignItems:"center",justifyContent:"center"}}>📌</button>
-        <button onClick={e=>{e.stopPropagation();onDel(note.id);}} style={{width:20,height:20,borderRadius:4,border:"none",cursor:"pointer",background:T.surface3,color:T.danger,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={10}/></button>
-      </div>}
     </div>
   );
 }
@@ -1801,12 +1832,24 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
   const del=id=>setHabits(hs=>hs.filter(h=>h.id!==id));
   const [dragId,setDragId]=useState(null);
   const dropRef=useRef(null);
-  const gripDown=(e,id)=>{ e.stopPropagation(); e.preventDefault(); setDragId(id); navigator.vibrate?.(15);
+  const beginHabitDrag=id=>{ setDragId(id); navigator.vibrate?.(15);
     runDrag(
       ev=>{ const el=document.elementFromPoint(ev.clientX,ev.clientY); const c=el&&el.closest("[data-habit-id]"); dropRef.current=c?c.getAttribute("data-habit-id"):null; },
       ()=>{ const from=id,to=dropRef.current; dropRef.current=null; setDragId(null);
         if(to&&String(from)!==String(to)) setHabits(hs=>{ const arr=[...hs]; const fi=arr.findIndex(x=>String(x.id)===String(from)),ti=arr.findIndex(x=>String(x.id)===String(to)); if(fi<0||ti<0)return hs; const [m]=arr.splice(fi,1); arr.splice(ti,0,m); return arr; }); }
     );
+  };
+  const gripDown=(e,id)=>{ e.stopPropagation(); e.preventDefault(); beginHabitDrag(id); };
+  // Press-and-hold anywhere on a habit card (or drag with a mouse) to reorder.
+  const bodyDown=(e,id)=>{
+    if(e.target.closest("button,[data-grip],[data-trail]")) return;
+    const type=e.pointerType, sx=e.clientX, sy=e.clientY; let decided=false, timer=null;
+    const teardown=()=>{ clearTimeout(timer); window.removeEventListener("pointermove",probe); window.removeEventListener("pointerup",end); window.removeEventListener("pointercancel",end); };
+    const startR=()=>{ decided=true; teardown(); beginHabitDrag(id); };
+    const probe=ev=>{ if(decided)return; const dx=ev.clientX-sx,dy=ev.clientY-sy; if(Math.abs(dx)<8&&Math.abs(dy)<8)return; if(type==="mouse")startR(); else{decided=true;teardown();} };
+    const end=()=>teardown();
+    if(type!=="mouse") timer=setTimeout(()=>{ if(!decided)startR(); },260);
+    window.addEventListener("pointermove",probe); window.addEventListener("pointerup",end); window.addEventListener("pointercancel",end);
   };
   const streakOf=h=>{ const set=new Set(h.log||[]); let i=set.has(todStr)?0:1, s=0; for(;;){ if(set.has(addDays(-i))){s++;i++;} else break; if(s>999)break; } return s; };
   const weekCount=h=>{ const set=new Set(h.log||[]); let c=0; for(let i=0;i<7;i++) if(set.has(addDays(-i))) c++; return c; };
@@ -1858,7 +1901,7 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12}}>
         {habits.map(h=>{ const done=has(h,todStr); const st=streakOf(h); const wc=weekCount(h);
           return (
-          <div key={h.id} data-habit-id={h.id} style={{background:T.surface,border:`1px solid ${dragId===h.id?T.accent:done?h.color+"66":T.border}`,borderRadius:14,padding:14,position:"relative",transition:"border-color .2s",opacity:dragId===h.id?.5:1}}>
+          <div key={h.id} data-habit-id={h.id} onPointerDown={e=>bodyDown(e,h.id)} style={{background:T.surface,border:`1px solid ${dragId===h.id?T.accent:done?h.color+"66":T.border}`,borderRadius:14,padding:14,position:"relative",transition:"border-color .2s",opacity:dragId===h.id?.5:1,touchAction:"pan-y"}}>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <div data-grip onPointerDown={e=>gripDown(e,h.id)} title="Drag to reorder" style={{cursor:"grab",color:T.textMuted,opacity:.4,flexShrink:0,touchAction:"none",padding:"8px 2px",margin:"-8px 0"}}><Ico n="grip" s={16} c={T.textMuted}/></div>
               <button onClick={()=>toggle(h)} title={done?"Undo today":"Mark done today"} style={{width:46,height:46,borderRadius:"50%",flexShrink:0,cursor:"pointer",border:`2px solid ${h.color}`,background:done?h.color:"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,transition:"all .18s",transform:done?"scale(1)":"scale(1)"}}>
@@ -1874,7 +1917,7 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
               <button onClick={()=>del(h.id)} title="Delete habit" style={{width:24,height:24,borderRadius:6,border:"none",background:"transparent",color:T.textMuted,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="trash" s={12} c={T.textMuted}/></button>
             </div>
             {/* 14-day trail */}
-            <div style={{display:"flex",gap:3,marginTop:12,alignItems:"flex-end"}}>
+            <div data-trail style={{display:"flex",gap:3,marginTop:12,alignItems:"flex-end"}}>
               {last(14).map(d=>{ const on=has(h,d); const isToday=d===todStr;
                 return <div key={d} title={d} onClick={()=>{ setHabits(hs=>hs.map(x=>x.id===h.id?{...x,log:on?(x.log||[]).filter(z=>z!==d):[...(x.log||[]),d]}:x)); }} style={{flex:1,height:on?18:10,borderRadius:3,background:on?h.color:T.surface3,border:isToday?`1.5px solid ${h.color}`:"none",cursor:"pointer",transition:"height .15s,background .15s"}}/>;
               })}

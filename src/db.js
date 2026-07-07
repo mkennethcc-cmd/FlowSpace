@@ -4,7 +4,7 @@ export const fromDbTask = r => ({
   id: r.id, title: r.title, done: r.done, priority: r.priority,
   tag: r.tag, due: r.due, starred: r.starred, notes: r.notes || "",
   color: r.color, subtasks: r.subtasks || [], recurring: r.recurring,
-  quadrant: r.quadrant || null, remindAt: r.remind_at || null,
+  quadrant: r.quadrant || null, remindAt: r.remind_at || null, endTime: r.time_end || null,
   attachments: r.attachments || [], owner: r.user_id,
   position: r.position != null ? r.position : (r.created_at ? new Date(r.created_at).getTime() : Date.now()),
   mydayDate: r.myday_date || null,
@@ -31,7 +31,7 @@ export const db = {
       priority: t.priority, tag: t.tag, due: t.due || null,
       starred: t.starred, notes: t.notes || "", color: t.color || null,
       subtasks: t.subtasks || [], recurring: t.recurring || null,
-      quadrant: t.quadrant || null, remind_at: t.remindAt || null,
+      quadrant: t.quadrant || null, remind_at: t.remindAt || null, time_end: t.endTime || null,
       attachments: t.attachments || [], position: t.position != null ? t.position : Date.now(),
       myday_date: t.mydayDate || null,
     });
@@ -44,6 +44,7 @@ export const db = {
     if (p.color !== undefined) u.color = p.color || null;
     if (p.subtasks !== undefined) u.subtasks = p.subtasks;
     if (p.remindAt !== undefined) u.remind_at = p.remindAt || null;
+    if (p.endTime !== undefined) u.time_end = p.endTime || null;
     if (p.attachments !== undefined) u.attachments = p.attachments;
     if (p.position !== undefined) u.position = p.position;
     if (p.mydayDate !== undefined) u.myday_date = p.mydayDate || null;
