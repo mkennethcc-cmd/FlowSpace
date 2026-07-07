@@ -111,13 +111,19 @@ function startPressDrag(e, onActivate) {
 // Runs an active drag via window listeners (reliable across re-renders). Blocks text-select/scroll while dragging.
 function runDrag(onMove, onDrop) {
   document.body.style.userSelect = "none";
+  document.body.style.webkitUserSelect = "none";
   document.body.style.touchAction = "none";
+  // Non-passive touchmove preventDefault → stops the browser from scroll-hijacking the touch mid-drag on mobile.
+  const blockScroll = e => { e.preventDefault(); };
+  document.addEventListener("touchmove", blockScroll, { passive: false });
   const mv = e => onMove(e);
   const up = e => {
     window.removeEventListener("pointermove", mv);
     window.removeEventListener("pointerup", up);
     window.removeEventListener("pointercancel", up);
+    document.removeEventListener("touchmove", blockScroll);
     document.body.style.userSelect = "";
+    document.body.style.webkitUserSelect = "";
     document.body.style.touchAction = "";
     onDrop(e);
   };
@@ -688,12 +694,15 @@ export default function FlowSpace() {
   // When a note links to a task, surface it on the task and parse any date/time out of it.
   const foldNoteIntoTask=(note,task)=>{
     if(!note||!task) return;
-    const p=parseNL((note.title||"").trim()); const patch={};
+    const raw=(note.title||"").trim();
+    const p=parseNL(raw); const patch={};
     if(p.due && p.due!==task.due) patch.due=p.due;
     if(p.time){ const d=p.due||task.due||tod(); const ra=`${d}T${p.time}`; if(ra!==task.remindAt){ patch.remindAt=ra; if(!patch.due&&!task.due) patch.due=d; } if(p.endTime&&p.endTime!==task.endTime) patch.endTime=p.endTime; }
-    // Store the CLEANED text (date/time stripped) so the task preview reads "go to shop", not "go to shop at 4pm".
-    const noteText=[p.title,(note.body||"").trim()].filter(Boolean).join(" — ").trim();
-    if(noteText){ const existing=(task.notes||"").trim(); if(!existing.includes(p.title||noteText)) patch.notes=(existing?existing+"\n":"")+noteText; }
+    // Store the CLEANED text only if the note had actual words left after stripping the date/time
+    // (parseNL falls back to the raw text when nothing remains — that would double the date in the preview).
+    const cleaned=(p.title && p.title!==raw)?p.title:"";
+    const noteText=[cleaned,(note.body||"").trim()].filter(Boolean).join(" — ").trim();
+    if(noteText){ const existing=(task.notes||"").trim(); if(!existing.includes(cleaned||noteText)) patch.notes=(existing?existing+"\n":"")+noteText; }
     if(Object.keys(patch).length) updateTask(task.id,patch);
   };
   const addCanvasTask=(text,myDay)=>{
@@ -1198,7 +1207,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
     <div className={entering?"te":""} data-task-id={task.id}
       onPointerDown={onDown?e=>onDown(e,task.id):undefined}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)} onClick={()=>onSel(task)}
-      style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:swipeX!==0?T.bg:(sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent"),border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:swipeX!==0?"none":"all .12s",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:swipeX!==0?`translateX(${swipeX}px)`:dragging?"scale(.98)":"scale(1)",userSelect:"none",WebkitUserSelect:"none",touchAction:"pan-y"}}>
+      style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:swipeX!==0?T.bg:(sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent"),border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:swipeX!==0?"none":"all .12s",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:swipeX!==0?`translateX(${swipeX}px)`:dragging?"scale(.98)":"scale(1)",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none",touchAction:"pan-y"}}>
       {task.color&&<div style={{position:"absolute",left:0,top:8,bottom:8,width:3,borderRadius:2,background:task.color}}/>}
       {onGrip&&<div data-grip onPointerDown={e=>onGrip(e,task.id)} onClick={e=>e.stopPropagation()} title="Drag to reorder" style={{color:T.textMuted,opacity:hov?.7:.35,transition:"opacity .15s",flexShrink:0,alignSelf:"center",cursor:"grab",padding:"6px 2px",margin:"-6px 0",paddingLeft:task.color?4:2,touchAction:"none"}}><Ico n="grip" s={16} c={T.textMuted}/></div>}
       <button onClick={e=>{e.stopPropagation();onToggle(task.id);}} style={{width:19,height:19,borderRadius:5,border:`2px solid ${task.done?T.success:qColor||T.border}`,background:task.done?T.success:"transparent",cursor:"pointer",flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s"}}>
@@ -1408,6 +1417,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
   const [editId,setEditId]=useState(null);
   const dragOverRef=useRef(null);
   const dropCardRef=useRef(null);
+  const dropBeforeRef=useRef(true);
   useEffect(()=>{
     const fn=e=>{if(e.key==="n"&&!e.metaKey&&!e.ctrlKey&&document.activeElement.tagName!=="INPUT"&&document.activeElement.tagName!=="TEXTAREA")setAddingIn("q1");};
     window.addEventListener("keydown",fn); return ()=>window.removeEventListener("keydown",fn);
@@ -1424,13 +1434,14 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
     const cleanup=()=>{ clearTimeout(hold); window.removeEventListener("pointermove",mv); window.removeEventListener("pointerup",up); window.removeEventListener("pointercancel",up); };
     const startDrag=()=>{ if(mode)return; mode="drag"; clearTimeout(hold); setDragId(task.id); navigator.vibrate?.(20);
       runDrag(
-        ev=>{ didDragNote.current=true; const el=document.elementFromPoint(ev.clientX,ev.clientY); const qd=el&&el.closest("[data-quadrant]"); const card=el&&el.closest("[data-mnote-id]"); dragOverRef.current=qd?qd.getAttribute("data-quadrant"):null; dropCardRef.current=(card&&card.getAttribute("data-mnote-id")!==String(task.id))?card.getAttribute("data-mnote-id"):null; setDragOver(dragOverRef.current); },
-        ()=>{ const q=dragOverRef.current, over=dropCardRef.current; dragOverRef.current=null; dropCardRef.current=null; setDragId(null); setDragOver(null);
-          if(over){ // dropped on another card → reorder within that card's quadrant (also moves quadrant if different)
+        ev=>{ didDragNote.current=true; const el=document.elementFromPoint(ev.clientX,ev.clientY); const qd=el&&el.closest("[data-quadrant]"); const card=el&&el.closest("[data-mnote-id]"); dragOverRef.current=qd?qd.getAttribute("data-quadrant"):null; if(card&&card.getAttribute("data-mnote-id")!==String(task.id)){ dropCardRef.current=card.getAttribute("data-mnote-id"); const r=card.getBoundingClientRect(); dropBeforeRef.current=ev.clientX<(r.left+r.width/2); } else dropCardRef.current=null; setDragOver(dragOverRef.current); },
+        ()=>{ const q=dragOverRef.current, over=dropCardRef.current, before=dropBeforeRef.current; dragOverRef.current=null; dropCardRef.current=null; setDragId(null); setDragOver(null);
+          if(over){ // dropped on another card → drop where you point (left half = before it, right half = after it)
             const tgt=tasks.find(t=>String(t.id)===over); if(tgt){ const quad=tgt.quadrant;
               const cards=tasks.filter(t=>t.quadrant===quad&&!t.done&&t.id!==task.id).sort((a,b)=>(b.position||0)-(a.position||0));
-              const ti=cards.findIndex(t=>String(t.id)===over); const above=cards[ti-1];
-              const newPos=above?((above.position||0)+(tgt.position||0))/2:(tgt.position||0)+1;
+              const ti=cards.findIndex(t=>String(t.id)===over); let newPos;
+              if(before){ const above=cards[ti-1]; newPos=above?((above.position||0)+(tgt.position||0))/2:(tgt.position||0)+1; }
+              else { const below=cards[ti+1]; newPos=below?((tgt.position||0)+(below.position||0))/2:(tgt.position||0)-1; }
               updateTask(task.id,{position:newPos,...(quad!==task.quadrant?{quadrant:quad}:{})}); }
           } else if(q&&q!==task.quadrant){ updateTask(task.id,{quadrant:q}); }
         }
@@ -1901,7 +1912,7 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12}}>
         {habits.map(h=>{ const done=has(h,todStr); const st=streakOf(h); const wc=weekCount(h);
           return (
-          <div key={h.id} data-habit-id={h.id} onPointerDown={e=>bodyDown(e,h.id)} style={{background:T.surface,border:`1px solid ${dragId===h.id?T.accent:done?h.color+"66":T.border}`,borderRadius:14,padding:14,position:"relative",transition:"border-color .2s",opacity:dragId===h.id?.5:1,touchAction:"pan-y"}}>
+          <div key={h.id} data-habit-id={h.id} onPointerDown={e=>bodyDown(e,h.id)} style={{background:T.surface,border:`1px solid ${dragId===h.id?T.accent:done?h.color+"66":T.border}`,borderRadius:14,padding:14,position:"relative",transition:"border-color .2s",opacity:dragId===h.id?.5:1,touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <div data-grip onPointerDown={e=>gripDown(e,h.id)} title="Drag to reorder" style={{cursor:"grab",color:T.textMuted,opacity:.4,flexShrink:0,touchAction:"none",padding:"8px 2px",margin:"-8px 0"}}><Ico n="grip" s={16} c={T.textMuted}/></div>
               <button onClick={()=>toggle(h)} title={done?"Undo today":"Mark done today"} style={{width:46,height:46,borderRadius:"50%",flexShrink:0,cursor:"pointer",border:`2px solid ${h.color}`,background:done?h.color:"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,transition:"all .18s",transform:done?"scale(1)":"scale(1)"}}>

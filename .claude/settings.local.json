@@ -11,7 +11,8 @@
       "PowerShell(npm run build 2>&1)",
       "Bash(rm -f .claude/launch.json)",
       "Bash(npm run *)",
-      "Bash(cd \"/c/Claude Files Download/FlowSpace Project\" && tail -5 \"/c/Users/mkenn/.claude/projects/C--Claude-Files-Download-FlowSpace-Project/memory/flowspace-phase1-decisions.md\")"
+      "Bash(cd \"/c/Claude Files Download/FlowSpace Project\" && tail -5 \"/c/Users/mkenn/.claude/projects/C--Claude-Files-Download-FlowSpace-Project/memory/flowspace-phase1-decisions.md\")",
+      "mcp__Claude_Preview__preview_start"
     ]
   }
 }
