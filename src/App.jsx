@@ -361,6 +361,13 @@ export default function FlowSpace() {
   const [canvasNotes, setCanvasNotes] = useState([]);
   const [notes, setNotes] = useState([]);
   const [habits, setHabits] = useState([]);
+  // Real per-day completion counts (fuels Analytics' weekly bars + heatmap). Device-local, capped at ~70 days.
+  const [dayStats,setDayStats]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_daystats")||"{}"); }catch{ return {}; } });
+  const bumpStat=delta=>setDayStats(s=>{ const d=tod(); const n={...s,[d]:Math.max(0,(s[d]||0)+delta)}; const ks=Object.keys(n).sort(); while(ks.length>70) delete n[ks.shift()]; try{localStorage.setItem("fs_daystats",JSON.stringify(n));}catch{} return n; });
+  // Focus mode: tie a task to the Pomodoro timer.
+  const [focusTask,setFocusTask]=useState(null);
+  const focusRef=useRef(null);
+  useEffect(()=>{ focusRef.current=focusTask; },[focusTask]);
   const [navOrg, setNavOrg] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_navorg")||"null"); }catch{ return null; } });
   useEffect(()=>{ if(navOrg) try{ localStorage.setItem("fs_navorg",JSON.stringify(navOrg)); }catch{} },[navOrg]);
   const [cats, setCats] = useState(DEFAULT_CATS);
@@ -394,7 +401,18 @@ export default function FlowSpace() {
   const inputRef = useRef(null);
 
   useEffect(() => {
-    if (pomRun) pomRef.current = setInterval(()=>setPomSecs(t=>{if(t<=1){clearInterval(pomRef.current);setPomRun(false);return pomLenRef.current*60;}return t-1;}),1000);
+    if (pomRun) pomRef.current = setInterval(()=>setPomSecs(t=>{
+      if(t<=1){
+        clearInterval(pomRef.current); setPomRun(false);
+        // Session finished → celebrate + reward (+25 XP), and release the focused task.
+        try{ navigator.vibrate?.([60,60,60]); playComplete(localStorage.getItem("fs_sound2")||"soft"); }catch{}
+        awardXp(null,25);
+        showToast(focusRef.current?`🍅 Focus session done: "${focusRef.current.title}" · +25 XP`:"🍅 Pomodoro complete! +25 XP");
+        setFocusTask(null);
+        return pomLenRef.current*60;
+      }
+      return t-1;
+    }),1000);
     else clearInterval(pomRef.current);
     return ()=>clearInterval(pomRef.current);
   },[pomRun]);
@@ -541,12 +559,15 @@ export default function FlowSpace() {
     if(!task) return;
     const newDone=!task.done;
     setTasks(ts=>ts.map(t=>t.id===id?{...t,done:newDone}:t));
+    bumpStat(newDone?1:-1);
     if(newDone){
       awardXp("done-"+id,20); markActiveDay(); navigator.vibrate?.(30); playComplete(sound);
       if(task.recurring && !awardedRef.current.has("recur-"+id)){
         awardedRef.current.add("recur-"+id);
         const nd=nextDue(task.due,task.recurring);
-        if(nd){ const clone={...task,id:crypto.randomUUID(),done:false,due:nd,quadrant:task.quadrant||null,remindAt:null,attachments:[],mydayDate:null,subtasks:(task.subtasks||[]).map(s=>({...s,done:false}))};
+        if(nd){ // carry the reminder's time-of-day onto the next occurrence (weekly 6pm stays 6pm)
+          const oldTime=task.remindAt&&task.remindAt.includes("T")?task.remindAt.split("T")[1]:null;
+          const clone={...task,id:crypto.randomUUID(),done:false,due:nd,quadrant:task.quadrant||null,remindAt:oldTime?`${nd}T${oldTime}`:null,attachments:[],mydayDate:null,subtasks:(task.subtasks||[]).map(s=>({...s,done:false}))};
           setTasks(ts=>[clone,...ts]); if(user) db.insertTask(clone,user.id).catch(console.error);
           showToast(`↻ Next "${task.title}" scheduled for ${fmtDate(nd)}`);
         }
@@ -705,6 +726,14 @@ export default function FlowSpace() {
     if(noteText){ const existing=(task.notes||"").trim(); if(!existing.includes(cleaned||noteText)) patch.notes=(existing?existing+"\n":"")+noteText; }
     if(Object.keys(patch).length) updateTask(task.id,patch);
   };
+  const startFocus=t=>{ setFocusTask({id:t.id,title:t.title}); setPomSecs(pomLen*60); setPomRun(true); navigator.vibrate?.(20); showToast(`🍅 Focusing on "${t.title}" — ${pomLen} min timer started`); };
+  // Quick-add from the Calendar: task lands on the tapped day; a typed time ("dentist 3pm") becomes its reminder.
+  const addCalendarTask=(dateStr,text)=>{
+    const p=parseNL(text); const title=(p.title||text).trim(); if(!title||!dateStr) return;
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:guessCat(title,cats),due:dateStr,starred:false,notes:"",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:p.time?`${dateStr}T${p.time}`:null,endTime:p.endTime||null,attachments:[],owner:user?.id,position:Date.now(),mydayDate:null};
+    setTasks(ts=>[t,...ts]); awardXp("add-"+t.id,10);
+    if(user) db.insertTask(t,user.id).catch(e=>showToast("Couldn't save: "+(e.message||e)));
+  };
   const addCanvasTask=(text,myDay)=>{
     const title=(text||"").trim(); if(!title) return;
     const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:guessCat(title,cats),due:null,starred:false,notes:"From Canvas",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:null,attachments:[],owner:user?.id,position:Date.now(),mydayDate:myDay?todStr:null};
@@ -732,7 +761,8 @@ export default function FlowSpace() {
 
   const navItems=[
     {id:"myday",label:"My Day",icon:"sun",badge:myDay.filter(t=>!t.done).length},
-    {id:"upcoming",label:"Upcoming",icon:"cal",badge:upcoming.filter(t=>!t.done).length},
+    {id:"upcoming",label:"Upcoming",icon:"arr",badge:upcoming.filter(t=>!t.done).length},
+    {id:"calendar",label:"Calendar",icon:"cal",badge:null},
     {id:"matrix",label:"Priority Matrix",icon:"grid",badge:null},
     {id:"all",label:"All Tasks",icon:"layers",badge:null},
     {id:"flagged",label:"Flagged",icon:"flag",badge:myTasks.filter(t=>t.starred&&!t.done).length},
@@ -766,7 +796,7 @@ export default function FlowSpace() {
       {imgView&&<ImgViewer T={T} url={imgView} onClose={()=>setImgView(null)}/>}
       {delCatModal&&<DelCatModal T={T} name={delCatModal} count={tasks.filter(t=>t.owner===user?.id&&t.tag===delCatModal).length} onConfirm={a=>confirmDeleteCat(delCatModal,a)} onClose={()=>setDelCatModal(null)}/>}
       {linkPick&&<LinkPicker T={T} tasks={myTasks.filter(t=>!t.done)} onPick={t=>{linkPick.onPick(t);setLinkPick(null);}} onClose={()=>setLinkPick(null)}/>}
-      {cmdOpen&&<CmdPalette T={T} tasks={tasks} onClose={()=>setCmdOpen(false)} onGo={v=>{setView(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}}/>}
+      {cmdOpen&&<CmdPalette T={T} tasks={tasks} notes={notes} onClose={()=>setCmdOpen(false)} onGo={v=>{setView(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}} onPickTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);setCmdOpen(false);}}/>}
       <aside onPointerDown={sideSwipe} style={{width:sideOpen?224:60,transition:"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:30,touchAction:"pan-y"}}>
         <div style={{padding:"18px 14px",display:"flex",alignItems:"center",gap:9}}>
           <button onClick={()=>setAboutOpen(true)} title="About FlowSpace" style={{display:"flex",alignItems:"center",gap:9,background:"none",border:"none",cursor:"pointer",padding:0,flex:1,minWidth:0}}>
@@ -805,6 +835,13 @@ export default function FlowSpace() {
                 <span style={{fontSize:10,color:T.textMuted,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase"}}>Pomodoro</span>
                 <button onClick={cyclePom} title={pomRun?"":"Tap to change length"} style={{background:"none",border:"none",cursor:pomRun?"default":"pointer",padding:0,display:"flex",alignItems:"center",gap:3,color:pomRun?T.accent:T.textMuted,fontSize:9,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{!pomRun&&<span>{pomLen}m</span>}<Ico n="clock" s={12} c={pomRun?T.accent:T.textMuted}/></button>
               </div>
+              {focusTask&&(
+                <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:6,padding:"4px 8px",borderRadius:7,background:T.accentGlow,border:`1px solid ${T.accent}33`}}>
+                  <span style={{fontSize:10}}>🍅</span>
+                  <span style={{flex:1,minWidth:0,fontSize:10,fontWeight:700,color:T.accent,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{focusTask.title}</span>
+                  <button onClick={()=>setFocusTask(null)} title="Stop focusing" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",padding:0}}><Ico n="x" s={10}/></button>
+                </div>
+              )}
               <div style={{fontSize:26,fontFamily:"'Sora',sans-serif",fontWeight:700,color:pomRun?T.accent:T.text,letterSpacing:"-1px",textAlign:"center",marginBottom:8}}>{pmm}:{pms}</div>
               <button onClick={()=>setPomRun(r=>!r)} style={{width:"100%",padding:"6px",borderRadius:8,border:"none",cursor:"pointer",background:pomRun?T.danger:T.grad,color:"#fff",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>
                 {pomRun?"⏸ Pause":"▶ Focus"}
@@ -844,13 +881,14 @@ export default function FlowSpace() {
         )}
         <div style={{flex:1,overflow:"hidden",display:"flex"}}>
           {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask} requestLink={requestLink} onCanvasToNote={linkIdeaToTask} onOpenTask={setSelTask} selId={selTask?.id}/>}
-          {view==="matrix"&&selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={id=>{deleteTask(id);setSelTask(null);}} onDuplicate={duplicateTask} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} canDelete={canDeleteTask(selTask)} onViewImage={setImgView} onClose={()=>setSelTask(null)}/>}
+          {view==="matrix"&&selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={id=>{deleteTask(id);setSelTask(null);}} onDuplicate={duplicateTask} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} canDelete={canDeleteTask(selTask)} onViewImage={setImgView} onClose={()=>setSelTask(null)} onFocus={startFocus}/>}
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onLinkNote={foldNoteIntoTask} onClearTaskNotes={id=>updateTask(id,{notes:""})} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} onCheckin={key=>{awardXp("habit-"+key+"-"+todStr,15);markActiveDay();navigator.vibrate?.(20);}}/>}
-          {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
+          {view==="calendar"&&<CalendarView T={T} tasks={myTasks} cats={cats} todStr={todStr} onToggle={toggleTask} onQuickAdd={addCalendarTask} onOpenTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
+          {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={dayStats} todStr={todStr}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
           {(["myday","flagged","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView}/>
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus}/>
           )}
         </div>
       </main>
@@ -965,11 +1003,13 @@ function ImgViewer({T,url,onClose}) {
   );
 }
 
-function CmdPalette({T,tasks,onClose,onGo,onAdd}) {
+function CmdPalette({T,tasks,notes=[],onClose,onGo,onAdd,onPickTask}) {
   const [q,setQ]=useState("");
-  const pages=["myday","upcoming","all","completed","matrix","habits","notes","analytics","settings"];
-  const ft=tasks.filter(t=>!t.done&&q&&t.title.toLowerCase().includes(q.toLowerCase())).slice(0,4);
-  const fp=pages.filter(p=>p.includes(q.toLowerCase()));
+  const pages=["myday","upcoming","calendar","all","completed","matrix","habits","notes","analytics","settings"];
+  const ql=q.toLowerCase();
+  const ft=tasks.filter(t=>!t.done&&q&&t.title.toLowerCase().includes(ql)).slice(0,4);
+  const fn=notes.filter(n=>q&&((n.title||"").toLowerCase().includes(ql)||(n.body||"").toLowerCase().includes(ql))).slice(0,3);
+  const fp=pages.filter(p=>p.includes(ql));
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.65)",zIndex:1000,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:110}} onClick={onClose}>
       <div onClick={e=>e.stopPropagation()} style={{width:500,background:T.surface,border:`1px solid ${T.accent}44`,borderRadius:16,overflow:"hidden",boxShadow:"0 24px 60px rgba(0,0,0,.5)",animation:"slideIn .2s ease"}}>
@@ -980,7 +1020,8 @@ function CmdPalette({T,tasks,onClose,onGo,onAdd}) {
         </div>
         <div style={{maxHeight:300,overflowY:"auto"}}>
           {fp.length>0&&<CS label="Navigate">{fp.slice(0,4).map(p=><CR key={p} icon="arr" label={`Go to ${p}`} T={T} onClick={()=>onGo(p)}/>)}</CS>}
-          {ft.length>0&&<CS label="Tasks">{ft.map(t=><CR key={t.id} icon="check" label={t.title} sub={t.due?fmtDate(t.due):""} T={T} onClick={onClose}/>)}</CS>}
+          {ft.length>0&&<CS label="Tasks">{ft.map(t=><CR key={t.id} icon="check" label={t.title} sub={t.due?fmtDate(t.due):""} T={T} onClick={()=>{onPickTask?onPickTask(t):onClose();}}/>)}</CS>}
+          {fn.length>0&&<CS label="Notes">{fn.map(n=><CR key={n.id} icon="note" label={n.title||"Untitled"} sub={(n.body||"").slice(0,24)} T={T} onClick={()=>onGo("notes")}/>)}</CS>}
           {q&&<CS label="Create"><CR icon="plus" label={`Add task: "${q}"`} T={T} onClick={()=>onAdd(q)}/></CS>}
           {!q&&<CS label="Quick Nav">{["myday","matrix","analytics","notes"].map(p=><CR key={p} icon="arr" label={`Go to ${p}`} T={T} onClick={()=>onGo(p)}/>)}</CS>}
         </div>
@@ -998,7 +1039,7 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask}) {
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
   const [sort,setSort]=useState("smart");
@@ -1180,7 +1221,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           )}
         </div>
       </div>
-      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} onClose={()=>setSelTask(null)}/>}
+      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} onClose={()=>setSelTask(null)} onFocus={onFocusTask}/>}
     </div>
   );
 }
@@ -1227,6 +1268,11 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
           {task.subtasks?.length>0&&<span style={{fontSize:10,color:T.textMuted}}>{task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</span>}
         </div>
         {task.notes&&task.notes.trim()&&<div style={{fontSize:11,color:T.textMuted,marginTop:3,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",opacity:.85,display:"flex",alignItems:"center",gap:4}}><Ico n="note" s={10} c={T.textMuted}/>{task.notes.trim().split("\n")[0].slice(0,70)}</div>}
+        {task.subtasks?.length>0&&!task.done&&(
+          <div style={{height:3,background:T.surface3,borderRadius:2,overflow:"hidden",marginTop:5,maxWidth:180}}>
+            <div style={{height:"100%",width:`${Math.round(task.subtasks.filter(s=>s.done).length/task.subtasks.length*100)}%`,background:`linear-gradient(90deg,${T.accent},${T.accentAlt})`,borderRadius:2,transition:"width .3s ease"}}/>
+          </div>
+        )}
       </div>
       <div style={{display:"flex",alignItems:"center",gap:2,flexShrink:0,marginTop:1}}>
         {qColor&&<div title={QUAD[task.quadrant]?.label} style={{width:6,height:6,borderRadius:"50%",background:qColor,marginRight:3}}/>}
@@ -1238,7 +1284,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
   );
 }
 
-function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,canDelete=true,onViewImage,onClose}) {
+function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,canDelete=true,onViewImage,onClose,onFocus}) {
   const [uploading,setUploading]=useState(false);
   const fileRef=useRef(null);
   const doAttach=async files=>{ if(!files?.length)return; setUploading(true); try{ for(const f of files) await onAttach?.(task,f); }catch(e){ alert("Upload failed: "+(e.message||e)); } setUploading(false); };
@@ -1381,6 +1427,11 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
           </div>
         </div>
       </DL>
+      {onFocus&&!task.done&&(
+        <button onClick={()=>onFocus(task)} style={{width:"100%",padding:"9px",borderRadius:9,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:6,boxShadow:"0 3px 12px rgba(192,132,252,.3)"}}>
+          🍅 Focus on this task <span style={{opacity:.8,fontWeight:500}}>· starts the Pomodoro</span>
+        </button>
+      )}
       <div style={{display:"flex",gap:6}}>
         <button onClick={()=>onUpdate(task.id,{starred:!task.starred})} style={{flex:1,padding:"7px",borderRadius:8,border:`1px solid ${task.starred?"#f59e0b":T.border}`,background:task.starred?"#f59e0b22":"transparent",color:task.starred?"#f59e0b":T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
           <Ico n="flag" s={12} c={task.starred?"#f59e0b":undefined} st={task.starred?{fill:"#f59e0b"}:{}}/>{task.starred?"Flagged":"Flag"}
@@ -1880,7 +1931,9 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
   const [pick,setPick]=useState(false);
   const has=(h,d)=>(h.log||[]).includes(d);
   const add=(nm,ic)=>{ const n=(nm??name).trim(); if(!n)return; setHabits(hs=>{ const id=Math.max(Date.now(),hs.reduce((m,h)=>Math.max(m,h.id||0),0)+1); return [...hs,{id,name:n,icon:ic||icon,color,cadence,log:[],created:todStr}]; }); setName(""); };
-  const toggle=h=>{ const done=has(h,todStr); setHabits(hs=>hs.map(x=>x.id===h.id?{...x,log:done?(x.log||[]).filter(d=>d!==todStr):[...(x.log||[]),todStr]}:x)); if(!done) onCheckin?.(h.id); else navigator.vibrate?.(8); };
+  const toggle=h=>{ const done=has(h,todStr); setHabits(hs=>hs.map(x=>x.id===h.id?{...x,log:done?(x.log||[]).filter(d=>d!==todStr):[...(x.log||[]),todStr]}:x));
+    if(!done){ onCheckin?.(h.id); if(habits.every(x=>x.id===h.id||has(x,todStr))) fireConfetti(); } // last unchecked habit of the day → celebrate
+    else navigator.vibrate?.(8); };
   const del=id=>setHabits(hs=>hs.filter(h=>h.id!==id));
   const [dragId,setDragId]=useState(null);
   const dropRef=useRef(null);
@@ -1982,6 +2035,72 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
   );
 }
 
+// Month calendar: tasks land on their due dates, tap a day to see & add. No hover needed — fully touch-first.
+function CalendarView({T,tasks,cats,todStr,onToggle,onQuickAdd,onOpenTask}) {
+  const today=new Date(todStr+"T12:00:00");
+  const [ym,setYm]=useState({y:today.getFullYear(),m:today.getMonth()});
+  const [selDay,setSelDay]=useState(todStr);
+  const [qa,setQa]=useState("");
+  const first=new Date(ym.y,ym.m,1);
+  const offset=(first.getDay()+6)%7; // Monday-first grid
+  const dim=new Date(ym.y,ym.m+1,0).getDate();
+  const cells=[...Array(offset)].map(()=>null).concat([...Array(dim)].map((_,i)=>ymd(new Date(ym.y,ym.m,i+1))));
+  while(cells.length%7) cells.push(null);
+  const byDay={}; tasks.forEach(t=>{ if(t.due){ (byDay[t.due]=byDay[t.due]||[]).push(t); } });
+  const nav=d=>setYm(({y,m})=>{ const n=new Date(y,m+d,1); return {y:n.getFullYear(),m:n.getMonth()}; });
+  const monthName=new Date(ym.y,ym.m,1).toLocaleDateString("en-US",{month:"long",year:"numeric"});
+  const dayTasks=(byDay[selDay]||[]).slice().sort((a,b)=>{ if(a.done!==b.done)return a.done?1:-1; return (a.remindAt||"~").localeCompare(b.remindAt||"~"); });
+  const add=()=>{ const v=qa.trim(); if(!v)return; onQuickAdd(selDay,v); setQa(""); };
+  const selLabel=new Date(selDay+"T12:00:00").toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"});
+  return (
+    <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+        <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px"}}>{monthName}</h1>
+        <div style={{display:"flex",gap:5}}>
+          <button onClick={()=>nav(-1)} style={{width:30,height:30,borderRadius:8,border:`1px solid ${T.border}`,background:T.surface,color:T.text,cursor:"pointer",fontSize:15}}>‹</button>
+          <button onClick={()=>{setYm({y:today.getFullYear(),m:today.getMonth()});setSelDay(todStr);}} style={{padding:"0 12px",height:30,borderRadius:8,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Today</button>
+          <button onClick={()=>nav(1)} style={{width:30,height:30,borderRadius:8,border:`1px solid ${T.border}`,background:T.surface,color:T.text,cursor:"pointer",fontSize:15}}>›</button>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:4}}>
+        {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d=><div key={d} style={{textAlign:"center",fontSize:10,fontWeight:700,color:T.textMuted,letterSpacing:".5px"}}>{d}</div>)}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:16}}>
+        {cells.map((d,i)=>{ if(!d) return <div key={"e"+i}/>;
+          const dts=byDay[d]||[], undone=dts.filter(t=>!t.done), isToday=d===todStr, isSel=d===selDay, isPastDue=d<todStr&&undone.length>0;
+          return (
+            <button key={d} onClick={()=>setSelDay(d)} style={{minHeight:52,padding:"5px 4px 4px",borderRadius:10,border:`1.5px solid ${isSel?T.accent:isToday?T.accent+"66":T.border}`,background:isSel?T.accentGlow:T.surface,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all .12s"}}>
+              <span style={{fontSize:12,fontWeight:isToday?800:500,color:isToday?T.accent:isPastDue?T.danger:T.text,fontFamily:"'DM Sans',sans-serif"}}>{parseInt(d.slice(8),10)}</span>
+              {dts.length>0&&(
+                <div style={{display:"flex",gap:2,flexWrap:"wrap",justifyContent:"center",maxWidth:34}}>
+                  {dts.slice(0,3).map(t=><span key={t.id} style={{width:5,height:5,borderRadius:"50%",background:t.done?T.textMuted:(cats[t.tag]?.color||T.accent),opacity:t.done?.45:1}}/>)}
+                  {dts.length>3&&<span style={{fontSize:8,color:T.textMuted,lineHeight:"5px"}}>+{dts.length-3}</span>}
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:14}}>
+        <div style={{fontSize:13,fontWeight:700,fontFamily:"'Sora',sans-serif",marginBottom:10}}>{selLabel}{selDay===todStr?" · Today":""}</div>
+        <div style={{display:"flex",gap:6,marginBottom:dayTasks.length?12:0}}>
+          <input value={qa} onChange={e=>setQa(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder={`Add a task on ${selLabel.split(",")[1]?.trim()||selDay}… "dentist 3pm"`} style={{flex:1,minWidth:0,padding:"9px 12px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:13,outline:"none"}}/>
+          <button onClick={add} style={{padding:"0 16px",borderRadius:9,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontWeight:700,fontSize:13,fontFamily:"'DM Sans',sans-serif"}}>Add</button>
+        </div>
+        {dayTasks.length===0&&<div style={{fontSize:12,color:T.textMuted,padding:"4px 2px"}}>Nothing scheduled — enjoy the free day ✨</div>}
+        {dayTasks.map(t=>(
+          <div key={t.id} onClick={()=>onOpenTask?.(t)} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",borderRadius:9,cursor:"pointer",marginBottom:2,background:"transparent",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background=T.surface2} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+            <button onClick={e=>{e.stopPropagation();onToggle(t.id);}} style={{width:17,height:17,borderRadius:5,border:`2px solid ${t.done?T.success:(cats[t.tag]?.color||T.border)}`,background:t.done?T.success:"transparent",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{t.done&&<Ico n="check" s={9} c="#fff"/>}</button>
+            <span style={{flex:1,minWidth:0,fontSize:13,color:t.done?T.textMuted:T.text,textDecoration:t.done?"line-through":"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.title}</span>
+            {t.remindAt&&fmtClock(t.remindAt)&&<span style={{fontSize:10,color:T.accent,fontWeight:700,flexShrink:0}}>⏰ {fmtClock(t.remindAt)}{t.endTime?` – ${fmtClock(t.endTime)}`:""}</span>}
+            {t.tag&&<span style={{fontSize:9,padding:"1px 7px",borderRadius:20,background:(cats[t.tag]?.color||T.accent)+"22",color:cats[t.tag]?.color||T.accent,fontWeight:700,flexShrink:0,textTransform:"capitalize"}}>{t.tag}</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const ACHIEVEMENTS=[
   {emoji:"🔥",name:"On Fire",desc:"Keep a daily streak going by checking off a task each day."},
   {emoji:"⚡",name:"Quick Start",desc:"Reach Level 2 — earn 100 XP from adding and finishing tasks."},
@@ -1989,18 +2108,24 @@ const ACHIEVEMENTS=[
   {emoji:"💎",name:"Consistent",desc:"Reach Level 4. Rare focus and follow-through."},
   {emoji:"🏆",name:"Champion",desc:"Reach Level 5 — the top tier. Productivity master!"},
 ];
-function AnalyticsView({T,tasks,xp,level,streak}) {
+function AnalyticsView({T,tasks,xp,level,streak,habits=[],dayStats={},todStr}) {
   const [aiLoad,setAiLoad]=useState(false);
   const [aiMsg,setAiMsg]=useState("");
   const [achSel,setAchSel]=useState(null);
-  const wk=[3,6,4,8,5,2,tasks.filter(t=>t.done).length];
+  // Real data: completions per day come from dayStats (tracked every time a task is checked off).
+  const monOffset=(new Date().getDay()+6)%7; // days since Monday
+  const wk=[...Array(7)].map((_,i)=>dayStats[addDays(i-monOffset)]||0);
   const maxW=Math.max(...wk,1);
   const total=tasks.length, done=tasks.filter(t=>t.done).length;
   const rate=total>0?Math.round((done/total)*100):0;
   const ov=tasks.filter(t=>t.due&&t.due<tod()&&!t.done).length;
   const byTag={};tasks.forEach(t=>{byTag[t.tag]=(byTag[t.tag]||0)+1;});
-  const heat=Array.from({length:35},()=>({v:0}));
-  const runAI=()=>{setAiLoad(true);setAiMsg("");setTimeout(()=>{setAiLoad(false);setAiMsg(`🧠 Peak productivity: Tue–Thu. Work tasks: 94% done. ${ov>0?`${ov} overdue — schedule catch-up.`:"No overdue tasks! "} Recommended deep-work window: 9–11am. Keep your ${streak}-day streak 🔥`);},1600);};
+  const heat=[...Array(35)].map((_,i)=>{ const d=addDays(i-34); return {v:Math.min(dayStats[d]||0,5),d,n:dayStats[d]||0}; });
+  const weekTotal=wk.reduce((a,b)=>a+b,0);
+  const habitsDoneToday=habits.filter(h=>(h.log||[]).includes(todStr)).length;
+  const bestHabitStreak=habits.reduce((best,h)=>{ const set=new Set(h.log||[]); let i=set.has(todStr)?0:1,s=0; for(;;){ if(set.has(addDays(-i))){s++;i++;} else break; if(s>999)break; } return Math.max(best,s); },0);
+  const topTag=Object.entries(byTag).sort((a,b)=>b[1]-a[1])[0];
+  const runAI=()=>{setAiLoad(true);setAiMsg("");setTimeout(()=>{setAiLoad(false);setAiMsg(`🧠 You completed ${weekTotal} task${weekTotal===1?"":"s"} this week${weekTotal>0?" — nice momentum":""}. Overall completion rate: ${rate}%. ${topTag?`Most of your work lives in "${topTag[0]}" (${topTag[1]} tasks). `:""}${ov>0?`${ov} overdue — pull one into My Day and knock it out first. `:"No overdue tasks — inbox zero energy! "}${habits.length?`Habits: ${habitsDoneToday}/${habits.length} done today, best streak ${bestHabitStreak} day${bestHabitStreak===1?"":"s"} 🔥`:`Try adding a daily habit to build momentum.`}`);},1400);};
   return (
     <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
       <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px",marginBottom:18}}>Analytics</h1>
@@ -2013,13 +2138,23 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
           </div>
         ))}
       </div>
+      {habits.length>0&&(
+        <div style={{display:"flex",alignItems:"center",gap:14,background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"10px 15px",marginBottom:14,flexWrap:"wrap"}}>
+          <span style={{fontSize:12,fontWeight:700,fontFamily:"'Sora',sans-serif"}}>🎯 Habits</span>
+          <span style={{fontSize:12,color:T.textMuted}}>{habitsDoneToday}/{habits.length} done today</span>
+          <div style={{flex:1,minWidth:80,height:5,background:T.surface3,borderRadius:3,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${habits.length?Math.round(habitsDoneToday/habits.length*100):0}%`,background:"linear-gradient(90deg,#22c55e,#14b8a6)",borderRadius:3,transition:"width .5s ease"}}/>
+          </div>
+          <span style={{fontSize:12,color:"#f59e0b",fontWeight:700}}>🔥 best streak: {bestHabitStreak}d</span>
+        </div>
+      )}
       <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:12,marginBottom:12}}>
         <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:16}}>
           <div style={{fontSize:12,fontWeight:600,marginBottom:12,display:"flex",alignItems:"center",gap:5}}><Ico n="bar" s={13} c={T.accent}/>Weekly Completions</div>
           <div style={{display:"flex",alignItems:"flex-end",gap:6,height:80}}>
             {["M","T","W","T","F","S","S"].map((d,i)=>(
               <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
-                <div style={{width:"100%",borderRadius:"3px 3px 0 0",background:i===6?`linear-gradient(180deg,${T.accent},${T.accentAlt})`:T.surface3,height:`${(wk[i]/maxW)*68}px`,transition:"height .6s ease"}}/>
+                <div title={`${wk[i]} done`} style={{width:"100%",borderRadius:"3px 3px 0 0",background:i===monOffset?`linear-gradient(180deg,${T.accent},${T.accentAlt})`:wk[i]>0?T.accent+"55":T.surface3,height:`${Math.max((wk[i]/maxW)*68,3)}px`,transition:"height .6s ease"}}/>
                 <span style={{fontSize:9,color:T.textMuted}}>{d}</span>
               </div>
             ))}
@@ -2058,7 +2193,7 @@ function AnalyticsView({T,tasks,xp,level,streak}) {
         <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:16}}>
           <div style={{fontSize:12,fontWeight:600,marginBottom:10}}>Activity Heatmap</div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}}>
-            {heat.map((c,i)=><div key={i} style={{aspectRatio:"1",borderRadius:2,background:c.v===0?T.surface2:`rgba(192,132,252,${c.v/5*.9+.1})`,cursor:"default",transition:"transform .1s"}} onMouseEnter={e=>e.currentTarget.style.transform="scale(1.3)"} onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}/>)}
+            {heat.map((c,i)=><div key={i} title={`${c.d}: ${c.n} task${c.n===1?"":"s"} done`} style={{aspectRatio:"1",borderRadius:2,background:c.v===0?T.surface2:`rgba(192,132,252,${c.v/5*.9+.1})`,cursor:"default",transition:"transform .1s"}} onMouseEnter={e=>e.currentTarget.style.transform="scale(1.3)"} onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}/>)}
           </div>
           <div style={{display:"flex",alignItems:"center",gap:4,marginTop:8}}>
             <span style={{fontSize:9,color:T.textMuted}}>Less</span>

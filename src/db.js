@@ -31,9 +31,11 @@ export const db = {
       priority: t.priority, tag: t.tag, due: t.due || null,
       starred: t.starred, notes: t.notes || "", color: t.color || null,
       subtasks: t.subtasks || [], recurring: t.recurring || null,
-      quadrant: t.quadrant || null, remind_at: t.remindAt || null, time_end: t.endTime || null,
+      quadrant: t.quadrant || null, remind_at: t.remindAt || null,
       attachments: t.attachments || [], position: t.position != null ? t.position : Date.now(),
       myday_date: t.mydayDate || null,
+      // Only send time_end when set — keeps inserts working on databases that haven't run the time_end migration yet.
+      ...(t.endTime ? { time_end: t.endTime } : {}),
     });
     if (error) throw error;
   },
