@@ -1140,7 +1140,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           </div>
         )}
         {view!=="myday"&&(
-          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,marginTop:-4}}>💡 Tip: swipe a task right (or drag right) to add it to My Day ☀️</div>
+          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,marginTop:-4}}>💡 Swipe a task ← left to delete · → right to add to My Day ☀️ · hold & drag to reorder</div>
         )}
         {view!=="completed"&&(
           <div style={{display:"flex",gap:5,marginBottom:12}}>
@@ -1247,6 +1247,19 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
   const [ns,setNs]=useState("");
   useEffect(()=>{setNts(task.notes||"");setTtl(task.title||"");},[task.id]);
   const addSub=()=>{if(!ns.trim())return;onUpdate(task.id,{subtasks:[...(task.subtasks||[]),{id:Date.now(),title:ns.trim(),done:false}]});setNs("");};
+  // A short one-line note here also gets parsed for a date/time (like a linked note): sets the reminder + cleans the text.
+  const parseNotesBlur=()=>{
+    const raw=nts.trim();
+    if(!raw || raw.includes("\n") || raw.length>80) return; // only auto-parse short single-line quick notes
+    const p=parseNL(raw);
+    if(!p.due && !p.time) return;
+    const patch={};
+    if(p.due && p.due!==task.due) patch.due=p.due;
+    if(p.time){ const d=p.due||task.due||tod(); const ra=`${d}T${p.time}`; if(ra!==task.remindAt){ patch.remindAt=ra; if(!patch.due&&!task.due) patch.due=d; } if(p.endTime&&p.endTime!==task.endTime) patch.endTime=p.endTime; }
+    const cleaned=(p.title && p.title!==raw)?p.title:"";
+    if(cleaned!==raw){ patch.notes=cleaned; setNts(cleaned); }
+    if(Object.keys(patch).length) onUpdate(task.id,patch);
+  };
   const COLS=[null,"#ef4444","#f97316","#f59e0b","#22c55e","#3b82f6","#a855f7"];
   const [closeX,setCloseX]=useState(0);
   const panelDown=e=>{
@@ -1274,7 +1287,8 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
         <button onClick={onClose} style={{width:24,height:24,borderRadius:6,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginLeft:6}}><Ico n="x" s={13}/></button>
       </div>
       <DL label="Notes" T={T}>
-        <textarea value={nts} onChange={e=>{setNts(e.target.value);onUpdate(task.id,{notes:e.target.value});}} placeholder="Notes, links, markdown…" style={{marginTop:4,width:"100%",minHeight:52,padding:"6px 9px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"vertical",lineHeight:1.5}}/>
+        <textarea value={nts} onChange={e=>{setNts(e.target.value);onUpdate(task.id,{notes:e.target.value});}} onBlur={parseNotesBlur} placeholder="Notes, links… a date/time here also sets the reminder" style={{marginTop:4,width:"100%",minHeight:52,padding:"6px 9px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"vertical",lineHeight:1.5}}/>
+        {nts&&<button onClick={()=>{setNts("");onUpdate(task.id,{notes:""});}} style={{marginTop:4,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:600,fontFamily:"'DM Sans',sans-serif",display:"inline-flex",alignItems:"center",gap:4}}><Ico n="trash" s={10} c={T.textMuted}/> Clear notes</button>}
       </DL>
       <DL label="Attachments 📎" T={T}>
         <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:5}}>
@@ -1706,7 +1720,7 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,onLinkNote}) {
             <span style={{fontSize:11,color:T.textMuted}}>Standalone editor</span>
           </div>
           <div style={{fontSize:11,color:T.textMuted,marginBottom:10,lineHeight:1.5,padding:"7px 9px",background:T.surface2,borderRadius:8,border:`1px solid ${T.border}`}}>
-            💡 Notes are for <strong>freeform writing</strong> — meeting notes, ideas, journals, references.
+            💡 Notes are for <strong>freeform writing</strong> — meeting notes, ideas, journals, references. <span style={{opacity:.8}}>Swipe a note ← left to delete.</span>
           </div>
           <div style={{display:"flex",gap:6}}>
             <input value={nt} onChange={e=>setNt(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addNote()} placeholder="New note title…" style={{flex:1,padding:"7px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
@@ -1754,7 +1768,7 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,onLinkNote}) {
       {sel?(
         <div style={{flex:1,display:"flex",flexDirection:"column",padding:"18px 26px 22px",overflowY:"auto"}}>
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
-            <input value={sel.title} onChange={e=>upNote(sel.id,{title:e.target.value})} style={{flex:1,fontFamily:"'Sora',sans-serif",fontSize:20,fontWeight:700,background:"transparent",border:"none",outline:"none",color:T.text,letterSpacing:"-.3px"}}/>
+            <input value={sel.title} onChange={e=>upNote(sel.id,{title:e.target.value})} onBlur={()=>{ if(sel.taskId!=null){ const t=(tasks||[]).find(x=>x.id===sel.taskId); if(t) onLinkNote?.(sel,t); } }} style={{flex:1,fontFamily:"'Sora',sans-serif",fontSize:20,fontWeight:700,background:"transparent",border:"none",outline:"none",color:T.text,letterSpacing:"-.3px"}}/>
             <div style={{display:"flex",gap:5}}>
               {ACC.slice(0,5).map(c=><div key={c} onClick={()=>upNote(sel.id,{color:c})} style={{width:14,height:14,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${sel.color===c?T.text:"transparent"}`,transition:"border-color .15s"}}/>)}
             </div>
