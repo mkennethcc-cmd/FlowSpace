@@ -845,7 +845,7 @@ export default function FlowSpace() {
         <div style={{flex:1,overflow:"hidden",display:"flex"}}>
           {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask} requestLink={requestLink} onCanvasToNote={linkIdeaToTask} onOpenTask={setSelTask} selId={selTask?.id}/>}
           {view==="matrix"&&selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={id=>{deleteTask(id);setSelTask(null);}} onDuplicate={duplicateTask} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} canDelete={canDeleteTask(selTask)} onViewImage={setImgView} onClose={()=>setSelTask(null)}/>}
-          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onLinkNote={foldNoteIntoTask} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
+          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onLinkNote={foldNoteIntoTask} onClearTaskNotes={id=>updateTask(id,{notes:""})} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} onCheckin={key=>{awardXp("habit-"+key+"-"+todStr,15);markActiveDay();navigator.vibrate?.(20);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
@@ -1688,7 +1688,32 @@ function DrawPad({value,T,onChange}) {
   );
 }
 
-function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,onLinkNote}) {
+// Reusable swipe-left-to-delete row (red "Release to delete" reveal). Buttons inside are excluded from the swipe.
+function SwipeRow({T,onDelete,onTap,children}) {
+  const [sx,setSx]=useState(0);
+  const didSwipe=useRef(false);
+  const down=e=>{
+    if(e.target.closest("button,[data-nodrag]")) return;
+    didSwipe.current=false;
+    const startX=e.clientX,startY=e.clientY; let mode=null;
+    const cleanup=()=>{window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up);window.removeEventListener("pointercancel",up);};
+    const mv=ev=>{ const dx=ev.clientX-startX,dy=ev.clientY-startY;
+      if(mode==="swipe"){ didSwipe.current=true; setSx(Math.min(0,Math.max(dx,-140))); return; }
+      if(Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)&&dx<0){ mode="swipe"; setSx(dx); }
+      else if(Math.abs(dy)>10){ cleanup(); } };
+    const up=ev=>{ cleanup(); if(mode==="swipe"){ const dx=ev.clientX-startX; if(dx<-70){ navigator.vibrate?.(20); onDelete?.(); } setSx(0); } };
+    window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up);window.addEventListener("pointercancel",up);
+  };
+  return (
+    <div style={{position:"relative",borderRadius:8,overflow:"hidden",marginBottom:2}}>
+      {sx<0&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"flex-end",paddingRight:14,gap:5,background:`linear-gradient(270deg,${T.danger}55,transparent)`,color:T.danger,fontWeight:700,fontSize:11,pointerEvents:"none"}}>{sx<-70?"Release to delete":"Delete"}<Ico n="trash" s={13} c={T.danger}/></div>}
+      <div onPointerDown={down} onClick={()=>{ if(didSwipe.current){didSwipe.current=false;return;} onTap?.(); }} style={{transform:sx?`translateX(${sx}px)`:"none",transition:sx?"none":"transform .12s",background:sx?T.bg:"transparent",cursor:onTap?"pointer":"default",touchAction:"pan-y"}}>
+        {children}
+      </div>
+    </div>
+  );
+}
+function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,onLinkNote,onClearTaskNotes}) {
   const [sel,setSel]=useState(null);
   const [nt,setNt]=useState("");
   const [mode,setMode]=useState("text");
@@ -1739,23 +1764,25 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,onLinkNote}) {
           <div style={{padding:"4px 8px 16px",borderTop:`1px solid ${T.border}`}}>
             <div style={{padding:"10px 4px 4px",fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted}}>📋 Notes on tasks</div>
             {linkedNotes.map(({note,task})=>(
-              <div key={"ln"+note.id} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 8px",borderRadius:8,marginBottom:2,background:"transparent"}} onMouseEnter={e=>e.currentTarget.style.background=T.surface2} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                <button onClick={()=>setSel(note)} title="Edit this note here" style={{flex:1,minWidth:0,textAlign:"left",background:"none",border:"none",cursor:"pointer",padding:0,display:"flex",alignItems:"center",gap:5}}>
+              <SwipeRow key={"ln"+note.id} T={T} onDelete={()=>delNote(note.id)} onTap={()=>setSel(note)}>
+                <div title="Tap to edit · swipe ← to delete" style={{display:"flex",alignItems:"center",gap:5,padding:"6px 8px"}}>
                   <span style={{fontSize:11}}>🔗</span>
-                  <span style={{fontSize:12,fontWeight:600,color:T.text,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{note.title||"Untitled"}</span>
-                </button>
-                <button onClick={()=>onGoToTask?.(task)} title={"Go to task: "+task.title} style={{background:"none",border:"none",cursor:"pointer",color:T.accent,fontWeight:700,fontSize:9,whiteSpace:"nowrap",fontFamily:"'DM Sans',sans-serif",padding:"2px 4px"}}>{task.title.slice(0,10)} →</button>
-              </div>
+                  <span style={{fontSize:12,fontWeight:600,color:T.text,flex:1,minWidth:0,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{note.title||"Untitled"}</span>
+                  <button onClick={e=>{e.stopPropagation();onGoToTask?.(task);}} data-nodrag title={"Go to task: "+task.title} style={{background:"none",border:"none",cursor:"pointer",color:T.accent,fontWeight:700,fontSize:9,whiteSpace:"nowrap",fontFamily:"'DM Sans',sans-serif",padding:"2px 4px",flexShrink:0}}>{task.title.slice(0,10)} →</button>
+                </div>
+              </SwipeRow>
             ))}
             {taskNotes.map(t=>(
-              <div key={t.id} onClick={()=>onGoToTask?.(t)} title="Go to task" style={{padding:"8px",borderRadius:8,cursor:"pointer",marginBottom:2,background:"transparent",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background=T.surface2} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                <div style={{display:"flex",alignItems:"center",gap:5}}>
-                  <Ico n="check" s={11} c={T.textMuted}/>
-                  <span style={{fontSize:12,fontWeight:600,color:T.text,flex:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.title}</span>
-                  <span style={{fontSize:9,color:T.accent,fontWeight:700,whiteSpace:"nowrap"}}>Go →</span>
+              <SwipeRow key={t.id} T={T} onDelete={()=>onClearTaskNotes?.(t.id)} onTap={()=>onGoToTask?.(t)}>
+                <div title="Tap to open task · swipe ← to clear this note" style={{padding:"8px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:5}}>
+                    <Ico n="check" s={11} c={T.textMuted}/>
+                    <span style={{fontSize:12,fontWeight:600,color:T.text,flex:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.title}</span>
+                    <button onClick={e=>{e.stopPropagation();onGoToTask?.(t);}} data-nodrag style={{background:"none",border:"none",cursor:"pointer",color:T.accent,fontWeight:700,fontSize:9,whiteSpace:"nowrap",fontFamily:"'DM Sans',sans-serif",flexShrink:0}}>Go →</button>
+                  </div>
+                  <div style={{fontSize:11,color:T.textMuted,marginTop:2,marginLeft:16,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.notes.slice(0,46)}</div>
                 </div>
-                <div style={{fontSize:11,color:T.textMuted,marginTop:2,marginLeft:16,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.notes.slice(0,46)}</div>
-              </div>
+              </SwipeRow>
             ))}
           </div>
         )}
