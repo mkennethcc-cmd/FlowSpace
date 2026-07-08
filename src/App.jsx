@@ -375,6 +375,8 @@ export default function FlowSpace() {
   const bumpStat=delta=>setDayStats(s=>{ const d=tod(); const n={...s,[d]:Math.max(0,(s[d]||0)+delta)}; const ks=Object.keys(n).sort(); while(ks.length>70) delete n[ks.shift()]; try{localStorage.setItem("fs_daystats",JSON.stringify(n));}catch{} return n; });
   // Focus mode: tie a task to the Pomodoro timer.
   const [focusTask,setFocusTask]=useState(null);
+  const [zenOpen,setZenOpen]=useState(false); // full-screen focus overlay
+  const [tourStep,setTourStep]=useState(()=>{ try{ return localStorage.getItem("fs_tour")?-1:0; }catch{ return -1; } }); // first-run welcome tour (-1 = done)
   const focusRef=useRef(null);
   useEffect(()=>{ focusRef.current=focusTask; },[focusTask]);
   const [navOrg, setNavOrg] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_navorg")||"null"); }catch{ return null; } });
@@ -735,7 +737,7 @@ export default function FlowSpace() {
     if(noteText){ const existing=(task.notes||"").trim(); if(!existing.includes(cleaned||noteText)) patch.notes=(existing?existing+"\n":"")+noteText; }
     if(Object.keys(patch).length) updateTask(task.id,patch);
   };
-  const startFocus=t=>{ setFocusTask({id:t.id,title:t.title}); setPomSecs(pomLen*60); setPomRun(true); navigator.vibrate?.(20); showToast(`🍅 Focusing on "${t.title}" — ${pomLen} min timer started`); };
+  const startFocus=t=>{ setFocusTask({id:t.id,title:t.title}); setPomSecs(pomLen*60); setPomRun(true); setZenOpen(true); navigator.vibrate?.(20); showToast(`🍅 Focusing on "${t.title}" — ${pomLen} min timer started`); };
   // Habits scheduled for today (day-picked habits only count on their weekdays) — shown as a strip in My Day.
   const todWd=new Date(todStr+"T12:00:00").getDay();
   const habitsToday=habits.filter(h=>!h.days||h.days.length===0||h.days.includes(todWd)).slice().sort((a,b)=>(a.prio??999)-(b.prio??999));
@@ -805,6 +807,47 @@ export default function FlowSpace() {
   return (
     <div style={{fontFamily:"'DM Sans',sans-serif",background:T.bg,color:T.text,height:"100%",display:"flex",overflow:"hidden",transition:"background .3s,color .3s"}}>
       <FontLink/>
+      {focusTask&&zenOpen&&(
+        <div style={{position:"fixed",inset:0,zIndex:1500,background:"linear-gradient(160deg,#0c0e16,#1b1038)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:14,color:"#eef0fa",padding:20}}>
+          <style>{`@keyframes fsBreathe{0%,100%{transform:scale(1);opacity:.45}50%{transform:scale(1.12);opacity:1}}`}</style>
+          <div style={{position:"relative",width:250,height:250,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <div style={{position:"absolute",inset:0,borderRadius:"50%",border:"2px solid rgba(192,132,252,.55)",animation:"fsBreathe 4s ease-in-out infinite"}}/>
+            <div style={{position:"absolute",inset:26,borderRadius:"50%",border:"1.5px solid rgba(129,140,248,.4)",animation:"fsBreathe 4s ease-in-out infinite .6s"}}/>
+            <div style={{fontFamily:"'Sora',sans-serif",fontSize:54,fontWeight:800,letterSpacing:"-1px"}}>{pmm}:{pms}</div>
+          </div>
+          <div style={{fontSize:12,color:"#7a85a3",letterSpacing:".5px",textTransform:"uppercase",fontWeight:700}}>Focusing on</div>
+          <div style={{fontFamily:"'Sora',sans-serif",fontSize:19,fontWeight:700,maxWidth:"85%",textAlign:"center",lineHeight:1.35}}>🍅 {focusTask.title}</div>
+          <div style={{display:"flex",gap:10,marginTop:10,flexWrap:"wrap",justifyContent:"center"}}>
+            <button onClick={()=>setPomRun(r=>!r)} style={{padding:"9px 20px",borderRadius:10,border:"none",cursor:"pointer",background:pomRun?"rgba(255,255,255,.1)":T.grad,color:"#fff",fontSize:13,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{pomRun?"⏸ Pause":"▶ Resume"}</button>
+            <button onClick={()=>setZenOpen(false)} style={{padding:"9px 20px",borderRadius:10,border:"1px solid rgba(255,255,255,.15)",cursor:"pointer",background:"transparent",color:"#7a85a3",fontSize:13,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Minimize</button>
+            <button onClick={()=>{setPomRun(false);setFocusTask(null);setZenOpen(false);setPomSecs(pomLen*60);}} style={{padding:"9px 20px",borderRadius:10,border:"1px solid rgba(239,68,68,.35)",cursor:"pointer",background:"rgba(239,68,68,.12)",color:"#f87171",fontSize:13,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>End session</button>
+          </div>
+          <div style={{fontSize:11,color:"#7a85a3",marginTop:4}}>Breathe with the ring · finish the timer to earn +25 XP</div>
+        </div>
+      )}
+      {tourStep>=0&&(()=>{ const TOUR=[
+          ["⚡","Welcome to FlowSpace","Tasks, habits, notes and focus — one calm place. Here's the 20-second tour."],
+          ["✨","Just type naturally","Type “Dentist Friday 3pm” anywhere you add a task — the date, time and category set themselves. Steps inside a task parse dates too."],
+          ["👆","Gestures everywhere","Swipe a task → for My Day, ← to delete. Hold & drag to reorder lists, nest folders, or drop steps onto calendar days."],
+          ["🎯","Build your rhythm","Give habits weekdays & a 1-2-3 priority, focus with the 🍅 Pomodoro for +25 XP, and share your week from Analytics."],
+        ]; const [em,ti,tx]=TOUR[tourStep]; const last=tourStep===TOUR.length-1;
+        const endTour=()=>{ try{localStorage.setItem("fs_tour","1");}catch{} setTourStep(-1); };
+        return (
+        <div style={{position:"fixed",inset:0,zIndex:2500,background:"rgba(5,6,12,.72)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{width:400,maxWidth:"94vw",background:T.surface,border:`1px solid ${T.border}`,borderRadius:20,padding:"30px 26px 22px",textAlign:"center",boxShadow:"0 24px 80px rgba(0,0,0,.5)"}}>
+            <div style={{fontSize:52,marginBottom:12}}>{em}</div>
+            <div style={{fontFamily:"'Sora',sans-serif",fontSize:19,fontWeight:800,marginBottom:8}}>{ti}</div>
+            <div style={{fontSize:13,color:T.textMuted,lineHeight:1.6,minHeight:62}}>{tx}</div>
+            <div style={{display:"flex",justifyContent:"center",gap:6,margin:"16px 0"}}>
+              {TOUR.map((_,i)=><span key={i} style={{width:i===tourStep?18:7,height:7,borderRadius:4,background:i===tourStep?T.accent:T.surface3,transition:"all .25s"}}/>)}
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={endTour} style={{flex:1,padding:"10px",borderRadius:10,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:13,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Skip</button>
+              <button onClick={()=>last?endTour():setTourStep(s=>s+1)} style={{flex:2,padding:"10px",borderRadius:10,border:"none",background:T.grad,color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{last?"Let's go ⚡":"Next"}</button>
+            </div>
+          </div>
+        </div>
+        );})()}
       {toast&&(
         <div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",zIndex:2000,display:"flex",alignItems:"center",gap:12,background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"10px 14px",boxShadow:"0 10px 30px rgba(0,0,0,.4)",animation:"slideIn .2s ease",maxWidth:"90vw"}}>
           <span style={{fontSize:13,color:T.text}}>{toast.msg}</span>
@@ -856,10 +899,10 @@ export default function FlowSpace() {
                 <button onClick={cyclePom} title={pomRun?"":"Tap to change length"} style={{background:"none",border:"none",cursor:pomRun?"default":"pointer",padding:0,display:"flex",alignItems:"center",gap:3,color:pomRun?T.accent:T.textMuted,fontSize:9,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{!pomRun&&<span>{pomLen}m</span>}<Ico n="clock" s={12} c={pomRun?T.accent:T.textMuted}/></button>
               </div>
               {focusTask&&(
-                <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:6,padding:"4px 8px",borderRadius:7,background:T.accentGlow,border:`1px solid ${T.accent}33`}}>
+                <div onClick={()=>setZenOpen(true)} title="Tap to go full-screen zen" style={{display:"flex",alignItems:"center",gap:5,marginBottom:6,padding:"4px 8px",borderRadius:7,background:T.accentGlow,border:`1px solid ${T.accent}33`,cursor:"pointer"}}>
                   <span style={{fontSize:10}}>🍅</span>
                   <span style={{flex:1,minWidth:0,fontSize:10,fontWeight:700,color:T.accent,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{focusTask.title}</span>
-                  <button onClick={()=>setFocusTask(null)} title="Stop focusing" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",padding:0}}><Ico n="x" s={10}/></button>
+                  <button onClick={e=>{e.stopPropagation();setFocusTask(null);setZenOpen(false);}} title="Stop focusing" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",padding:0}}><Ico n="x" s={10}/></button>
                 </div>
               )}
               <div style={{fontSize:26,fontFamily:"'Sora',sans-serif",fontWeight:700,color:pomRun?T.accent:T.text,letterSpacing:"-1px",textAlign:"center",marginBottom:8}}>{pmm}:{pms}</div>
