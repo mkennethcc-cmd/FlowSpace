@@ -17,7 +17,7 @@ const healIcon = (name, icon) => (!icon || icon === "📌") ? (DEFAULT_CAT_ICON[
 
 const fromDbCanvas = r => ({ id: r.id, text: r.text, x: r.x, y: r.y, color: r.color });
 const fromDbNote = r => ({ id: r.id, title: r.title, body: r.body || "", pinned: r.pinned, color: r.color, drawing: r.drawing || null, taskId: r.task_id != null ? r.task_id : null, created: r.created_at?.split("T")[0] || "" });
-const fromDbHabit = r => ({ id: r.id, name: r.name || "", icon: r.icon || "✅", color: r.color || "#22c55e", cadence: r.cadence != null ? r.cadence : 7, log: Array.isArray(r.log) ? r.log : [], created: r.created_at?.split("T")[0] || "" });
+const fromDbHabit = r => ({ id: r.id, name: r.name || "", icon: r.icon || "✅", color: r.color || "#22c55e", cadence: r.cadence != null ? r.cadence : 7, log: Array.isArray(r.log) ? r.log : [], days: Array.isArray(r.days) && r.days.length ? r.days : null, prio: r.prio != null ? r.prio : null, created: r.created_at?.split("T")[0] || "" });
 
 export const db = {
   async loadTasks() {
@@ -128,9 +128,12 @@ export const db = {
   },
   async syncHabits(habits, uid) {
     await supabase.from("habits").delete().eq("user_id", uid);
-    if (habits.length) await supabase.from("habits").insert(
-      habits.map(h => ({ id: h.id, user_id: uid, name: h.name, icon: h.icon, color: h.color, cadence: h.cadence != null ? h.cadence : 7, log: h.log || [] }))
-    );
+    if (!habits.length) return;
+    const base = h => ({ id: h.id, user_id: uid, name: h.name, icon: h.icon, color: h.color, cadence: h.cadence != null ? h.cadence : 7, log: h.log || [] });
+    const extra = h => ({ ...(h.days && h.days.length ? { days: h.days } : {}), ...(h.prio != null ? { prio: h.prio } : {}) });
+    const { error } = await supabase.from("habits").insert(habits.map(h => ({ ...base(h), ...extra(h) })));
+    // days/prio columns missing (migration not run yet) → retry without them so habits are never lost.
+    if (error) await supabase.from("habits").insert(habits.map(base));
   },
 
   async loadCats(uid) {

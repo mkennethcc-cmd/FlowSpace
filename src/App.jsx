@@ -736,6 +736,13 @@ export default function FlowSpace() {
     if(Object.keys(patch).length) updateTask(task.id,patch);
   };
   const startFocus=t=>{ setFocusTask({id:t.id,title:t.title}); setPomSecs(pomLen*60); setPomRun(true); navigator.vibrate?.(20); showToast(`🍅 Focusing on "${t.title}" — ${pomLen} min timer started`); };
+  // Habits scheduled for today (day-picked habits only count on their weekdays) — shown as a strip in My Day.
+  const todWd=new Date(todStr+"T12:00:00").getDay();
+  const habitsToday=habits.filter(h=>!h.days||h.days.length===0||h.days.includes(todWd)).slice().sort((a,b)=>(a.prio??999)-(b.prio??999));
+  const toggleHabitToday=id=>{ const h=habits.find(x=>x.id===id); if(!h)return; const done=(h.log||[]).includes(todStr);
+    setHabits(hs=>hs.map(x=>x.id===id?{...x,log:done?(x.log||[]).filter(d=>d!==todStr):[...(x.log||[]),todStr]}:x));
+    if(!done){ awardXp("habit-"+id+"-"+todStr,15); markActiveDay(); navigator.vibrate?.(20); if(habitsToday.every(x=>x.id===id||(x.log||[]).includes(todStr))) fireConfetti(); }
+    else navigator.vibrate?.(8); };
   const toggleStep=(taskId,subId)=>{ const t=tasks.find(x=>x.id===taskId); if(!t)return; updateTask(taskId,{subtasks:(t.subtasks||[]).map(s=>s.id===subId?{...s,done:!s.done}:s)}); };
   const moveStep=(taskId,subId,day)=>{ const t=tasks.find(x=>x.id===taskId); if(!t)return; navigator.vibrate?.(15); updateTask(taskId,{subtasks:(t.subtasks||[]).map(s=>s.id===subId?{...s,due:day}:s)}); showToast(day?`Step scheduled for ${fmtDate(day)} 📅`:"Step date cleared"); };
   // Dragging a task onto a calendar day: keep its reminder at the same time-of-day on the new date.
@@ -901,7 +908,7 @@ export default function FlowSpace() {
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={dayStats} todStr={todStr}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
           {(["myday","flagged","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus}/>
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday}/>
           )}
         </div>
       </main>
@@ -1052,7 +1059,7 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle}) {
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
   const [sort,setSort]=useState("smart");
@@ -1123,7 +1130,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
       // touch vertical: let the list scroll (reorder comes from the hold timer below)
     };
     const end=()=>teardown();
-    if(type!=="mouse") timer=setTimeout(()=>{ if(!decided){ decided=true; teardown(); beginReorder(id); } }, 120); // touch hold anywhere → reorder (same short hold as the grip/habits)
+    if(type!=="mouse") timer=setTimeout(()=>{ if(!decided){ decided=true; teardown(); beginReorder(id); } }, 60); // touch hold anywhere → near-instant reorder, same feel as the grip
     window.addEventListener("pointermove",probe); window.addEventListener("pointerup",end); window.addEventListener("pointercancel",end);
   };
   const gripDown=(e,id)=>{ e.stopPropagation(); e.preventDefault(); beginReorder(id); };
@@ -1162,6 +1169,21 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             <Ico n="repeat" s={14} c={T.textMuted}/> Carried {carriedCount} unfinished {carriedCount===1?"task":"tasks"} forward · tap to undo
           </button>
         )}
+        {view==="myday"&&mydayHabits.length>0&&(()=>{ const hd=mydayHabits.filter(h=>(h.log||[]).includes(todStr)).length; return (
+          <div style={{marginBottom:14,padding:"9px 12px",border:`1px solid ${T.border}`,borderRadius:11,background:T.surface}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:7}}>
+              <span style={{fontSize:11,fontWeight:700,fontFamily:"'Sora',sans-serif"}}>🎯 Today's habits</span>
+              <span style={{fontSize:10,color:hd===mydayHabits.length?"#22c55e":T.textMuted,fontWeight:hd===mydayHabits.length?700:500}}>{hd}/{mydayHabits.length}{hd===mydayHabits.length?" — all done 🎉":""}</span>
+            </div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {mydayHabits.map(h=>{ const done=(h.log||[]).includes(todStr); return (
+                <button key={h.id} onClick={()=>onHabitToggle?.(h.id)} title={done?"Tap to undo today's check-in":"Tap to check in"} style={{display:"inline-flex",alignItems:"center",gap:5,padding:"5px 11px",borderRadius:20,border:`1.5px solid ${done?h.color:T.border}`,background:done?h.color+"26":"transparent",color:done?h.color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:done?700:500,fontFamily:"'DM Sans',sans-serif",transition:"all .15s"}}>
+                  <span>{done?"✓":h.icon}</span>{h.name}
+                </button>
+              );})}
+            </div>
+          </div>
+        );})()}
         {view==="myday"&&suggestions&&suggestions.length>0&&(
           <div style={{marginBottom:14,border:`1px solid ${T.border}`,borderRadius:11,background:T.surface,overflow:"hidden"}}>
             <button onClick={()=>setShowSugg(s=>!s)} style={{width:"100%",display:"flex",alignItems:"center",gap:7,padding:"9px 12px",background:"none",border:"none",cursor:"pointer",color:T.text,fontFamily:"'DM Sans',sans-serif"}}>
@@ -1954,22 +1976,33 @@ function NRow({note,T,sel,onSel,onUp,onDel}) {
 const HABIT_EMOJI=["💧","📖","🏃","🧘","😴","🥗","💪","🚶","📝","☀️","🦷","💊","🎯","🧹","💰","🚭","🎸","🌱"];
 const HABIT_COLORS=["#22c55e","#3b82f6","#f59e0b","#ef4444","#a855f7","#ec4899","#14b8a6","#eab308"];
 const HABIT_SUGGEST=[["Drink water","💧"],["Read","📖"],["Exercise","🏃"],["Meditate","🧘"],["Sleep early","😴"],["Eat healthy","🥗"]];
+const WD_SHORT=["Su","Mo","Tu","We","Th","Fr","Sa"];
+const WD_ORDER=[1,2,3,4,5,6,0]; // Monday-first chips
 function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
   const [name,setName]=useState("");
   const [icon,setIcon]=useState("✨");
   const [iconPicked,setIconPicked]=useState(false);
   const [color,setColor]=useState(HABIT_COLORS[0]);
   const [cadence,setCadence]=useState(7);
+  const [days,setDays]=useState(null); // specific weekdays for the new habit (null = count-based goal)
   const [pick,setPick]=useState(false);
   const [editId,setEditId]=useState(null);
   const [editPicked,setEditPicked]=useState(false); // manually chose an icon while editing → stop auto-guessing
   const has=(h,d)=>(h.log||[]).includes(d);
+  // Day scheduling: habits with a `days` list only "count" on those weekdays; the rest are every-day.
+  const todWd=new Date(todStr+"T12:00:00").getDay();
+  const schedToday=h=>!h.days||h.days.length===0||h.days.includes(todWd);
+  const schedOn=(h,d)=>!h.days||h.days.length===0||h.days.includes(new Date(d+"T12:00:00").getDay());
+  const daysLabel=h=>(!h.days||h.days.length===0)?null:(h.days.length===7?"Every day":WD_ORDER.filter(d=>h.days.includes(d)).map(d=>WD_SHORT[d]).join(" "));
+  // Today's scheduled habits first, ordered by their priority number (1 = top); ties keep manual drag order.
+  const todayHabits=habits.filter(schedToday).slice().sort((a,b)=>(a.prio??999)-(b.prio??999));
+  const extraHabits=habits.filter(h=>!schedToday(h));
   // Same smart icon system as the sidebar folders: the icon picks itself from the name as you type.
   const onNameChange=v=>{ setName(v); if(!iconPicked) setIcon(guessIcon(v,"✨")); };
-  const add=(nm,ic)=>{ const n=(nm??name).trim(); if(!n)return; const finalIc=ic||(iconPicked?icon:guessIcon(n,"✨")); setHabits(hs=>{ const id=Math.max(Date.now(),hs.reduce((m,h)=>Math.max(m,h.id||0),0)+1); return [...hs,{id,name:n,icon:finalIc,color,cadence,log:[],created:todStr}]; }); setName(""); setIcon("✨"); setIconPicked(false); };
+  const add=(nm,ic)=>{ const n=(nm??name).trim(); if(!n)return; const finalIc=ic||(iconPicked?icon:guessIcon(n,"✨")); const hDays=days&&days.length?days:null; setHabits(hs=>{ const id=Math.max(Date.now(),hs.reduce((m,h)=>Math.max(m,h.id||0),0)+1); return [...hs,{id,name:n,icon:finalIc,color,cadence:hDays?hDays.length:cadence,days:hDays,prio:null,log:[],created:todStr}]; }); setName(""); setIcon("✨"); setIconPicked(false); setDays(null); };
   const patch=(id,p)=>setHabits(hs=>hs.map(x=>x.id===id?{...x,...p}:x));
   const toggle=h=>{ const done=has(h,todStr); setHabits(hs=>hs.map(x=>x.id===h.id?{...x,log:done?(x.log||[]).filter(d=>d!==todStr):[...(x.log||[]),todStr]}:x));
-    if(!done){ onCheckin?.(h.id); if(habits.every(x=>x.id===h.id||has(x,todStr))) fireConfetti(); } // last unchecked habit of the day → celebrate
+    if(!done){ onCheckin?.(h.id); if(habits.filter(schedToday).every(x=>x.id===h.id||has(x,todStr))) fireConfetti(); } // last scheduled habit of the day → celebrate
     else navigator.vibrate?.(8); };
   const del=id=>{ const h=habits.find(x=>x.id===id); if(!h)return; const idx=habits.findIndex(x=>x.id===id); setHabits(hs=>hs.filter(x=>x.id!==id)); navigator.vibrate?.(15); showToast?.(`Habit "${h.name}" deleted`,()=>{ setHabits(hs=>{ const arr=[...hs]; arr.splice(Math.min(idx,arr.length),0,h); return arr; }); showToast?.("Habit restored ✓"); }); };
   const [dragId,setDragId]=useState(null);
@@ -1999,19 +2032,23 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
       else { decided=true; teardown(); }                                                // touch vertical = let the page scroll
     };
     const end=()=>teardown();
-    if(type!=="mouse") timer=setTimeout(()=>{ if(!decided)startR(); },120);
+    if(type!=="mouse") timer=setTimeout(()=>{ if(!decided)startR(); },60); // near-instant — same feel as the grip handle
     window.addEventListener("pointermove",probe); window.addEventListener("pointerup",end); window.addEventListener("pointercancel",end);
   };
-  const streakOf=h=>{ const set=new Set(h.log||[]); let i=set.has(todStr)?0:1, s=0; for(;;){ if(set.has(addDays(-i))){s++;i++;} else break; if(s>999)break; } return s; };
+  // Streak only counts scheduled days: a Mon/Wed/Fri habit doesn't lose its fire over the weekend.
+  const streakOf=h=>{ const set=new Set(h.log||[]); let s=0;
+    if(schedOn(h,todStr)&&set.has(todStr)) s++;
+    for(let i=1;i<400;i++){ const d=addDays(-i); if(!schedOn(h,d)) continue; if(set.has(d)) s++; else break; }
+    return s; };
   const weekCount=h=>{ const set=new Set(h.log||[]); let c=0; for(let i=0;i<7;i++) if(set.has(addDays(-i))) c++; return c; };
   const last=n=>[...Array(n)].map((_,i)=>addDays(-(n-1-i)));
-  const doneToday=habits.filter(h=>has(h,todStr)).length;
-  const allDone=habits.length>0&&doneToday===habits.length;
-  const msg=habits.length===0?"Build a habit — small, daily, unstoppable.":allDone?"🎉 Every habit done today. Incredible consistency!":doneToday===0?"A fresh day. Check off your first habit 👇":`${doneToday}/${habits.length} done today — keep the momentum!`;
+  const doneToday=todayHabits.filter(h=>has(h,todStr)).length;
+  const allDone=todayHabits.length>0&&doneToday===todayHabits.length;
+  const msg=habits.length===0?"Build a habit — small, daily, unstoppable.":allDone?"🎉 Every habit scheduled today is done. Incredible consistency!":doneToday===0?"A fresh day. Check off your first habit 👇":`${doneToday}/${todayHabits.length} done today — keep the momentum!`;
   return (
     <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
       <div style={{marginBottom:16}}>
-        <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:22,fontWeight:700,letterSpacing:"-.5px",display:"flex",alignItems:"center",gap:8}}>Habits {habits.length>0&&<span style={{fontSize:12,fontWeight:600,color:T.textMuted,background:T.surface2,border:`1px solid ${T.border}`,borderRadius:20,padding:"2px 10px"}}>{doneToday}/{habits.length} today</span>}</h1>
+        <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:22,fontWeight:700,letterSpacing:"-.5px",display:"flex",alignItems:"center",gap:8}}>Habits {todayHabits.length>0&&<span style={{fontSize:12,fontWeight:600,color:T.textMuted,background:T.surface2,border:`1px solid ${T.border}`,borderRadius:20,padding:"2px 10px"}}>{doneToday}/{todayHabits.length} today</span>}</h1>
         <p style={{fontSize:13,color:allDone?"#22c55e":T.textMuted,marginTop:3,fontWeight:allDone?600:400}}>{msg}</p>
       </div>
 
@@ -2031,11 +2068,15 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
           <div style={{display:"flex",gap:5}}>
             {HABIT_COLORS.map(c=><div key={c} onClick={()=>setColor(c)} style={{width:18,height:18,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${color===c?T.text:"transparent"}`}}/>)}
           </div>
-          <div style={{marginLeft:"auto",display:"flex",gap:4,alignItems:"center"}}>
+          <div style={{marginLeft:"auto",display:"flex",gap:4,alignItems:"center",flexWrap:"wrap"}}>
             <span style={{fontSize:11,color:T.textMuted}}>Goal:</span>
-            {[[7,"Daily"],[5,"5×/wk"],[3,"3×/wk"]].map(([v,l])=>(
-              <button key={v} onClick={()=>setCadence(v)} style={{padding:"4px 10px",borderRadius:20,border:`1px solid ${cadence===v?T.accent:T.border}`,background:cadence===v?T.accentGlow:"transparent",color:cadence===v?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:cadence===v?700:500,fontFamily:"'DM Sans',sans-serif"}}>{l}</button>
-            ))}
+            {[[7,"Daily"],[5,"5×/wk"],[3,"3×/wk"]].map(([v,l])=>{ const on=!days?.length&&cadence===v; return (
+              <button key={v} onClick={()=>{setCadence(v);setDays(null);}} style={{padding:"4px 10px",borderRadius:20,border:`1px solid ${on?T.accent:T.border}`,background:on?T.accentGlow:"transparent",color:on?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:on?700:500,fontFamily:"'DM Sans',sans-serif"}}>{l}</button>
+            );})}
+            <span style={{fontSize:11,color:T.textMuted,marginLeft:4}}>or days:</span>
+            {WD_ORDER.map(d=>{ const on=(days||[]).includes(d); return (
+              <button key={d} onClick={()=>setDays(cur=>{ const c=cur||[]; const nd=c.includes(d)?c.filter(x=>x!==d):[...c,d]; return nd.length?nd:null; })} title="Only count this habit on chosen weekdays" style={{width:26,height:26,borderRadius:"50%",border:`1px solid ${on?T.accent:T.border}`,background:on?T.accentGlow:"transparent",color:on?T.accent:T.textMuted,cursor:"pointer",fontSize:9,fontWeight:on?800:500,fontFamily:"'DM Sans',sans-serif",padding:0}}>{WD_SHORT[d]}</button>
+            );})}
           </div>
         </div>
       </div>
@@ -2049,10 +2090,9 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
         </div>
       )}
 
-      {habits.length>0&&<div style={{fontSize:10,color:T.textMuted,opacity:.6,marginBottom:8}}>💡 Tap the circle to check in · ✎ to edit · swipe ← to delete · hold & drag to reorder · tap the trail bars to fix past days</div>}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12}}>
-        {habits.map(h=>{ const done=has(h,todStr); const st=streakOf(h); const wc=weekCount(h); const sw=swipe?.id===h.id?swipe.x:0;
-          return (
+      {habits.length>0&&<div style={{fontSize:10,color:T.textMuted,opacity:.6,marginBottom:8}}>💡 Tap the circle to check in · ✎ to edit, pick days & priority · swipe ← to delete · hold & drag to reorder · tap the trail bars to fix past days</div>}
+      {(()=>{ const renderCard=h=>{ const done=has(h,todStr); const st=streakOf(h); const wc=weekCount(h); const sw=swipe?.id===h.id?swipe.x:0; const dl=daysLabel(h);
+        return (
           <div key={h.id} data-habit-id={h.id} style={{position:"relative"}}>
             {sw!==0&&<div style={{position:"absolute",inset:0,background:T.danger,borderRadius:14,display:"flex",alignItems:"center",justifyContent:"flex-end",padding:"0 16px",color:"#fff",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{sw<-90?"Release to delete":"Keep pulling ←"} 🗑</div>}
             <div onPointerDown={e=>bodyDown(e,h.id)} style={{background:T.surface,border:`1px solid ${dragId===h.id?T.accent:done?h.color+"66":T.border}`,borderRadius:14,padding:14,position:"relative",transform:sw!==0?`translateX(${sw}px)`:"none",transition:sw!==0?"border-color .2s":"border-color .2s, transform .15s ease",opacity:dragId===h.id?.5:1,touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}>
@@ -2062,13 +2102,17 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
                 <span style={{filter:done?"grayscale(0)":"grayscale(.1)",opacity:done?1:.85}}>{done?"✓":h.icon}</span>
               </button>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontWeight:700,fontSize:15,fontFamily:"'Sora',sans-serif",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{h.icon} {h.name}</div>
-                <div style={{fontSize:12,color:T.textMuted,marginTop:2,display:"flex",alignItems:"center",gap:8}}>
+                <div style={{display:"flex",alignItems:"center",gap:5,minWidth:0}}>
+                  {h.prio!=null&&<span title="Priority — on its scheduled days this habit sorts to the top (set in ✎ edit)" style={{width:16,height:16,borderRadius:"50%",background:T.accentGlow,color:T.accent,fontSize:9,fontWeight:800,display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{h.prio}</span>}
+                  <div style={{fontWeight:700,fontSize:15,fontFamily:"'Sora',sans-serif",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",minWidth:0}}>{h.icon} {h.name}</div>
+                </div>
+                <div style={{fontSize:12,color:T.textMuted,marginTop:2,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                   <span style={{color:st>0?"#f59e0b":T.textMuted,fontWeight:st>0?700:400}}>{st>0?`🔥 ${st} day${st>1?"s":""}`:"No streak yet"}</span>
                   <span>· {wc}/{h.cadence} this wk</span>
+                  {dl&&<span style={{color:T.accent,fontWeight:600}}>· {dl}</span>}
                 </div>
               </div>
-              <button onClick={()=>{setEditId(editId===h.id?null:h.id);setEditPicked(false);}} title="Edit habit — rename, icon, color, goal" style={{width:24,height:24,borderRadius:6,border:"none",background:editId===h.id?T.accentGlow:"transparent",color:editId===h.id?T.accent:T.textMuted,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="edit" s={12} c={editId===h.id?T.accent:T.textMuted}/></button>
+              <button onClick={()=>{setEditId(editId===h.id?null:h.id);setEditPicked(false);}} title="Edit habit — rename, icon, color, days & priority" style={{width:24,height:24,borderRadius:6,border:"none",background:editId===h.id?T.accentGlow:"transparent",color:editId===h.id?T.accent:T.textMuted,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="edit" s={12} c={editId===h.id?T.accent:T.textMuted}/></button>
               <button onClick={()=>del(h.id)} title="Delete habit (undo available)" style={{width:24,height:24,borderRadius:6,border:"none",background:"transparent",color:T.textMuted,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="trash" s={12} c={T.textMuted}/></button>
             </div>
             {editId===h.id&&(
@@ -2079,11 +2123,23 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
                 </div>
                 <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap"}}>
                   {HABIT_COLORS.map(c=><div key={c} onClick={()=>patch(h.id,{color:c})} style={{width:16,height:16,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${h.color===c?T.text:"transparent"}`}}/>)}
-                  <div style={{marginLeft:"auto",display:"flex",gap:4}}>
-                    {[[7,"Daily"],[5,"5×/wk"],[3,"3×/wk"]].map(([v,l])=>(
-                      <button key={v} onClick={()=>patch(h.id,{cadence:v})} style={{padding:"3px 9px",borderRadius:20,border:`1px solid ${h.cadence===v?T.accent:T.border}`,background:h.cadence===v?T.accentGlow:"transparent",color:h.cadence===v?T.accent:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:h.cadence===v?700:500,fontFamily:"'DM Sans',sans-serif"}}>{l}</button>
-                    ))}
-                  </div>
+                </div>
+                <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap"}}>
+                  <span style={{fontSize:10,color:T.textMuted,fontWeight:700}}>Repeat:</span>
+                  {[[7,"Daily"],[5,"5×/wk"],[3,"3×/wk"]].map(([v,l])=>{ const on=!h.days?.length&&h.cadence===v; return (
+                    <button key={v} onClick={()=>patch(h.id,{cadence:v,days:null})} style={{padding:"3px 9px",borderRadius:20,border:`1px solid ${on?T.accent:T.border}`,background:on?T.accentGlow:"transparent",color:on?T.accent:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:on?700:500,fontFamily:"'DM Sans',sans-serif"}}>{l}</button>
+                  );})}
+                  <span style={{fontSize:10,color:T.textMuted}}>or days:</span>
+                  {WD_ORDER.map(d=>{ const on=(h.days||[]).includes(d); return (
+                    <button key={d} onClick={()=>setHabits(hs=>hs.map(x=>{ if(x.id!==h.id) return x; const c=x.days||[]; const nd=c.includes(d)?c.filter(y=>y!==d):[...c,d]; return {...x,days:nd.length?nd:null,cadence:nd.length?nd.length:7}; }))} title="Only expect this habit on chosen weekdays" style={{width:24,height:24,borderRadius:"50%",border:`1px solid ${on?T.accent:T.border}`,background:on?T.accentGlow:"transparent",color:on?T.accent:T.textMuted,cursor:"pointer",fontSize:9,fontWeight:on?800:500,fontFamily:"'DM Sans',sans-serif",padding:0}}>{WD_SHORT[d]}</button>
+                  );})}
+                </div>
+                <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap"}}>
+                  <span title="On days it's scheduled, this habit sorts by this number — 1 shows first" style={{fontSize:10,color:T.textMuted,fontWeight:700}}>Show first:</span>
+                  {[...Array(Math.min(habits.length,9))].map((_,i)=>{ const on=h.prio===i+1; return (
+                    <button key={i} onClick={()=>patch(h.id,{prio:i+1})} style={{width:24,height:24,borderRadius:"50%",border:`1px solid ${on?T.accent:T.border}`,background:on?T.accentGlow:"transparent",color:on?T.accent:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:on?800:600,fontFamily:"'DM Sans',sans-serif",padding:0}}>{i+1}</button>
+                  );})}
+                  <button onClick={()=>patch(h.id,{prio:null})} style={{padding:"3px 9px",borderRadius:20,border:`1px solid ${h.prio==null?T.accent:T.border}`,background:h.prio==null?T.accentGlow:"transparent",color:h.prio==null?T.accent:T.textMuted,cursor:"pointer",fontSize:10,fontFamily:"'DM Sans',sans-serif"}}>none</button>
                 </div>
                 <button onClick={()=>setEditId(null)} style={{alignSelf:"flex-end",padding:"5px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Done ✓</button>
               </div>
@@ -2091,14 +2147,28 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
             {/* 14-day trail */}
             <div data-trail style={{display:"flex",gap:3,marginTop:12,alignItems:"flex-end"}}>
               {last(14).map(d=>{ const on=has(h,d); const isToday=d===todStr;
-                return <div key={d} title={d} onClick={()=>{ setHabits(hs=>hs.map(x=>x.id===h.id?{...x,log:on?(x.log||[]).filter(z=>z!==d):[...(x.log||[]),d]}:x)); }} style={{flex:1,height:on?18:10,borderRadius:3,background:on?h.color:T.surface3,border:isToday?`1.5px solid ${h.color}`:"none",cursor:"pointer",transition:"height .15s,background .15s"}}/>;
+                return <div key={d} title={d+(schedOn(h,d)?"":" (not scheduled)")} onClick={()=>{ setHabits(hs=>hs.map(x=>x.id===h.id?{...x,log:on?(x.log||[]).filter(z=>z!==d):[...(x.log||[]),d]}:x)); }} style={{flex:1,height:on?18:10,borderRadius:3,background:on?h.color:T.surface3,border:isToday?`1.5px solid ${h.color}`:"none",opacity:schedOn(h,d)?1:.35,cursor:"pointer",transition:"height .15s,background .15s"}}/>;
               })}
             </div>
             <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:T.textMuted,marginTop:4}}><span>2 weeks ago</span><span>Today</span></div>
             </div>
           </div>
-        );})}
-      </div>
+        );};
+        return (<>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12}}>
+            {todayHabits.map(renderCard)}
+          </div>
+          {extraHabits.length>0&&(<>
+            <div style={{margin:"18px 0 8px",display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
+              <span style={{fontSize:14,fontWeight:700,fontFamily:"'Sora',sans-serif"}}>Wanna do more? ✨</span>
+              <span style={{fontSize:10,color:T.textMuted}}>Not scheduled today — check one off anyway for bonus momentum</span>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12,opacity:.85}}>
+              {extraHabits.map(renderCard)}
+            </div>
+          </>)}
+        </>);
+      })()}
     </div>
   );
 }
