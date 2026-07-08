@@ -567,7 +567,7 @@ export default function FlowSpace() {
         const nd=nextDue(task.due,task.recurring);
         if(nd){ // carry the reminder's time-of-day onto the next occurrence (weekly 6pm stays 6pm)
           const oldTime=task.remindAt&&task.remindAt.includes("T")?task.remindAt.split("T")[1]:null;
-          const clone={...task,id:crypto.randomUUID(),done:false,due:nd,quadrant:task.quadrant||null,remindAt:oldTime?`${nd}T${oldTime}`:null,attachments:[],mydayDate:null,subtasks:(task.subtasks||[]).map(s=>({...s,done:false}))};
+          const clone={...task,id:crypto.randomUUID(),done:false,due:nd,quadrant:task.quadrant||null,remindAt:oldTime?`${nd}T${oldTime}`:null,attachments:[],mydayDate:null,subtasks:(task.subtasks||[]).map(s=>({...s,done:false,due:null,time:null}))};
           setTasks(ts=>[clone,...ts]); if(user) db.insertTask(clone,user.id).catch(console.error);
           showToast(`↻ Next "${task.title}" scheduled for ${fmtDate(nd)}`);
         }
@@ -727,6 +727,10 @@ export default function FlowSpace() {
     if(Object.keys(patch).length) updateTask(task.id,patch);
   };
   const startFocus=t=>{ setFocusTask({id:t.id,title:t.title}); setPomSecs(pomLen*60); setPomRun(true); navigator.vibrate?.(20); showToast(`🍅 Focusing on "${t.title}" — ${pomLen} min timer started`); };
+  const toggleStep=(taskId,subId)=>{ const t=tasks.find(x=>x.id===taskId); if(!t)return; updateTask(taskId,{subtasks:(t.subtasks||[]).map(s=>s.id===subId?{...s,done:!s.done}:s)}); };
+  const moveStep=(taskId,subId,day)=>{ const t=tasks.find(x=>x.id===taskId); if(!t)return; navigator.vibrate?.(15); updateTask(taskId,{subtasks:(t.subtasks||[]).map(s=>s.id===subId?{...s,due:day}:s)}); showToast(day?`Step scheduled for ${fmtDate(day)} 📅`:"Step date cleared"); };
+  // Dragging a task onto a calendar day: keep its reminder at the same time-of-day on the new date.
+  const moveTaskDay=(id,day)=>{ const t=tasks.find(x=>x.id===id); if(!t||!day)return; navigator.vibrate?.(15); const patch={due:day}; if(t.remindAt&&t.remindAt.includes("T")) patch.remindAt=`${day}T${t.remindAt.split("T")[1]}`; updateTask(id,patch); showToast(`Moved to ${fmtDate(day)} 📅`); };
   // Quick-add from the Calendar: task lands on the tapped day; a typed time ("dentist 3pm") becomes its reminder.
   const addCalendarTask=(dateStr,text)=>{
     const p=parseNL(text); const title=(p.title||text).trim(); if(!title||!dateStr) return;
@@ -884,7 +888,7 @@ export default function FlowSpace() {
           {view==="matrix"&&selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={id=>{deleteTask(id);setSelTask(null);}} onDuplicate={duplicateTask} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} canDelete={canDeleteTask(selTask)} onViewImage={setImgView} onClose={()=>setSelTask(null)} onFocus={startFocus}/>}
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onLinkNote={foldNoteIntoTask} onClearTaskNotes={id=>updateTask(id,{notes:""})} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} onCheckin={key=>{awardXp("habit-"+key+"-"+todStr,15);markActiveDay();navigator.vibrate?.(20);}}/>}
-          {view==="calendar"&&<CalendarView T={T} tasks={myTasks} cats={cats} todStr={todStr} onToggle={toggleTask} onQuickAdd={addCalendarTask} onOpenTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
+          {view==="calendar"&&<CalendarView T={T} tasks={myTasks} cats={cats} todStr={todStr} onToggle={toggleTask} onToggleStep={toggleStep} onQuickAdd={addCalendarTask} onMoveTask={moveTaskDay} onMoveStep={moveStep} onOpenTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={dayStats} todStr={todStr}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
           {(["myday","flagged","upcoming","all"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
@@ -1292,7 +1296,11 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
   const [ttl,setTtl]=useState(task.title||"");
   const [ns,setNs]=useState("");
   useEffect(()=>{setNts(task.notes||"");setTtl(task.title||"");},[task.id]);
-  const addSub=()=>{if(!ns.trim())return;onUpdate(task.id,{subtasks:[...(task.subtasks||[]),{id:Date.now(),title:ns.trim(),done:false}]});setNs("");};
+  // Steps can carry their own due date/time: typed right into the text ("outline Jul 12 3pm"),
+  // set via the 📅 chip, or dragged onto a day in the Calendar view.
+  const addSub=()=>{ const raw=ns.trim(); if(!raw)return; const p=parseNL(raw); const title=(p.title||raw).trim(); onUpdate(task.id,{subtasks:[...(task.subtasks||[]),{id:Date.now(),title,done:false,due:p.due||null,time:p.time||null}]}); setNs(""); };
+  const patchSub=(subId,p)=>onUpdate(task.id,{subtasks:task.subtasks.map(s=>s.id===subId?{...s,...p}:s)});
+  const [subDateId,setSubDateId]=useState(null);
   // A short one-line note here also gets parsed for a date/time (like a linked note): sets the reminder + cleans the text.
   const parseNotesBlur=()=>{
     const raw=nts.trim();
@@ -1414,17 +1422,31 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
       <DL label="Subtasks" T={T}>
         <div style={{display:"flex",flexDirection:"column",gap:4,marginTop:5}}>
           {(task.subtasks||[]).map(sub=>(
-            <div key={sub.id} style={{display:"flex",alignItems:"center",gap:7}}>
-              <button onClick={()=>onUpdate(task.id,{subtasks:task.subtasks.map(s=>s.id===sub.id?{...s,done:!s.done}:s)})} style={{width:15,height:15,borderRadius:4,border:`1.5px solid ${sub.done?T.success:T.border}`,background:sub.done?T.success:"transparent",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                {sub.done&&<Ico n="check" s={8} c="#fff"/>}
-              </button>
-              <span style={{fontSize:12,color:sub.done?T.textMuted:T.text,textDecoration:sub.done?"line-through":"none"}}>{sub.title}</span>
+            <div key={sub.id}>
+              <div style={{display:"flex",alignItems:"center",gap:7}}>
+                <button onClick={()=>patchSub(sub.id,{done:!sub.done})} style={{width:15,height:15,borderRadius:4,border:`1.5px solid ${sub.done?T.success:T.border}`,background:sub.done?T.success:"transparent",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  {sub.done&&<Ico n="check" s={8} c="#fff"/>}
+                </button>
+                <span style={{flex:1,minWidth:0,fontSize:12,color:sub.done?T.textMuted:T.text,textDecoration:sub.done?"line-through":"none",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sub.title}</span>
+                <button onClick={()=>setSubDateId(subDateId===sub.id?null:sub.id)} title={sub.due?"Change this step's date":"Give this step its own due date"} style={{border:"none",cursor:"pointer",flexShrink:0,borderRadius:6,padding:"2px 6px",fontSize:9,fontWeight:700,fontFamily:"'DM Sans',sans-serif",background:sub.due?T.accentGlow:"transparent",color:sub.due?T.accent:T.textMuted}}>
+                  {sub.due?`📅 ${fmtDate(sub.due)}${sub.time?" "+fmtClock(sub.time):""}`:"📅"}
+                </button>
+                <button onClick={()=>onUpdate(task.id,{subtasks:task.subtasks.filter(s=>s.id!==sub.id)})} title="Delete step" style={{width:16,height:16,border:"none",borderRadius:5,cursor:"pointer",background:"transparent",color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,padding:0}}><Ico n="x" s={9}/></button>
+              </div>
+              {subDateId===sub.id&&(
+                <div style={{display:"flex",gap:5,margin:"4px 0 2px 22px",alignItems:"center"}}>
+                  <input type="date" value={sub.due||""} onChange={e=>patchSub(sub.id,{due:e.target.value||null})} style={{flex:1,minWidth:0,padding:"4px 6px",borderRadius:6,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:11,outline:"none"}}/>
+                  <input type="time" value={sub.time||""} onChange={e=>patchSub(sub.id,{time:e.target.value||null})} style={{width:88,flexShrink:0,padding:"4px 6px",borderRadius:6,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:11,outline:"none"}}/>
+                  {sub.due&&<button onClick={()=>{patchSub(sub.id,{due:null,time:null});setSubDateId(null);}} title="Clear step date" style={{width:20,height:20,borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><Ico n="x" s={9}/></button>}
+                </div>
+              )}
             </div>
           ))}
           <div style={{display:"flex",gap:5,marginTop:3}}>
-            <input value={ns} onChange={e=>setNs(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addSub()} placeholder="Add step…" style={{flex:1,padding:"5px 7px",borderRadius:6,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:11,outline:"none"}}/>
+            <input value={ns} onChange={e=>setNs(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addSub()} placeholder='Add step… try "outline Jul 12 3pm"' style={{flex:1,padding:"5px 7px",borderRadius:6,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:11,outline:"none"}}/>
             <button onClick={addSub} style={{padding:"5px 9px",borderRadius:6,border:"none",cursor:"pointer",background:T.accentGlow,color:T.accent,fontSize:12,fontWeight:700}}>+</button>
           </div>
+          {(task.subtasks||[]).some(s=>s.due)&&<div style={{fontSize:9,color:T.textMuted,marginTop:2}}>Dated steps show on the Calendar — you can drag them between days there.</div>}
         </div>
       </DL>
       {onFocus&&!task.done&&(
@@ -2036,27 +2058,59 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
 }
 
 // Month calendar: tasks land on their due dates, tap a day to see & add. No hover needed — fully touch-first.
-function CalendarView({T,tasks,cats,todStr,onToggle,onQuickAdd,onOpenTask}) {
+function CalendarView({T,tasks,cats,todStr,onToggle,onToggleStep,onQuickAdd,onOpenTask,onMoveTask,onMoveStep}) {
   const today=new Date(todStr+"T12:00:00");
   const [ym,setYm]=useState({y:today.getFullYear(),m:today.getMonth()});
   const [selDay,setSelDay]=useState(todStr);
   const [qa,setQa]=useState("");
+  const [zoom,setZoom]=useState(()=>{try{return localStorage.getItem("fs_calzoom")==="1";}catch{return false;}});
+  const [expandId,setExpandId]=useState(null); // task whose steps are unfolded in the day panel
+  const [drag,setDrag]=useState(null);         // {label,color,x,y} — floating chip while dragging an entry
+  const [hoverDay,setHoverDay]=useState(null); // day cell currently under the dragged entry
+  const didDragRef=useRef(false);
+  const setZoomP=v=>{ setZoom(v); try{localStorage.setItem("fs_calzoom",v?"1":"0");}catch{} };
   const first=new Date(ym.y,ym.m,1);
   const offset=(first.getDay()+6)%7; // Monday-first grid
   const dim=new Date(ym.y,ym.m+1,0).getDate();
   const cells=[...Array(offset)].map(()=>null).concat([...Array(dim)].map((_,i)=>ymd(new Date(ym.y,ym.m,i+1))));
   while(cells.length%7) cells.push(null);
   const byDay={}; tasks.forEach(t=>{ if(t.due){ (byDay[t.due]=byDay[t.due]||[]).push(t); } });
+  // Steps (subtasks) with their own due date get their own spot on the calendar.
+  const stepsByDay={}; tasks.forEach(t=>(t.subtasks||[]).forEach(s=>{ if(s.due){ (stepsByDay[s.due]=stepsByDay[s.due]||[]).push({t,s}); } }));
   const nav=d=>setYm(({y,m})=>{ const n=new Date(y,m+d,1); return {y:n.getFullYear(),m:n.getMonth()}; });
   const monthName=new Date(ym.y,ym.m,1).toLocaleDateString("en-US",{month:"long",year:"numeric"});
   const dayTasks=(byDay[selDay]||[]).slice().sort((a,b)=>{ if(a.done!==b.done)return a.done?1:-1; return (a.remindAt||"~").localeCompare(b.remindAt||"~"); });
+  const daySteps=(stepsByDay[selDay]||[]).slice().sort((a,b)=>{ if(a.s.done!==b.s.done)return a.s.done?1:-1; return (a.s.time||"~").localeCompare(b.s.time||"~"); });
   const add=()=>{ const v=qa.trim(); if(!v)return; onQuickAdd(selDay,v); setQa(""); };
   const selLabel=new Date(selDay+"T12:00:00").toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"});
+  // Hold & drag any task/step and drop it on a day cell to reschedule it. A chip follows the pointer,
+  // the day under it lights up, and elementFromPoint→[data-calday] resolves the drop target.
+  const dragEntry=(e,label,color,onDropDay,fromCell)=>{
+    if(!fromCell&&e.target.closest("button,input,a")) return;
+    const move=ev=>{
+      setDrag({label,color,x:ev.clientX,y:ev.clientY});
+      const el=document.elementFromPoint(ev.clientX,ev.clientY);
+      setHoverDay(el?.closest?.("[data-calday]")?.getAttribute("data-calday")||null);
+    };
+    startPressDrag(e,()=>{
+      didDragRef.current=true;
+      navigator.vibrate?.(10);
+      setDrag({label,color,x:e.clientX,y:e.clientY});
+      runDrag(move,ev=>{
+        const el=document.elementFromPoint(ev.clientX,ev.clientY);
+        const day=el?.closest?.("[data-calday]")?.getAttribute("data-calday")||null;
+        setDrag(null); setHoverDay(null);
+        if(day) onDropDay(day);
+        setTimeout(()=>{didDragRef.current=false;},0);
+      });
+    });
+  };
   return (
     <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,gap:8,flexWrap:"wrap"}}>
         <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px"}}>{monthName}</h1>
         <div style={{display:"flex",gap:5}}>
+          <button onClick={()=>setZoomP(!zoom)} title={zoom?"Back to compact dots":"Zoom in — see every day's tasks & steps spelled out"} style={{padding:"0 11px",height:30,borderRadius:8,border:`1px solid ${zoom?T.accent:T.border}`,background:zoom?T.accentGlow:T.surface,color:zoom?T.accent:T.text,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{zoom?"▦ Dots":"🔍 Zoom"}</button>
           <button onClick={()=>nav(-1)} style={{width:30,height:30,borderRadius:8,border:`1px solid ${T.border}`,background:T.surface,color:T.text,cursor:"pointer",fontSize:15}}>‹</button>
           <button onClick={()=>{setYm({y:today.getFullYear(),m:today.getMonth()});setSelDay(todStr);}} style={{padding:"0 12px",height:30,borderRadius:8,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Today</button>
           <button onClick={()=>nav(1)} style={{width:30,height:30,borderRadius:8,border:`1px solid ${T.border}`,background:T.surface,color:T.text,cursor:"pointer",fontSize:15}}>›</button>
@@ -2065,38 +2119,88 @@ function CalendarView({T,tasks,cats,todStr,onToggle,onQuickAdd,onOpenTask}) {
       <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:4}}>
         {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d=><div key={d} style={{textAlign:"center",fontSize:10,fontWeight:700,color:T.textMuted,letterSpacing:".5px"}}>{d}</div>)}
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:6}}>
         {cells.map((d,i)=>{ if(!d) return <div key={"e"+i}/>;
-          const dts=byDay[d]||[], undone=dts.filter(t=>!t.done), isToday=d===todStr, isSel=d===selDay, isPastDue=d<todStr&&undone.length>0;
-          return (
-            <button key={d} onClick={()=>setSelDay(d)} style={{minHeight:52,padding:"5px 4px 4px",borderRadius:10,border:`1.5px solid ${isSel?T.accent:isToday?T.accent+"66":T.border}`,background:isSel?T.accentGlow:T.surface,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all .12s"}}>
+          const dts=byDay[d]||[], stps=stepsByDay[d]||[], undone=dts.filter(t=>!t.done);
+          const isToday=d===todStr, isSel=d===selDay, isHov=d===hoverDay;
+          const isPastDue=d<todStr&&(undone.length>0||stps.some(x=>!x.s.done));
+          const cellBorder=isHov?`2px dashed ${T.accent}`:`1.5px solid ${isSel?T.accent:isToday?T.accent+"66":T.border}`;
+          if(!zoom) return (
+            <button key={d} data-calday={d} onClick={()=>setSelDay(d)} style={{minHeight:52,padding:"5px 4px 4px",borderRadius:10,border:cellBorder,background:isHov||isSel?T.accentGlow:T.surface,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all .12s"}}>
               <span style={{fontSize:12,fontWeight:isToday?800:500,color:isToday?T.accent:isPastDue?T.danger:T.text,fontFamily:"'DM Sans',sans-serif"}}>{parseInt(d.slice(8),10)}</span>
-              {dts.length>0&&(
-                <div style={{display:"flex",gap:2,flexWrap:"wrap",justifyContent:"center",maxWidth:34}}>
+              {(dts.length>0||stps.length>0)&&(
+                <div style={{display:"flex",gap:2,flexWrap:"wrap",justifyContent:"center",alignItems:"center",maxWidth:34}}>
                   {dts.slice(0,3).map(t=><span key={t.id} style={{width:5,height:5,borderRadius:"50%",background:t.done?T.textMuted:(cats[t.tag]?.color||T.accent),opacity:t.done?.45:1}}/>)}
-                  {dts.length>3&&<span style={{fontSize:8,color:T.textMuted,lineHeight:"5px"}}>+{dts.length-3}</span>}
+                  {stps.slice(0,Math.max(0,3-Math.min(dts.length,3))).map(({t,s})=><span key={"s"+t.id+"-"+s.id} style={{width:5,height:5,borderRadius:"50%",border:`1.5px solid ${s.done?T.textMuted:(cats[t.tag]?.color||T.accent)}`,opacity:s.done?.45:1}}/>)}
+                  {(dts.length+stps.length)>3&&<span style={{fontSize:8,color:T.textMuted,lineHeight:"5px"}}>+{dts.length+stps.length-3}</span>}
                 </div>
               )}
             </button>
           );
+          // Zoomed cells spell out the day's actual work: task titles + "↳" step texts, color-coded by category.
+          const entries=[
+            ...dts.map(t=>({key:"t"+t.id,txt:t.title,color:cats[t.tag]?.color||T.accent,done:t.done,step:false,t,time:t.remindAt&&t.remindAt.includes("T")?t.remindAt.split("T")[1]:null,drop:day=>{if(day!==t.due)onMoveTask?.(t.id,day);}})),
+            ...stps.map(({t,s})=>({key:"s"+t.id+"-"+s.id,txt:s.title,color:cats[t.tag]?.color||T.accent,done:s.done,step:true,t,time:s.time||null,tt:`Step of "${t.title}" — drag to another day to reschedule`,drop:day=>{if(day!==s.due)onMoveStep?.(t.id,s.id,day);}})),
+          ].sort((a,b)=>{ if(a.done!==b.done)return a.done?1:-1; return (a.time||"~").localeCompare(b.time||"~"); });
+          return (
+            <button key={d} data-calday={d} onClick={()=>setSelDay(d)} style={{minHeight:86,padding:"3px 3px 5px",borderRadius:10,border:cellBorder,background:isHov||isSel?T.accentGlow:T.surface,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"stretch",gap:2,transition:"all .12s",overflow:"hidden",textAlign:"left"}}>
+              <span style={{fontSize:11,fontWeight:isToday?800:600,color:isToday?T.accent:isPastDue?T.danger:T.textMuted,fontFamily:"'DM Sans',sans-serif",alignSelf:"center"}}>{parseInt(d.slice(8),10)}</span>
+              {entries.slice(0,4).map(en=>(
+                <div key={en.key} title={en.tt||`${en.txt} — drag to another day to reschedule`}
+                  onPointerDown={ev=>{ev.stopPropagation();dragEntry(ev,en.txt,en.color,en.drop,true);}}
+                  onClick={ev=>{ev.stopPropagation();if(didDragRef.current)return;onOpenTask?.(en.t);}}
+                  style={{fontSize:9,lineHeight:"13px",padding:"1px 4px",borderRadius:4,background:en.color+(en.step?"14":"26"),color:en.done?T.textMuted:T.text,borderLeft:`2px solid ${en.color}`,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",textDecoration:en.done?"line-through":"none",opacity:en.done?.55:1,cursor:"grab",fontFamily:"'DM Sans',sans-serif"}}>
+                  {en.step?"↳ ":""}{en.txt}
+                </div>
+              ))}
+              {entries.length>4&&<span style={{fontSize:8,color:T.textMuted,alignSelf:"center"}}>+{entries.length-4} more</span>}
+            </button>
+          );
         })}
       </div>
+      <div style={{fontSize:10,color:T.textMuted,textAlign:"center",marginBottom:12}}>Tip: hold & drag any task or step onto a day to reschedule it{zoom?"":" · 🔍 Zoom spells out each day's work"}</div>
       <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:14}}>
         <div style={{fontSize:13,fontWeight:700,fontFamily:"'Sora',sans-serif",marginBottom:10}}>{selLabel}{selDay===todStr?" · Today":""}</div>
-        <div style={{display:"flex",gap:6,marginBottom:dayTasks.length?12:0}}>
+        <div style={{display:"flex",gap:6,marginBottom:(dayTasks.length||daySteps.length)?12:0}}>
           <input value={qa} onChange={e=>setQa(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder={`Add a task on ${selLabel.split(",")[1]?.trim()||selDay}… "dentist 3pm"`} style={{flex:1,minWidth:0,padding:"9px 12px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:13,outline:"none"}}/>
           <button onClick={add} style={{padding:"0 16px",borderRadius:9,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontWeight:700,fontSize:13,fontFamily:"'DM Sans',sans-serif"}}>Add</button>
         </div>
-        {dayTasks.length===0&&<div style={{fontSize:12,color:T.textMuted,padding:"4px 2px"}}>Nothing scheduled — enjoy the free day ✨</div>}
-        {dayTasks.map(t=>(
-          <div key={t.id} onClick={()=>onOpenTask?.(t)} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",borderRadius:9,cursor:"pointer",marginBottom:2,background:"transparent",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background=T.surface2} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-            <button onClick={e=>{e.stopPropagation();onToggle(t.id);}} style={{width:17,height:17,borderRadius:5,border:`2px solid ${t.done?T.success:(cats[t.tag]?.color||T.border)}`,background:t.done?T.success:"transparent",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{t.done&&<Ico n="check" s={9} c="#fff"/>}</button>
-            <span style={{flex:1,minWidth:0,fontSize:13,color:t.done?T.textMuted:T.text,textDecoration:t.done?"line-through":"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.title}</span>
-            {t.remindAt&&fmtClock(t.remindAt)&&<span style={{fontSize:10,color:T.accent,fontWeight:700,flexShrink:0}}>⏰ {fmtClock(t.remindAt)}{t.endTime?` – ${fmtClock(t.endTime)}`:""}</span>}
-            {t.tag&&<span style={{fontSize:9,padding:"1px 7px",borderRadius:20,background:(cats[t.tag]?.color||T.accent)+"22",color:cats[t.tag]?.color||T.accent,fontWeight:700,flexShrink:0,textTransform:"capitalize"}}>{t.tag}</span>}
+        {dayTasks.length===0&&daySteps.length===0&&<div style={{fontSize:12,color:T.textMuted,padding:"4px 2px"}}>Nothing scheduled — enjoy the free day ✨</div>}
+        {dayTasks.map(t=>{
+          const tColor=cats[t.tag]?.color||T.accent;
+          return (
+          <div key={t.id}>
+            <div onClick={()=>{if(didDragRef.current)return;onOpenTask?.(t);}} onPointerDown={e=>dragEntry(e,t.title,tColor,day=>{if(day!==t.due)onMoveTask?.(t.id,day);})} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",borderRadius:9,cursor:"pointer",marginBottom:2,background:"transparent",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background=T.surface2} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+              <button onClick={e=>{e.stopPropagation();onToggle(t.id);}} style={{width:17,height:17,borderRadius:5,border:`2px solid ${t.done?T.success:(cats[t.tag]?.color||T.border)}`,background:t.done?T.success:"transparent",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{t.done&&<Ico n="check" s={9} c="#fff"/>}</button>
+              <span style={{flex:1,minWidth:0,fontSize:13,color:t.done?T.textMuted:T.text,textDecoration:t.done?"line-through":"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.title}</span>
+              {t.subtasks?.length>0&&<button onClick={e=>{e.stopPropagation();setExpandId(expandId===t.id?null:t.id);}} title="Show this task's steps — drag any step onto a day above" style={{border:"none",cursor:"pointer",flexShrink:0,borderRadius:6,padding:"2px 7px",fontSize:9,fontWeight:700,fontFamily:"'DM Sans',sans-serif",background:expandId===t.id?T.accentGlow:T.surface2,color:expandId===t.id?T.accent:T.textMuted}}>{expandId===t.id?"▾":"▸"} {t.subtasks.filter(s=>s.done).length}/{t.subtasks.length} steps</button>}
+              {t.remindAt&&fmtClock(t.remindAt)&&<span style={{fontSize:10,color:T.accent,fontWeight:700,flexShrink:0}}>⏰ {fmtClock(t.remindAt)}{t.endTime?` – ${fmtClock(t.endTime)}`:""}</span>}
+              {t.tag&&<span style={{fontSize:9,padding:"1px 7px",borderRadius:20,background:(cats[t.tag]?.color||T.accent)+"22",color:cats[t.tag]?.color||T.accent,fontWeight:700,flexShrink:0,textTransform:"capitalize"}}>{t.tag}</span>}
+            </div>
+            {expandId===t.id&&(t.subtasks||[]).map(s=>(
+              <div key={s.id} onPointerDown={e=>dragEntry(e,s.title,tColor,day=>{if(day!==s.due)onMoveStep?.(t.id,s.id,day);})} title="Hold & drag onto a day above to schedule this step" style={{display:"flex",alignItems:"center",gap:8,padding:"5px 10px 5px 36px",borderRadius:8,cursor:"grab",marginBottom:1}}>
+                <button onClick={()=>onToggleStep?.(t.id,s.id)} style={{width:14,height:14,borderRadius:4,border:`1.5px solid ${s.done?T.success:T.border}`,background:s.done?T.success:"transparent",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{s.done&&<Ico n="check" s={8} c="#fff"/>}</button>
+                <span style={{flex:1,minWidth:0,fontSize:12,color:s.done?T.textMuted:T.text,textDecoration:s.done?"line-through":"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{s.title}</span>
+                <span style={{fontSize:9,fontWeight:700,flexShrink:0,color:s.due?T.accent:T.textMuted,background:s.due?T.accentGlow:"transparent",borderRadius:6,padding:"1px 6px"}}>{s.due?`📅 ${fmtDate(s.due)}${s.time?" "+fmtClock(s.time):""}`:"no date — drag onto a day ↑"}</span>
+              </div>
+            ))}
           </div>
-        ))}
+        );})}
+        {daySteps.length>0&&(
+          <div style={{marginTop:dayTasks.length?10:0}}>
+            <div style={{fontSize:10,fontWeight:700,color:T.textMuted,letterSpacing:".5px",margin:"0 2px 4px"}}>STEPS DUE THIS DAY</div>
+            {daySteps.map(({t,s})=>(
+              <div key={t.id+"-"+s.id} onClick={()=>{if(didDragRef.current)return;onOpenTask?.(t);}} onPointerDown={e=>dragEntry(e,s.title,cats[t.tag]?.color||T.accent,day=>{if(day!==s.due)onMoveStep?.(t.id,s.id,day);})} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 10px",borderRadius:9,cursor:"pointer",marginBottom:2,background:"transparent",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background=T.surface2} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                <button onClick={e=>{e.stopPropagation();onToggleStep?.(t.id,s.id);}} style={{width:15,height:15,borderRadius:4,border:`1.5px solid ${s.done?T.success:(cats[t.tag]?.color||T.border)}`,background:s.done?T.success:"transparent",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{s.done&&<Ico n="check" s={8} c="#fff"/>}</button>
+                <span style={{flex:1,minWidth:0,fontSize:12,color:s.done?T.textMuted:T.text,textDecoration:s.done?"line-through":"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>↳ {s.title}</span>
+                {s.time&&<span style={{fontSize:10,color:T.accent,fontWeight:700,flexShrink:0}}>⏰ {fmtClock(s.time)}</span>}
+                <span title={`Step of "${t.title}"`} style={{fontSize:9,padding:"1px 7px",borderRadius:20,background:(cats[t.tag]?.color||T.accent)+"22",color:cats[t.tag]?.color||T.accent,fontWeight:700,flexShrink:0,maxWidth:90,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.title}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
+      {drag&&<div style={{position:"fixed",left:drag.x+12,top:drag.y-14,zIndex:999,pointerEvents:"none",padding:"4px 10px",borderRadius:8,background:T.surface,border:`1.5px solid ${drag.color}`,color:T.text,fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif",boxShadow:"0 6px 20px rgba(0,0,0,.25)",maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>📅 {drag.label}</div>}
     </div>
   );
 }
