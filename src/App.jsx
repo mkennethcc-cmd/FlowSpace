@@ -2345,10 +2345,46 @@ function AnalyticsView({T,tasks,xp,level,streak,habits=[],dayStats={},todStr}) {
   const habitsDoneToday=habits.filter(h=>(h.log||[]).includes(todStr)).length;
   const bestHabitStreak=habits.reduce((best,h)=>{ const set=new Set(h.log||[]); let i=set.has(todStr)?0:1,s=0; for(;;){ if(set.has(addDays(-i))){s++;i++;} else break; if(s>999)break; } return Math.max(best,s); },0);
   const topTag=Object.entries(byTag).sort((a,b)=>b[1]-a[1])[0];
+  // "Share my week" — draws a brag-card PNG on a canvas, then native-shares it (or downloads on desktop).
+  const shareCard=async()=>{
+    const W=1080,H=1350,c=document.createElement("canvas"); c.width=W; c.height=H; const x=c.getContext("2d");
+    const rr=(x0,y0,w,h,r)=>{ x.beginPath(); x.moveTo(x0+r,y0); x.arcTo(x0+w,y0,x0+w,y0+h,r); x.arcTo(x0+w,y0+h,x0,y0+h,r); x.arcTo(x0,y0+h,x0,y0,r); x.arcTo(x0,y0,x0+w,y0,r); x.closePath(); };
+    const g=x.createLinearGradient(0,0,W,H); g.addColorStop(0,"#0c0e16"); g.addColorStop(1,"#1b1038"); x.fillStyle=g; x.fillRect(0,0,W,H);
+    const g2=x.createRadialGradient(W/2,180,50,W/2,180,600); g2.addColorStop(0,"rgba(192,132,252,.25)"); g2.addColorStop(1,"rgba(192,132,252,0)"); x.fillStyle=g2; x.fillRect(0,0,W,900);
+    x.textAlign="center"; x.fillStyle="#c084fc"; x.font="700 44px Sora,Arial"; x.fillText("⚡ FlowSpace",W/2,110);
+    x.fillStyle="#eef0fa"; x.font="800 92px Sora,Arial"; x.fillText("My Week",W/2,230);
+    const end=new Date((todStr||tod())+"T12:00:00"); const start=new Date(end); start.setDate(start.getDate()-6);
+    const fd=d=>d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
+    x.fillStyle="#7a85a3"; x.font="500 34px Arial"; x.fillText(`${fd(start)} – ${fd(end)}`,W/2,290);
+    x.fillStyle="#eef0fa"; x.font="800 200px Sora,Arial"; x.fillText(String(weekTotal),W/2,540);
+    x.fillStyle="#7a85a3"; x.font="600 36px Arial"; x.fillText(`task${weekTotal===1?"":"s"} completed this week`,W/2,600);
+    const bx=140,bw=(W-280)/7,maxB=Math.max(...wk,1),base=930,bh=220,DL=["M","T","W","T","F","S","S"];
+    wk.forEach((v,i)=>{ const h=Math.max((v/maxB)*bh,10),cx=bx+i*bw;
+      const bg=x.createLinearGradient(0,base-h,0,base); bg.addColorStop(0,"#c084fc"); bg.addColorStop(1,"#818cf8");
+      x.fillStyle=i===monOffset?bg:(v>0?"rgba(192,132,252,.45)":"rgba(255,255,255,.08)"); rr(cx+14,base-h,bw-28,h,10); x.fill();
+      x.fillStyle="#7a85a3"; x.font="600 28px Arial"; x.fillText(DL[i],cx+bw/2,base+44);
+      if(v>0){ x.fillStyle="#eef0fa"; x.font="700 30px Arial"; x.fillText(String(v),cx+bw/2,base-h-14); }
+    });
+    const stats=[[`🔥 ${streak}`,"day streak"],[`LVL ${level}`,`${xp} XP`],habits.length?[`🎯 ${habitsDoneToday}/${habits.length}`,"habits today"]:[`${rate}%`,"completion rate"]];
+    const cw=(W-200)/3;
+    stats.forEach(([big,small],i)=>{ const sx=100+i*cw+10,sw=cw-20,sy=1030;
+      x.fillStyle="rgba(255,255,255,.05)"; rr(sx,sy,sw,180,24); x.fill(); x.strokeStyle="rgba(255,255,255,.1)"; x.stroke();
+      x.fillStyle="#eef0fa"; x.font="800 52px Sora,Arial"; x.fillText(big,sx+sw/2,sy+82);
+      x.fillStyle="#7a85a3"; x.font="500 28px Arial"; x.fillText(small,sx+sw/2,sy+134);
+    });
+    x.fillStyle="rgba(122,133,163,.7)"; x.font="500 28px Arial"; x.fillText("made with FlowSpace ⚡",W/2,1300);
+    const blob=await new Promise(r=>c.toBlob(r,"image/png"));
+    const file=new File([blob],"flowspace-week.png",{type:"image/png"});
+    if(navigator.canShare?.({files:[file]})){ try{ await navigator.share({files:[file],title:"My week in FlowSpace"}); return; }catch{} }
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="flowspace-week.png"; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  };
   const runAI=()=>{setAiLoad(true);setAiMsg("");setTimeout(()=>{setAiLoad(false);setAiMsg(`🧠 You completed ${weekTotal} task${weekTotal===1?"":"s"} this week${weekTotal>0?" — nice momentum":""}. Overall completion rate: ${rate}%. ${topTag?`Most of your work lives in "${topTag[0]}" (${topTag[1]} tasks). `:""}${ov>0?`${ov} overdue — pull one into My Day and knock it out first. `:"No overdue tasks — inbox zero energy! "}${habits.length?`Habits: ${habitsDoneToday}/${habits.length} done today, best streak ${bestHabitStreak} day${bestHabitStreak===1?"":"s"} 🔥`:`Try adding a daily habit to build momentum.`}`);},1400);};
   return (
     <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
-      <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px",marginBottom:18}}>Analytics</h1>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:18,flexWrap:"wrap"}}>
+        <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px"}}>Analytics</h1>
+        <button onClick={shareCard} title="Creates a picture of your week — share it or save it" style={{padding:"8px 16px",borderRadius:10,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif",boxShadow:"0 3px 12px rgba(192,132,252,.3)"}}>📸 Share my week</button>
+      </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
         {[{l:"Total",v:total,i:"layers",c:T.accent},{l:"Done",v:done,i:"check",c:T.success},{l:"Rate",v:`${rate}%`,i:"target",c:T.info},{l:"Overdue",v:ov,i:"clock",c:T.danger}].map(s=>(
           <div key={s.l} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"13px 15px"}}>
