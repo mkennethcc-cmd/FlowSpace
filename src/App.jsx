@@ -209,17 +209,23 @@ const CatIcon = ({icon, size=14}) => isImgIcon(icon)
 const ICON_KEYWORDS = [
   [["cat","cats","kitten","kitty"],"🐱"],[["dog","dogs","puppy","puppies","pup"],"🐶"],
   [["fish","aquarium"],"🐟"],[["bird","birds"],"🐦"],[["pet","pets","animal","animals","vet"],"🐾"],
+  [["water","hydrate","hydration"],"💧"],[["walk","walking","steps","stroll"],"🚶"],
   [["gym","workout","lift","weights","exercise","fitness"],"🏋️"],[["run","running","jog","jogging","marathon","cardio"],"🏃"],
   [["swim","swimming","pool"],"🏊"],[["bike","biking","cycle","cycling"],"🚴"],[["hike","hiking","trail"],"🥾"],
-  [["yoga","stretch","pilates"],"🧘"],[["soccer","football"],"⚽"],[["basketball","hoops"],"🏀"],[["tennis"],"🎾"],
-  [["doctor","appointment","clinic","hospital","checkup"],"🩺"],[["dentist","teeth","tooth"],"🦷"],
-  [["meds","medicine","pills","prescription","pharmacy"],"💊"],[["mental","therapy","mindful","meditation"],"🧠"],
+  [["yoga","stretch","stretching","pilates","meditate","meditating","meditation","breathe","breathing","mindfulness"],"🧘"],[["soccer","football"],"⚽"],[["basketball","hoops"],"🏀"],[["tennis"],"🎾"],
+  [["doctor","appointment","clinic","hospital","checkup"],"🩺"],[["dentist","teeth","tooth","floss","flossing","brush","brushing"],"🦷"],
+  [["meds","medicine","pills","prescription","pharmacy","vitamin","vitamins","supplement","supplements"],"💊"],[["mental","therapy","mindful","meditation"],"🧠"],
   [["health","wellness","selfcare","spa"],"💪"],[["sleep","rest","nap"],"🛏️"],
+  [["wake","wake up","get up","sunrise","early riser"],"🌅"],[["shower","bathe","bath","cold plunge"],"🚿"],
+  [["smoke","smoking","vape","vaping","nicotine","cigarette","cigarettes"],"🚭"],[["alcohol","sober","sobriety"],"🚫"],
+  [["sugar","junk food","candy","snacking"],"🍬"],[["screen time","no phone","less phone","scrolling","doomscrolling"],"📵"],
+  [["pray","prayer","worship","church","bible","quran","gratitude","grateful"],"🙏"],
   [["work","job","office","career","business"],"💼"],[["meeting","meetings","standup","sync"],"📅"],
   [["client","clients","customer"],"🤝"],[["project","projects"],"📋"],[["email","emails","inbox","mail"],"✉️"],
   [["deadline","urgent"],"⏰"],
   [["school","class","classes","course","courses","study","studies","exam","exams","homework","assignment"],"📚"],
   [["college","university","uni","campus","grad"],"🎓"],[["lecture","lesson","notes"],"📝"],
+  [["language","languages","spanish","french","japanese","korean","german","chinese","duolingo","vocab","vocabulary"],"🗣️"],
   [["science","lab","chemistry","biology","physics"],"🔬"],[["math","maths","algebra","calculus"],"🔢"],
   [["money","finance","financial","budget","budgeting"],"💰"],[["bank","banking","savings","saving"],"🏦"],
   [["bill","bills","invoice","invoices","payment"],"🧾"],[["invest","investing","stocks","crypto","portfolio"],"📈"],
@@ -229,9 +235,12 @@ const ICON_KEYWORDS = [
   [["garden","gardening","plant","plants","yard"],"🌱"],[["car","cars","vehicle","auto","drive","driving"],"🚗"],
   [["food","meal","meals","cook","cooking","recipe","recipes","kitchen"],"🍳"],
   [["restaurant","dining","dinner","lunch","brunch"],"🍽️"],[["coffee","cafe"],"☕"],
+  [["salad","veggies","vegetable","vegetables","fruit","fruits","healthy","protein"],"🥗"],
+  [["sun","sunlight","sunshine","outside","outdoors","nature","fresh air"],"☀️"],
   [["travel","trip","trips","vacation","holiday","tour","journey"],"✈️"],[["flight","flights","airport"],"🛫"],
   [["hotel","booking"],"🏨"],[["beach","ocean","sea"],"🏖️"],[["camp","camping","outdoor"],"⛺"],
   [["movie","movies","film","cinema"],"🎬"],[["music","song","songs","playlist","band"],"🎵"],
+  [["guitar","ukulele","bass"],"🎸"],[["piano"],"🎹"],
   [["game","games","gaming"],"🎮"],[["book","books","read","reading","novel"],"📖"],
   [["art","drawing","draw","paint","painting","sketch","creative"],"🎨"],[["photo","photos","photography","camera","picture"],"📷"],
   [["write","writing","blog","journal","diary"],"✍️"],[["code","coding","program","programming","dev","developer","software"],"💻"],
@@ -244,11 +253,11 @@ const ICON_KEYWORDS = [
   [["beauty","makeup","skincare","hair","nails"],"💄"],[["fashion","clothes","clothing","outfit","wardrobe"],"👗"],
   [["dream","dreams","bucket","someday"],"✨"],
 ];
-const guessIcon = name => {
+const guessIcon = (name, fallback="📁") => {
   const n=(name||"").toLowerCase().trim();
-  if(!n) return "📁";
+  if(!n) return fallback;
   for(const [keys,icon] of ICON_KEYWORDS){ if(keys.some(k=>new RegExp("\\b"+k+"\\b").test(n))) return icon; }
-  return "📁"; // predictable default when nothing matches (no random jitter)
+  return fallback; // predictable default when nothing matches (no random jitter)
 };
 const CAT_ICONS = ["💼","📚","🏃","💰","🏠","❤️","🎯","✈️","🛒","🎨","🎮","🍔","☕","🌱","🐶","📞","🎵","⚽","💪","🧘","📝","💻","📅","🔥","⭐","🎓","🏥","🍳","🚗","🎁","📖","🧹","💡","🎬","🎉","🌍","🏋️","🧠","📷","🎸","🍕","🛏️","🐱","✏️","🔧","📌","🏆","🌸"];
 
@@ -887,7 +896,7 @@ export default function FlowSpace() {
           {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask} requestLink={requestLink} onCanvasToNote={linkIdeaToTask} onOpenTask={setSelTask} selId={selTask?.id}/>}
           {view==="matrix"&&selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={id=>{deleteTask(id);setSelTask(null);}} onDuplicate={duplicateTask} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} canDelete={canDeleteTask(selTask)} onViewImage={setImgView} onClose={()=>setSelTask(null)} onFocus={startFocus}/>}
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onLinkNote={foldNoteIntoTask} onClearTaskNotes={id=>updateTask(id,{notes:""})} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
-          {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} onCheckin={key=>{awardXp("habit-"+key+"-"+todStr,15);markActiveDay();navigator.vibrate?.(20);}}/>}
+          {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} showToast={showToast} onCheckin={key=>{awardXp("habit-"+key+"-"+todStr,15);markActiveDay();navigator.vibrate?.(20);}}/>}
           {view==="calendar"&&<CalendarView T={T} tasks={myTasks} cats={cats} todStr={todStr} onToggle={toggleTask} onToggleStep={toggleStep} onQuickAdd={addCalendarTask} onMoveTask={moveTaskDay} onMoveStep={moveStep} onOpenTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={dayStats} todStr={todStr}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
@@ -1114,7 +1123,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
       // touch vertical: let the list scroll (reorder comes from the hold timer below)
     };
     const end=()=>teardown();
-    if(type!=="mouse") timer=setTimeout(()=>{ if(!decided){ decided=true; teardown(); beginReorder(id); } }, 260); // touch long-press anywhere → reorder
+    if(type!=="mouse") timer=setTimeout(()=>{ if(!decided){ decided=true; teardown(); beginReorder(id); } }, 120); // touch hold anywhere → reorder (same short hold as the grip/habits)
     window.addEventListener("pointermove",probe); window.addEventListener("pointerup",end); window.addEventListener("pointercancel",end);
   };
   const gripDown=(e,id)=>{ e.stopPropagation(); e.preventDefault(); beginReorder(id); };
@@ -1478,7 +1487,7 @@ function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDa
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
           <div>
             <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:19,fontWeight:700,letterSpacing:"-.4px"}}>{tab==="matrix"?"Priority Matrix":"Freeform Canvas"}</h1>
-            <p style={{fontSize:11,color:T.textMuted,marginTop:1}}>{tab==="matrix"?"Tap a card for details · hold & drag between quadrants · swipe ← delete, → My Day":"Double-click to create note · drag freely · purple → converts to task"}</p>
+            <p style={{fontSize:11,color:T.textMuted,marginTop:1}}>{tab==="matrix"?"Tap a card for details · hold & drag between quadrants · swipe ← delete, → My Day":"Tap empty space to jot an idea · drag to move it · 🔗 link it to a task · ➔ turn it into a task"}</p>
           </div>
           <div style={{display:"flex",gap:4,paddingBottom:2}}>
             {["matrix","canvas"].map(t=>(
@@ -1945,18 +1954,24 @@ function NRow({note,T,sel,onSel,onUp,onDel}) {
 const HABIT_EMOJI=["💧","📖","🏃","🧘","😴","🥗","💪","🚶","📝","☀️","🦷","💊","🎯","🧹","💰","🚭","🎸","🌱"];
 const HABIT_COLORS=["#22c55e","#3b82f6","#f59e0b","#ef4444","#a855f7","#ec4899","#14b8a6","#eab308"];
 const HABIT_SUGGEST=[["Drink water","💧"],["Read","📖"],["Exercise","🏃"],["Meditate","🧘"],["Sleep early","😴"],["Eat healthy","🥗"]];
-function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
+function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
   const [name,setName]=useState("");
-  const [icon,setIcon]=useState("💧");
+  const [icon,setIcon]=useState("✨");
+  const [iconPicked,setIconPicked]=useState(false);
   const [color,setColor]=useState(HABIT_COLORS[0]);
   const [cadence,setCadence]=useState(7);
   const [pick,setPick]=useState(false);
+  const [editId,setEditId]=useState(null);
+  const [editPicked,setEditPicked]=useState(false); // manually chose an icon while editing → stop auto-guessing
   const has=(h,d)=>(h.log||[]).includes(d);
-  const add=(nm,ic)=>{ const n=(nm??name).trim(); if(!n)return; setHabits(hs=>{ const id=Math.max(Date.now(),hs.reduce((m,h)=>Math.max(m,h.id||0),0)+1); return [...hs,{id,name:n,icon:ic||icon,color,cadence,log:[],created:todStr}]; }); setName(""); };
+  // Same smart icon system as the sidebar folders: the icon picks itself from the name as you type.
+  const onNameChange=v=>{ setName(v); if(!iconPicked) setIcon(guessIcon(v,"✨")); };
+  const add=(nm,ic)=>{ const n=(nm??name).trim(); if(!n)return; const finalIc=ic||(iconPicked?icon:guessIcon(n,"✨")); setHabits(hs=>{ const id=Math.max(Date.now(),hs.reduce((m,h)=>Math.max(m,h.id||0),0)+1); return [...hs,{id,name:n,icon:finalIc,color,cadence,log:[],created:todStr}]; }); setName(""); setIcon("✨"); setIconPicked(false); };
+  const patch=(id,p)=>setHabits(hs=>hs.map(x=>x.id===id?{...x,...p}:x));
   const toggle=h=>{ const done=has(h,todStr); setHabits(hs=>hs.map(x=>x.id===h.id?{...x,log:done?(x.log||[]).filter(d=>d!==todStr):[...(x.log||[]),todStr]}:x));
     if(!done){ onCheckin?.(h.id); if(habits.every(x=>x.id===h.id||has(x,todStr))) fireConfetti(); } // last unchecked habit of the day → celebrate
     else navigator.vibrate?.(8); };
-  const del=id=>setHabits(hs=>hs.filter(h=>h.id!==id));
+  const del=id=>{ const h=habits.find(x=>x.id===id); if(!h)return; const idx=habits.findIndex(x=>x.id===id); setHabits(hs=>hs.filter(x=>x.id!==id)); navigator.vibrate?.(15); showToast?.(`Habit "${h.name}" deleted`,()=>{ setHabits(hs=>{ const arr=[...hs]; arr.splice(Math.min(idx,arr.length),0,h); return arr; }); showToast?.("Habit restored ✓"); }); };
   const [dragId,setDragId]=useState(null);
   const dropRef=useRef(null);
   const beginHabitDrag=id=>{ setDragId(id); navigator.vibrate?.(15);
@@ -1967,15 +1982,24 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
     );
   };
   const gripDown=(e,id)=>{ e.stopPropagation(); e.preventDefault(); beginHabitDrag(id); };
-  // Press-and-hold anywhere on a habit card (or drag with a mouse) to reorder.
+  const [swipe,setSwipe]=useState(null); // {id,x} while a card is being swiped left toward delete
+  const runSwipe=(id,sx)=>{ runDrag(
+    ev=>{ const dx=Math.min(0,ev.clientX-sx); setSwipe({id,x:Math.max(dx,-150)}); },
+    ev=>{ const dx=ev.clientX-sx; setSwipe(null); if(dx<-90) del(id); }
+  ); };
+  // Card body gestures: swipe ← to delete; hold (the same short 120ms as everywhere else) or mouse-drag vertically to reorder.
   const bodyDown=(e,id)=>{
-    if(e.target.closest("button,[data-grip],[data-trail]")) return;
+    if(e.target.closest("button,input,[data-grip],[data-trail],[data-edit]")) return;
     const type=e.pointerType, sx=e.clientX, sy=e.clientY; let decided=false, timer=null;
     const teardown=()=>{ clearTimeout(timer); window.removeEventListener("pointermove",probe); window.removeEventListener("pointerup",end); window.removeEventListener("pointercancel",end); };
     const startR=()=>{ decided=true; teardown(); beginHabitDrag(id); };
-    const probe=ev=>{ if(decided)return; const dx=ev.clientX-sx,dy=ev.clientY-sy; if(Math.abs(dx)<8&&Math.abs(dy)<8)return; if(type==="mouse")startR(); else{decided=true;teardown();} };
+    const probe=ev=>{ if(decided)return; const dx=ev.clientX-sx,dy=ev.clientY-sy; if(Math.abs(dx)<8&&Math.abs(dy)<8)return;
+      if(Math.abs(dx)>Math.abs(dy)&&dx<0){ decided=true; teardown(); runSwipe(id,sx); } // leftward = swipe-to-delete
+      else if(type==="mouse") startR();                                                 // desktop vertical drag = reorder
+      else { decided=true; teardown(); }                                                // touch vertical = let the page scroll
+    };
     const end=()=>teardown();
-    if(type!=="mouse") timer=setTimeout(()=>{ if(!decided)startR(); },260);
+    if(type!=="mouse") timer=setTimeout(()=>{ if(!decided)startR(); },120);
     window.addEventListener("pointermove",probe); window.addEventListener("pointerup",end); window.addEventListener("pointercancel",end);
   };
   const streakOf=h=>{ const set=new Set(h.log||[]); let i=set.has(todStr)?0:1, s=0; for(;;){ if(set.has(addDays(-i))){s++;i++;} else break; if(s>999)break; } return s; };
@@ -1994,13 +2018,13 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
       {/* Add habit */}
       <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:"12px 14px",marginBottom:16}}>
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          <button onClick={()=>setPick(p=>!p)} title="Pick an icon" style={{width:40,height:40,borderRadius:10,border:`1px solid ${T.border}`,background:color+"18",cursor:"pointer",fontSize:20,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{icon}</button>
-          <input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="New habit… e.g. Drink water" style={{flex:1,minWidth:0,padding:"10px 12px",borderRadius:10,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:14,outline:"none"}}/>
+          <button onClick={()=>setPick(p=>!p)} title="The icon picks itself as you type — tap to choose your own" style={{width:40,height:40,borderRadius:10,border:`1px solid ${T.border}`,background:color+"18",cursor:"pointer",fontSize:20,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{icon}</button>
+          <input value={name} onChange={e=>onNameChange(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="New habit… e.g. Drink water" style={{flex:1,minWidth:0,padding:"10px 12px",borderRadius:10,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:14,outline:"none"}}/>
           <button onClick={()=>add()} disabled={!name.trim()} style={{padding:"10px 16px",borderRadius:10,border:"none",cursor:name.trim()?"pointer":"default",background:name.trim()?T.grad:T.surface3,color:"#fff",fontWeight:700,fontSize:13,fontFamily:"'DM Sans',sans-serif",flexShrink:0,opacity:name.trim()?1:.5}}>Add</button>
         </div>
         {pick&&(
           <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:10}}>
-            {HABIT_EMOJI.map(e=><button key={e} onClick={()=>{setIcon(e);setPick(false);}} style={{width:34,height:34,borderRadius:8,border:`1px solid ${icon===e?T.accent:T.border}`,background:icon===e?T.accentGlow:"transparent",cursor:"pointer",fontSize:17}}>{e}</button>)}
+            {HABIT_EMOJI.map(e=><button key={e} onClick={()=>{setIcon(e);setIconPicked(true);setPick(false);}} style={{width:34,height:34,borderRadius:8,border:`1px solid ${icon===e?T.accent:T.border}`,background:icon===e?T.accentGlow:"transparent",cursor:"pointer",fontSize:17}}>{e}</button>)}
           </div>
         )}
         <div style={{display:"flex",alignItems:"center",gap:10,marginTop:10,flexWrap:"wrap"}}>
@@ -2025,10 +2049,13 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
         </div>
       )}
 
+      {habits.length>0&&<div style={{fontSize:10,color:T.textMuted,opacity:.6,marginBottom:8}}>💡 Tap the circle to check in · ✎ to edit · swipe ← to delete · hold & drag to reorder · tap the trail bars to fix past days</div>}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12}}>
-        {habits.map(h=>{ const done=has(h,todStr); const st=streakOf(h); const wc=weekCount(h);
+        {habits.map(h=>{ const done=has(h,todStr); const st=streakOf(h); const wc=weekCount(h); const sw=swipe?.id===h.id?swipe.x:0;
           return (
-          <div key={h.id} data-habit-id={h.id} onPointerDown={e=>bodyDown(e,h.id)} style={{background:T.surface,border:`1px solid ${dragId===h.id?T.accent:done?h.color+"66":T.border}`,borderRadius:14,padding:14,position:"relative",transition:"border-color .2s",opacity:dragId===h.id?.5:1,touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}>
+          <div key={h.id} data-habit-id={h.id} style={{position:"relative"}}>
+            {sw!==0&&<div style={{position:"absolute",inset:0,background:T.danger,borderRadius:14,display:"flex",alignItems:"center",justifyContent:"flex-end",padding:"0 16px",color:"#fff",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{sw<-90?"Release to delete":"Keep pulling ←"} 🗑</div>}
+            <div onPointerDown={e=>bodyDown(e,h.id)} style={{background:T.surface,border:`1px solid ${dragId===h.id?T.accent:done?h.color+"66":T.border}`,borderRadius:14,padding:14,position:"relative",transform:sw!==0?`translateX(${sw}px)`:"none",transition:sw!==0?"border-color .2s":"border-color .2s, transform .15s ease",opacity:dragId===h.id?.5:1,touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <div data-grip onPointerDown={e=>gripDown(e,h.id)} title="Drag to reorder" style={{cursor:"grab",color:T.textMuted,opacity:.4,flexShrink:0,touchAction:"none",padding:"8px 2px",margin:"-8px 0"}}><Ico n="grip" s={16} c={T.textMuted}/></div>
               <button onClick={()=>toggle(h)} title={done?"Undo today":"Mark done today"} style={{width:46,height:46,borderRadius:"50%",flexShrink:0,cursor:"pointer",border:`2px solid ${h.color}`,background:done?h.color:"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,transition:"all .18s",transform:done?"scale(1)":"scale(1)"}}>
@@ -2041,8 +2068,26 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
                   <span>· {wc}/{h.cadence} this wk</span>
                 </div>
               </div>
-              <button onClick={()=>del(h.id)} title="Delete habit" style={{width:24,height:24,borderRadius:6,border:"none",background:"transparent",color:T.textMuted,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="trash" s={12} c={T.textMuted}/></button>
+              <button onClick={()=>{setEditId(editId===h.id?null:h.id);setEditPicked(false);}} title="Edit habit — rename, icon, color, goal" style={{width:24,height:24,borderRadius:6,border:"none",background:editId===h.id?T.accentGlow:"transparent",color:editId===h.id?T.accent:T.textMuted,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="edit" s={12} c={editId===h.id?T.accent:T.textMuted}/></button>
+              <button onClick={()=>del(h.id)} title="Delete habit (undo available)" style={{width:24,height:24,borderRadius:6,border:"none",background:"transparent",color:T.textMuted,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="trash" s={12} c={T.textMuted}/></button>
             </div>
+            {editId===h.id&&(
+              <div data-edit style={{marginTop:10,padding:10,borderRadius:10,background:T.surface2,display:"flex",flexDirection:"column",gap:8}}>
+                <input value={h.name} onChange={e=>{ const v=e.target.value; patch(h.id,{name:v,...(!editPicked?{icon:guessIcon(v,h.icon)}:{})}); }} placeholder="Habit name" style={{width:"100%",boxSizing:"border-box",padding:"7px 10px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:13,outline:"none"}}/>
+                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                  {HABIT_EMOJI.map(em=><button key={em} onClick={()=>{patch(h.id,{icon:em});setEditPicked(true);}} style={{width:28,height:28,borderRadius:7,border:`1px solid ${h.icon===em?T.accent:T.border}`,background:h.icon===em?T.accentGlow:"transparent",cursor:"pointer",fontSize:14,padding:0}}>{em}</button>)}
+                </div>
+                <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap"}}>
+                  {HABIT_COLORS.map(c=><div key={c} onClick={()=>patch(h.id,{color:c})} style={{width:16,height:16,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${h.color===c?T.text:"transparent"}`}}/>)}
+                  <div style={{marginLeft:"auto",display:"flex",gap:4}}>
+                    {[[7,"Daily"],[5,"5×/wk"],[3,"3×/wk"]].map(([v,l])=>(
+                      <button key={v} onClick={()=>patch(h.id,{cadence:v})} style={{padding:"3px 9px",borderRadius:20,border:`1px solid ${h.cadence===v?T.accent:T.border}`,background:h.cadence===v?T.accentGlow:"transparent",color:h.cadence===v?T.accent:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:h.cadence===v?700:500,fontFamily:"'DM Sans',sans-serif"}}>{l}</button>
+                    ))}
+                  </div>
+                </div>
+                <button onClick={()=>setEditId(null)} style={{alignSelf:"flex-end",padding:"5px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Done ✓</button>
+              </div>
+            )}
             {/* 14-day trail */}
             <div data-trail style={{display:"flex",gap:3,marginTop:12,alignItems:"flex-end"}}>
               {last(14).map(d=>{ const on=has(h,d); const isToday=d===todStr;
@@ -2050,6 +2095,7 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin}) {
               })}
             </div>
             <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:T.textMuted,marginTop:4}}><span>2 weeks ago</span><span>Today</span></div>
+            </div>
           </div>
         );})}
       </div>
@@ -2435,6 +2481,7 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList}) {
         <Ico n="plus" s={12} c={T.textMuted}/>
         <input value={newList} onChange={e=>setNewList(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"&&newList.trim()){ if(onAddList?.(newList)!==false) setNewList(""); } }} placeholder="New list…" data-nodrag style={{flex:1,minWidth:0,padding:"4px 6px",borderRadius:6,border:"none",borderBottom:`1px dashed ${T.border}`,background:"transparent",color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
       </div>
+      <div style={{fontSize:9,color:T.textMuted,opacity:.6,padding:"0 10px 8px",lineHeight:1.5}}>💡 Hold & drag any item to reorder · drop it on a group to tuck it inside</div>
     </div>
   );
 }
