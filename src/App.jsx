@@ -54,6 +54,8 @@ const Ico = ({ n, s=16, c="currentColor", st={} }) => {
     user:<><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
     msg:<><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></>,
     send:<><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></>,
+    chat:<><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/></>,
+    users:<><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></>,
     brain:<><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2z"/></>,
     paint:<><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></>,
   };
@@ -153,6 +155,8 @@ const fmtDate = s => {
   return d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
 };
 
+// A task can be assigned to several people. Stored as a comma-separated email list in assigned_to.
+const assigneesOf = task => (task?.assignedTo||"").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean);
 // Display a person by their saved nickname (fs_contacts) when there is one, else their email.
 const nickOf = email => { if(!email) return ""; try{ const c=JSON.parse(localStorage.getItem("fs_contacts")||"{}"); return (c[email]&&c[email].trim())||email; }catch{ return email; } };
 const initialOf = email => (nickOf(email)||"?").trim().charAt(0).toUpperCase();
@@ -398,6 +402,10 @@ export default function FlowSpace() {
   const focusRef=useRef(null);
   useEffect(()=>{ focusRef.current=focusTask; },[focusTask]);
   const [navOrg, setNavOrg] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_navorg")||"null"); }catch{ return null; } });
+  const [hiddenTabs, setHiddenTabs] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_hidden_tabs")||"[]"); }catch{ return []; } });
+  useEffect(()=>{ try{ localStorage.setItem("fs_hidden_tabs",JSON.stringify(hiddenTabs)); }catch{} },[hiddenTabs]);
+  const [peopleGroups, setPeopleGroups] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_people_groups")||"[]"); }catch{ return []; } });
+  useEffect(()=>{ try{ localStorage.setItem("fs_people_groups",JSON.stringify(peopleGroups)); }catch{} },[peopleGroups]);
   useEffect(()=>{ if(navOrg) try{ localStorage.setItem("fs_navorg",JSON.stringify(navOrg)); }catch{} },[navOrg]);
   const [cats, setCats] = useState(DEFAULT_CATS);
   const [sideOpen, setSideOpen] = useState(true);
@@ -477,6 +485,8 @@ export default function FlowSpace() {
   },[user]);
 
   useEffect(()=>{ if(keepSelRef.current){ keepSelRef.current=false; return; } setSelTask(null); },[view]);
+  // If the user hides the tab they're currently on, fall back to My Day.
+  useEffect(()=>{ if(hiddenTabs.includes(view)) setView("myday"); },[hiddenTabs,view]);
   const goView=v=>{ setView(v); setSideOpen(false); };
 
   // Swipe anywhere on the sidebar itself: drag right = open, drag left = collapse.
@@ -804,7 +814,7 @@ export default function FlowSpace() {
     if(view.startsWith("cat:")){ const c=view.slice(4); base=tasks.filter(t=>t.tag===c&&t.owner===user?.id); }
     else if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"),o=rest.slice(0,ci),f=rest.slice(ci+1); base=tasks.filter(t=>t.owner===o&&t.tag===f); }
     else if(view==="flagged") base=myTasks.filter(t=>t.starred);
-    else if(view==="assigned"){ const me=user?.email?.toLowerCase(); base=tasks.filter(t=>t.assignedTo&&t.assignedTo===me); }
+    else if(view==="assigned"){ const me=user?.email?.toLowerCase(); base=tasks.filter(t=>assigneesOf(t).includes(me)); }
     else base=view==="myday"?myDay:view==="upcoming"?upcoming:myTasks;
     if(search) base=base.filter(t=>t.title.toLowerCase().includes(search.toLowerCase()));
     return byPosition(base);
@@ -817,14 +827,14 @@ export default function FlowSpace() {
     {id:"matrix",label:"Priority Matrix",icon:"grid",badge:null},
     {id:"all",label:"All Tasks",icon:"layers",badge:null},
     {id:"flagged",label:"Flagged",icon:"flag",badge:myTasks.filter(t=>t.starred&&!t.done).length},
-    {id:"assigned",label:"Assigned to me",icon:"user",badge:tasks.filter(t=>t.assignedTo&&t.assignedTo===user?.email?.toLowerCase()&&!t.done).length||null},
+    {id:"assigned",label:"Assigned to me",icon:"user",badge:tasks.filter(t=>!t.done&&assigneesOf(t).includes(user?.email?.toLowerCase())).length||null},
     {id:"habits",label:"Habits",icon:"repeat",badge:habits.filter(h=>!h.log?.includes(todStr)).length||null},
-    {id:"messages",label:"Messages",icon:"msg",badge:messages.filter(m=>m.recipient_email===user?.email?.toLowerCase()&&!m.read).length||null},
+    {id:"messages",label:"Messages",icon:"chat",badge:messages.filter(m=>m.recipient_email===user?.email?.toLowerCase()&&!m.read).length||null,tint:"#ef4444"},
     {id:"notes",label:"Notes",icon:"note",badge:null},
   ];
   // Unified sidebar items (views + folders + shared) — all reorderable/groupable via SidebarTree.
   const sidebarItems=[
-    ...navItems.map(it=>({id:"n:"+it.id, view:it.id, label:it.label, icon:it.icon, iconType:"ico", badge:it.badge})),
+    ...navItems.filter(it=>!hiddenTabs.includes(it.id)).map(it=>({id:"n:"+it.id, view:it.id, label:it.label, icon:it.icon, iconType:"ico", badge:it.badge, tint:it.tint})),
     ...Object.entries(cats).map(([name,meta])=>({id:"c:"+name, view:"cat:"+name, label:name, icon:meta.icon, iconType:"cat", cap:true, badge:myTasks.filter(t=>t.tag===name&&!t.done).length})),
     ...sharedWithMe.map(s=>({id:"s:"+s.owner_id+":"+s.folder, view:"shared:"+s.owner_id+":"+s.folder, label:s.folder, icon:"🤝", iconType:"cat", cap:true, badge:tasks.filter(t=>t.owner===s.owner_id&&t.tag===s.folder&&!t.done).length})),
   ];
@@ -997,14 +1007,14 @@ export default function FlowSpace() {
           {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} showToast={showToast} onCheckin={key=>{awardXp("habit-"+key+"-"+todStr,15);markActiveDay();navigator.vibrate?.(20);}}/>}
           {view==="calendar"&&<CalendarView T={T} tasks={myTasks} cats={cats} todStr={todStr} onToggle={toggleTask} onToggleStep={toggleStep} onQuickAdd={addCalendarTask} onMoveTask={moveTaskDay} onMoveStep={moveStep} onOpenTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={dayStats} todStr={todStr}/>}
-          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
+          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} peopleGroups={peopleGroups} setPeopleGroups={setPeopleGroups} knownPeople={knownPeople}/>}
           {(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={user?.email?.toLowerCase()} people={knownPeople} onAssign={(id,em)=>updateTask(id,{assignedTo:em})}/>
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={user?.email?.toLowerCase()} people={knownPeople} peopleGroups={peopleGroups} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}/>
           )}
           {view==="messages"&&<MessagesView T={T} myEmail={user?.email?.toLowerCase()} messages={messages} people={knownPeople} peer={dmPeer} onOpenPeer={openDM} onSend={sendDM}/>}
         </div>
       </main>
-      {(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
+      {!selTask&&(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
         <button onClick={()=>inputRef.current?.focus()} style={{position:"fixed",bottom:26,right:26,width:50,height:50,borderRadius:"50%",border:"none",cursor:"pointer",background:T.grad,color:"#fff",boxShadow:"0 6px 20px rgba(192,132,252,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:50,transition:"transform .15s"}}
           onMouseEnter={e=>e.currentTarget.style.transform="scale(1.1)"}
           onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
@@ -1151,7 +1161,7 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[]}) {
   const [renTitle,setRenTitle]=useState(false);
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
@@ -1353,14 +1363,15 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           )}
         </div>
       </div>
-      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} onClose={()=>setSelTask(null)} onFocus={onFocusTask} myEmail={myEmail} people={people} onAssign={onAssign}/>}
+      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} onClose={()=>setSelTask(null)} onFocus={onFocusTask} myEmail={myEmail} people={people} onAssign={onAssign} peopleGroups={peopleGroups}/>}
     </div>
   );
 }
 
 function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,onDown,onGrip,swipeX=0,canDelete=true,onToggleMyDay,myEmail}) {
   const inMyDay=task.mydayDate===tod();
-  const assignedToMe=task.assignedTo&&task.assignedTo===myEmail;
+  const assignees=assigneesOf(task);
+  const assignedToMe=assignees.includes(myEmail);
   const [hov,setHov]=useState(false);
   const ov=task.due&&task.due<tod()&&!task.done;
   const catMeta=cats[task.tag];
@@ -1399,7 +1410,10 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
           {task.due&&<span style={{fontSize:11,color:ov?T.danger:T.textMuted,fontWeight:ov?700:400}}>{fmtDate(task.due)}</span>}
           {task.remindAt&&fmtClock(task.remindAt)&&<span style={{fontSize:10,color:T.accent,fontWeight:600,display:"inline-flex",alignItems:"center",gap:2}}>⏰ {fmtClock(task.remindAt)}{task.endTime?` – ${fmtClock(task.endTime)}`:""}</span>}
           {task.subtasks?.length>0&&<span style={{fontSize:10,color:T.textMuted}}>{task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</span>}
-          {task.assignedTo&&<span title={`Assigned to ${assignedToMe?"you":nickOf(task.assignedTo)}`} style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:9,fontWeight:700,padding:"1px 6px 1px 2px",borderRadius:20,background:assignedToMe?T.accentGlow:T.surface3,color:assignedToMe?T.accent:T.textMuted}}><span style={{width:14,height:14,borderRadius:"50%",background:avatarColor(task.assignedTo),color:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:8}}>{initialOf(task.assignedTo)}</span>{assignedToMe?"You":nickOf(task.assignedTo).split("@")[0]}</span>}
+          {assignees.length>0&&<span title={`Assigned to ${assignees.map(a=>a===myEmail?"you":nickOf(a)).join(", ")}`} style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:9,fontWeight:700,padding:"1px 7px 1px 2px",borderRadius:20,background:assignedToMe?T.accentGlow:T.surface3,color:assignedToMe?T.accent:T.textMuted}}>
+            <span style={{display:"inline-flex"}}>{assignees.slice(0,3).map((a,i)=><span key={a} style={{width:14,height:14,borderRadius:"50%",background:avatarColor(a),color:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:8,marginLeft:i?-5:0,border:`1px solid ${T.bg}`}}>{initialOf(a)}</span>)}</span>
+            {assignees.length===1?(assignedToMe?"You":nickOf(assignees[0]).split("@")[0]):`${assignees.length}`}
+          </span>}
         </div>
         {task.notes&&task.notes.trim()&&<div style={{fontSize:11,color:T.textMuted,marginTop:3,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",opacity:.85,display:"flex",alignItems:"center",gap:4}}><Ico n="note" s={10} c={T.textMuted}/>{task.notes.trim().split("\n")[0].slice(0,70)}</div>}
         {task.subtasks?.length>0&&!task.done&&(
@@ -1418,7 +1432,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
   );
 }
 
-function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,canDelete=true,onViewImage,onClose,onFocus,myEmail,people=[],onAssign}) {
+function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,canDelete=true,onViewImage,onClose,onFocus,myEmail,people=[],onAssign,peopleGroups=[]}) {
   const [assignInput,setAssignInput]=useState("");
   const [uploading,setUploading]=useState(false);
   const fileRef=useRef(null);
@@ -1550,26 +1564,43 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
           ))}
         </div>
       </DL>
-      {onAssign&&(
+      {onAssign&&(()=>{
+        const cur=assigneesOf(task);
+        const toggle=em=>{ em=em.toLowerCase(); onAssign(task.id, cur.includes(em)?cur.filter(x=>x!==em):[...cur,em]); };
+        const addGroup=g=>{ const merged=[...new Set([...cur,...g.members.map(m=>m.toLowerCase())])]; onAssign(task.id,merged); };
+        const quick=[...new Set([...(myEmail?[myEmail]:[]),...people])];
+        return (
         <DL label="Assigned to 🤝" T={T}>
-          {task.assignedTo?(
-            <div style={{display:"flex",alignItems:"center",gap:7,marginTop:5,padding:"5px 8px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
-              <span style={{width:20,height:20,borderRadius:"50%",background:avatarColor(task.assignedTo),color:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,flexShrink:0}}>{initialOf(task.assignedTo)}</span>
-              <span style={{flex:1,minWidth:0,fontSize:12,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{task.assignedTo===myEmail?"You":nickOf(task.assignedTo)}</span>
-              <button onClick={()=>onAssign(task.id,null)} title="Unassign" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex"}}><Ico n="x" s={12}/></button>
+          {cur.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:5,marginBottom:7}}>
+            {cur.map(em=>(
+              <span key={em} style={{display:"inline-flex",alignItems:"center",gap:5,padding:"3px 6px 3px 3px",borderRadius:20,background:em===myEmail?T.accentGlow:T.surface2,border:`1px solid ${T.border}`,fontSize:11,fontWeight:600,color:T.text}}>
+                <span style={{width:16,height:16,borderRadius:"50%",background:avatarColor(em),color:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:8,fontWeight:700}}>{initialOf(em)}</span>
+                {em===myEmail?"You":nickOf(em).split("@")[0]}
+                <button onClick={()=>toggle(em)} title="Remove" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",padding:0}}><Ico n="x" s={10}/></button>
+              </span>
+            ))}
+          </div>}
+          <div style={{fontSize:8,fontWeight:700,letterSpacing:".4px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>Add people</div>
+          <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+            {quick.map(em=>{ const on=cur.includes(em); return (
+              <button key={em} onClick={()=>toggle(em)} style={{padding:"4px 10px",borderRadius:20,border:`1px solid ${on?T.accent:T.border}`,background:on?T.accentGlow:"transparent",color:on?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:on?700:600,fontFamily:"'DM Sans',sans-serif"}}>{on?"✓ ":""}{em===myEmail?"Me":nickOf(em).split("@")[0]}</button>
+            );})}
+          </div>
+          {peopleGroups.length>0&&<>
+            <div style={{fontSize:8,fontWeight:700,letterSpacing:".4px",textTransform:"uppercase",color:T.textMuted,margin:"8px 0 4px"}}>Add a group</div>
+            <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+              {peopleGroups.filter(g=>g.members.length).map(g=>(
+                <button key={g.id} onClick={()=>addGroup(g)} title={g.members.map(m=>nickOf(m)).join(", ")} style={{display:"inline-flex",alignItems:"center",gap:4,padding:"4px 10px",borderRadius:20,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}><Ico n="users" s={10} c={T.textMuted}/> {g.name} ({g.members.length})</button>
+              ))}
             </div>
-          ):(<>
-            <div style={{display:"flex",gap:5,marginTop:5,flexWrap:"wrap"}}>
-              {myEmail&&<button onClick={()=>onAssign(task.id,myEmail)} style={{padding:"4px 10px",borderRadius:20,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Me</button>}
-              {people.slice(0,6).map(em=><button key={em} onClick={()=>onAssign(task.id,em)} style={{padding:"4px 10px",borderRadius:20,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{nickOf(em).split("@")[0]}</button>)}
-            </div>
-            <div style={{display:"flex",gap:5,marginTop:6}}>
-              <input value={assignInput} onChange={e=>setAssignInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){const em=assignInput.trim().toLowerCase();if(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){onAssign(task.id,em);setAssignInput("");}else alert("Enter a valid email.");}}} placeholder="assign by email…" style={{flex:1,minWidth:0,padding:"5px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:11,outline:"none"}}/>
-            </div>
-            <div style={{fontSize:9,color:T.textMuted,marginTop:4,lineHeight:1.5}}>They'll see it only if this list is shared with them.</div>
-          </>)}
+          </>}
+          <div style={{display:"flex",gap:5,marginTop:7}}>
+            <input value={assignInput} onChange={e=>setAssignInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){const em=assignInput.trim().toLowerCase();if(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){toggle(em);setAssignInput("");}else alert("Enter a valid email.");}}} placeholder="add by email…" style={{flex:1,minWidth:0,padding:"5px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:11,outline:"none"}}/>
+          </div>
+          <div style={{fontSize:9,color:T.textMuted,marginTop:4,lineHeight:1.5}}>Each person sees it only if this list is shared with them. Create groups in Settings › People groups.</div>
         </DL>
-      )}
+        );
+      })()}
       <DL label="Subtasks" T={T}>
         <div style={{display:"flex",flexDirection:"column",gap:4,marginTop:5}}>
           {(task.subtasks||[]).map(sub=>(
@@ -2710,9 +2741,9 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
         style={{opacity:isDrag?.4:1,borderTop:isTarget?`2px solid ${T.accent}`:"2px solid transparent",touchAction:"pan-y",display:"flex",alignItems:"center"}}>
         <button onClick={()=>{ if(didDrag.current){didDrag.current=false;return;} onOpen(it.view); }} style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:8,padding:`7px ${canRen?4:10}px 7px ${10+depth*14}px`,borderRadius:9,border:"none",cursor:"grab",marginBottom:1,background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
           <Ico n="grip" s={11} c={T.textMuted} st={{opacity:hov===it.id?.5:.16,flexShrink:0}}/>
-          {it.iconType==="ico"?<Ico n={it.icon} s={16} c={active?T.accent:T.textMuted}/>:(isImgIcon(it.icon)?<img src={it.icon} alt="" style={{width:16,height:16,borderRadius:4,objectFit:"cover",flexShrink:0}}/>:<span style={{fontSize:15,width:16,textAlign:"center",flexShrink:0}}>{it.icon}</span>)}
+          {it.iconType==="ico"?<Ico n={it.icon} s={16} c={it.tint||(active?T.accent:T.textMuted)}/>:(isImgIcon(it.icon)?<img src={it.icon} alt="" style={{width:16,height:16,borderRadius:4,objectFit:"cover",flexShrink:0}}/>:<span style={{fontSize:15,width:16,textAlign:"center",flexShrink:0}}>{it.icon}</span>)}
           <span style={{flex:1,textAlign:"left",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",textTransform:it.cap?"capitalize":"none"}}>{it.label}</span>
-          {it.badge>0&&<span style={{background:active?T.accent:T.surface3,color:active?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{it.badge}</span>}
+          {it.badge>0&&<span style={{background:it.tint||(active?T.accent:T.surface3),color:(it.tint||active)?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{it.badge}</span>}
         </button>
         {canRen&&<button onClick={()=>setManage({type:"list",id:it.id,name:it.label})} data-nodrag title="Manage this list — rename, share, icon, delete" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0,padding:"6px 8px 6px 2px",opacity:hov===it.id?.9:.4,fontSize:15,fontWeight:800,lineHeight:1}}>⋯</button>}
       </div>
@@ -2742,8 +2773,9 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
   });
 
   if(!sideOpen) return <>{items.map(it=>(
-    <button key={it.id} onClick={()=>onOpen(it.view)} title={it.label} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"center",padding:"8px 0",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,background:view===it.view?T.accentGlow:"transparent"}}>
-      {it.iconType==="ico"?<Ico n={it.icon} s={16} c={view===it.view?T.accent:T.textMuted}/>:(isImgIcon(it.icon)?<img src={it.icon} alt="" style={{width:16,height:16,borderRadius:4,objectFit:"cover"}}/>:<span style={{fontSize:15}}>{it.icon}</span>)}
+    <button key={it.id} onClick={()=>onOpen(it.view)} title={it.label} style={{position:"relative",width:"100%",display:"flex",alignItems:"center",justifyContent:"center",padding:"8px 0",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,background:view===it.view?T.accentGlow:"transparent"}}>
+      {it.iconType==="ico"?<Ico n={it.icon} s={16} c={it.tint||(view===it.view?T.accent:T.textMuted)}/>:(isImgIcon(it.icon)?<img src={it.icon} alt="" style={{width:16,height:16,borderRadius:4,objectFit:"cover"}}/>:<span style={{fontSize:15}}>{it.icon}</span>)}
+      {it.badge>0&&<span style={{position:"absolute",top:4,right:9,minWidth:14,height:14,borderRadius:7,background:it.tint||T.accent,color:"#fff",fontSize:8,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px"}}>{it.badge}</span>}
     </button>
   ))}</>;
 
@@ -2982,7 +3014,56 @@ function MessagesView({T,myEmail,messages,people=[],peer,onOpenPeer,onSend}) {
   );
 }
 
-function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSound,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon,onDeleteCat,deletedCats,onRestoreCat,onPurgeCat}) {
+// Create/manage groups of people, so you can assign a task (or share) to a whole team at once.
+function PeopleGroupsSettings({T,peopleGroups,setPeopleGroups,knownPeople=[]}) {
+  const [name,setName]=useState("");
+  const [openId,setOpenId]=useState(null);
+  const [addEmail,setAddEmail]=useState("");
+  const create=()=>{ const n=name.trim(); if(!n) return; const id="pg"+Date.now(); setPeopleGroups(g=>[...g,{id,name:n,members:[]}]); setName(""); setOpenId(id); };
+  const del=id=>setPeopleGroups(g=>g.filter(x=>x.id!==id));
+  const toggleMember=(id,em)=>setPeopleGroups(g=>g.map(x=>x.id===id?{...x,members:x.members.includes(em)?x.members.filter(m=>m!==em):[...x.members,em]}:x));
+  const addManual=id=>{ const em=addEmail.trim().toLowerCase(); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ alert("Enter a valid email."); return; } setPeopleGroups(g=>g.map(x=>x.id===id&&!x.members.includes(em)?{...x,members:[...x.members,em]}:x)); setAddEmail(""); };
+  return (
+    <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 16px 14px",marginBottom:14}}>
+      <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>People groups 👥</div>
+      <div style={{fontSize:11,color:T.textMuted,marginBottom:10}}>Bundle people into a team (e.g. “Design”), then assign a task to the whole group at once.</div>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {peopleGroups.map(g=>(
+          <div key={g.id} style={{border:`1px solid ${T.border}`,borderRadius:10,padding:"8px 10px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <Ico n="users" s={13} c={T.accent}/>
+              <span style={{flex:1,fontSize:13,fontWeight:700}}>{g.name}</span>
+              <span style={{fontSize:10,color:T.textMuted}}>{g.members.length} {g.members.length===1?"person":"people"}</span>
+              <button onClick={()=>setOpenId(openId===g.id?null:g.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,fontSize:11,fontWeight:700}}>{openId===g.id?"Done":"Edit"}</button>
+              <button onClick={()=>del(g.id)} title="Delete group" style={{background:"none",border:"none",cursor:"pointer",color:T.danger,display:"flex"}}><Ico n="x" s={12}/></button>
+            </div>
+            {openId===g.id&&(
+              <div style={{marginTop:8}}>
+                {knownPeople.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:7}}>
+                  {knownPeople.map(em=>{ const on=g.members.includes(em); return (
+                    <button key={em} onClick={()=>toggleMember(g.id,em)} style={{padding:"3px 10px",borderRadius:20,border:`1px solid ${on?T.accent:T.border}`,background:on?T.accentGlow:"transparent",color:on?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{on?"✓ ":""}{nickOf(em).split("@")[0]}</button>
+                  );})}
+                </div>}
+                {g.members.filter(em=>!knownPeople.includes(em)).map(em=>(
+                  <div key={em} style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:T.text,marginBottom:3}}><span style={{flex:1}}>{nickOf(em)}</span><button onClick={()=>toggleMember(g.id,em)} style={{background:"none",border:"none",cursor:"pointer",color:T.danger}}><Ico n="x" s={10}/></button></div>
+                ))}
+                <div style={{display:"flex",gap:5,marginTop:4}}>
+                  <input value={addEmail} onChange={e=>setAddEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addManual(g.id);}} placeholder="add by email…" style={{flex:1,minWidth:0,padding:"5px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:11,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div style={{display:"flex",gap:6,marginTop:peopleGroups.length?10:0}}>
+        <input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")create();}} placeholder="New group name… e.g. Design" style={{flex:1,minWidth:0,padding:"7px 10px",borderRadius:9,border:`1px dashed ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+        <button onClick={create} disabled={!name.trim()} style={{padding:"7px 14px",borderRadius:9,border:"none",cursor:name.trim()?"pointer":"default",background:name.trim()?T.grad:T.surface3,color:"#fff",fontSize:12,fontWeight:700,opacity:name.trim()?1:.5}}>Add</button>
+      </div>
+    </div>
+  );
+}
+
+function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSound,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon,onDeleteCat,deletedCats,onRestoreCat,onPurgeCat,navTabs=[],hiddenTabs=[],setHiddenTabs,peopleGroups=[],setPeopleGroups,knownPeople=[]}) {
   const importRef=useRef(null);
   const iconFileRef=useRef(null);
   const soundFileRef=useRef(null);
@@ -3041,6 +3122,21 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
   return (
     <div style={{flex:1,overflowY:"auto",padding:"22px 26px",maxWidth:580}}>
       <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px",marginBottom:18}}>Settings</h1>
+
+      {/* Show/hide sidebar tabs */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 16px 14px",marginBottom:14}}>
+        <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>Sidebar tabs</div>
+        <div style={{fontSize:11,color:T.textMuted,marginBottom:10}}>Tap a tab to show or hide it in the sidebar. Hidden tabs stay here so you can bring them back anytime.</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {navTabs.map(t=>{ const hidden=hiddenTabs.includes(t.id); return (
+            <button key={t.id} onClick={()=>setHiddenTabs?.(h=>hidden?h.filter(x=>x!==t.id):[...h,t.id])} style={{padding:"5px 12px",borderRadius:20,border:`1px solid ${hidden?T.border:T.accent}`,background:hidden?"transparent":T.accentGlow,color:hidden?T.textMuted:T.accent,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif",textDecoration:hidden?"line-through":"none",opacity:hidden?.6:1}}>{hidden?"":"✓ "}{t.label}</button>
+          );})}
+        </div>
+      </div>
+
+      {/* People groups for assigning */}
+      <PeopleGroupsSettings T={T} peopleGroups={peopleGroups} setPeopleGroups={setPeopleGroups} knownPeople={knownPeople}/>
+
       <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"0 16px",marginBottom:14}}>
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,padding:"12px 0 6px"}}>Categories</div>
         <div style={{fontSize:11,color:T.textMuted,marginBottom:8}}>These are your folders in the sidebar. Tap a category's icon to change it.</div>
