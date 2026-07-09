@@ -45,11 +45,12 @@ export default function AuthScreen() {
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ width: 44, height: 44, borderRadius: 13, background: "linear-gradient(135deg,#c084fc,#818cf8)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", boxShadow: "0 4px 20px rgba(192,132,252,.4)", fontSize: 20 }}>⚡</div>
           <h1 style={{ fontFamily: "'Sora',sans-serif", fontSize: 22, fontWeight: 700, color: "#eef0fa", letterSpacing: "-.5px", margin: 0 }}>FlowSpace</h1>
-          <p style={{ color: "#7a85a3", fontSize: 13, marginTop: 4 }}>{mode === "login" ? "Welcome back" : "Create your account"}</p>
+          <p style={{ color: "#7a85a3", fontSize: 13, marginTop: 4 }}>{mode === "login" ? "Welcome back" : mode === "signup" ? "Create your account" : "Reset your password"}</p>
         </div>
+        {mode === "reset" && <p style={{ color: "#7a85a3", fontSize: 12, textAlign: "center", marginBottom: 12, lineHeight: 1.5 }}>Enter your email and we'll send you a link to set a new password.</p>}
         <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <input style={inp} type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required />
-          <input style={inp} type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} required />
+          {mode !== "reset" && <input style={inp} type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} required />}
           {error && <p style={{ color: "#ef4444", fontSize: 12, textAlign: "center", margin: 0 }}>{error}</p>}
           {msg && <p style={{ color: "#22c55e", fontSize: 12, textAlign: "center", margin: 0 }}>{msg}</p>}
           <button type="submit" disabled={loading} style={{ padding: 11, borderRadius: 10, border: "none", cursor: "pointer", background: "linear-gradient(135deg,#c084fc,#818cf8)", color: "#fff", fontWeight: 700, fontSize: 14, fontFamily: "'DM Sans',sans-serif", opacity: loading ? .7 : 1 }}>

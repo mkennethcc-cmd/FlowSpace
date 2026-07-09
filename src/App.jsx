@@ -803,7 +803,7 @@ export default function FlowSpace() {
     ...Object.entries(cats).map(([name,meta])=>({id:"c:"+name, view:"cat:"+name, label:name, icon:meta.icon, iconType:"cat", cap:true, badge:myTasks.filter(t=>t.tag===name&&!t.done).length})),
     ...sharedWithMe.map(s=>({id:"s:"+s.owner_id+":"+s.folder, view:"shared:"+s.owner_id+":"+s.folder, label:s.folder, icon:"🤝", iconType:"cat", cap:true, badge:tasks.filter(t=>t.owner===s.owner_id&&t.tag===s.folder&&!t.done).length})),
   ];
-  const addSidebarList=name=>{ const n=(name||"").trim().toLowerCase(); if(!n||cats[n]) return false; setCats(c=>({...c,[n]:{color:CAT_COLORS[Object.keys(c).length%CAT_COLORS.length],icon:guessIcon(n)}})); return true; };
+  const addSidebarList=(name,icon,color)=>{ const n=(name||"").trim().toLowerCase(); if(!n||cats[n]) return false; setCats(c=>({...c,[n]:{color:color||CAT_COLORS[Object.keys(c).length%CAT_COLORS.length],icon:icon||guessIcon(n)}})); return true; };
   // Rename a list: carries its color/icon, moves every task's tag, keeps shares alive under the new name.
   const renameCat=(old,nuRaw)=>{
     const nu=(nuRaw||"").trim().toLowerCase();
@@ -2263,6 +2263,7 @@ function CalendarView({T,tasks,cats,todStr,onToggle,onToggleStep,onQuickAdd,onOp
   const [expandId,setExpandId]=useState(null); // task whose steps are unfolded in the day panel
   const [drag,setDrag]=useState(null);         // {label,color,x,y} — floating chip while dragging an entry
   const [hoverDay,setHoverDay]=useState(null); // day cell currently under the dragged entry
+  const [src,setSrc]=useState("unscheduled");  // which tasks the drag-in tray shows
   const didDragRef=useRef(false);
   const setZoomP=v=>{ setZoom(v); try{localStorage.setItem("fs_calzoom",v?"1":"0");}catch{} };
   const first=new Date(ym.y,ym.m,1);
@@ -2273,6 +2274,14 @@ function CalendarView({T,tasks,cats,todStr,onToggle,onToggleStep,onQuickAdd,onOp
   const byDay={}; tasks.forEach(t=>{ if(t.due){ (byDay[t.due]=byDay[t.due]||[]).push(t); } });
   // Steps (subtasks) with their own due date get their own spot on the calendar.
   const stepsByDay={}; tasks.forEach(t=>(t.subtasks||[]).forEach(s=>{ if(s.due){ (stepsByDay[s.due]=stepsByDay[s.due]||[]).push({t,s}); } }));
+  // Drag-in tray: existing tasks you can pull onto a day. Source = Unscheduled / My Day / All / a folder.
+  const srcTasks=tasks.filter(t=>{ if(t.done) return false;
+    if(src==="unscheduled") return !t.due;
+    if(src==="myday") return t.mydayDate===todStr;
+    if(src==="all") return true;
+    if(src.startsWith("cat:")) return t.tag===src.slice(4);
+    return false;
+  }).slice(0,40);
   const nav=d=>setYm(({y,m})=>{ const n=new Date(y,m+d,1); return {y:n.getFullYear(),m:n.getMonth()}; });
   const monthName=new Date(ym.y,ym.m,1).toLocaleDateString("en-US",{month:"long",year:"numeric"});
   const dayTasks=(byDay[selDay]||[]).slice().sort((a,b)=>{ if(a.done!==b.done)return a.done?1:-1; return (a.remindAt||"~").localeCompare(b.remindAt||"~"); });
@@ -2355,6 +2364,28 @@ function CalendarView({T,tasks,cats,todStr,onToggle,onToggleStep,onQuickAdd,onOp
         })}
       </div>
       <div style={{fontSize:10,color:T.textMuted,textAlign:"center",marginBottom:12}}>Tip: hold & drag any task or step onto a day to reschedule it{zoom?"":" · 🔍 Zoom spells out each day's work"}</div>
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:"11px 13px",marginBottom:12}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:srcTasks.length?8:0,flexWrap:"wrap"}}>
+          <span style={{fontSize:12,fontWeight:700,fontFamily:"'Sora',sans-serif"}}>📌 Drag a task onto a day</span>
+          <select value={src} onChange={e=>setSrc(e.target.value)} style={{marginLeft:"auto",padding:"4px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:11,outline:"none",cursor:"pointer",fontFamily:"'DM Sans',sans-serif",textTransform:"capitalize"}}>
+            <option value="unscheduled">Unscheduled</option>
+            <option value="myday">My Day</option>
+            <option value="all">All tasks</option>
+            {Object.keys(cats).map(c=><option key={c} value={"cat:"+c}>{c}</option>)}
+          </select>
+        </div>
+        {srcTasks.length===0
+          ? <div style={{fontSize:11,color:T.textMuted}}>{src==="unscheduled"?"No unscheduled tasks — everything has a date! 🎉":"Nothing here — try another source above."}</div>
+          : <div style={{display:"flex",gap:6,flexWrap:"wrap",maxHeight:132,overflowY:"auto"}}>
+              {srcTasks.map(t=>{ const col=cats[t.tag]?.color||T.accent; return (
+                <div key={t.id} onPointerDown={e=>dragEntry(e,t.title,col,day=>{ if(day!==t.due) onMoveTask?.(t.id,day); })} onClick={()=>{ if(didDragRef.current)return; onOpenTask?.(t); }} title="Hold & drag onto a day to schedule it · tap to open" style={{display:"inline-flex",alignItems:"center",gap:5,padding:"5px 10px",borderRadius:20,border:`1px solid ${col}55`,background:col+"18",color:T.text,fontSize:11,fontWeight:600,cursor:"grab",maxWidth:190,fontFamily:"'DM Sans',sans-serif",userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
+                  <span style={{width:6,height:6,borderRadius:"50%",background:col,flexShrink:0}}/>
+                  <span style={{overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.title}</span>
+                  {t.due&&<span style={{fontSize:9,color:T.textMuted,flexShrink:0}}>· {fmtDate(t.due)}</span>}
+                </div>
+              );})}
+            </div>}
+      </div>
       <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:14}}>
         <div style={{fontSize:13,fontWeight:700,fontFamily:"'Sora',sans-serif",marginBottom:10}}>{selLabel}{selDay===todStr?" · Today":""}</div>
         <div style={{display:"flex",gap:6,marginBottom:(dayTasks.length||daySteps.length)?12:0}}>
@@ -2563,6 +2594,7 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
   const [newList,setNewList]=useState("");
   const [hov,setHov]=useState(null);
   const [manage,setManage]=useState(null); // {type:"list"|"group", id, name}
+  const [creating,setCreating]=useState(null); // "list" | "group"
 
   const itemMap=Object.fromEntries(items.map(i=>[i.id,i]));
   const groups=(org?.groups)||[];
@@ -2609,7 +2641,7 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
       );
     });
   };
-  const addGroup=()=>{ const n=gName.trim(); if(!n){setGAdd(false);return;} const gid="g"+Date.now(); write([...order,gid],parentRaw,[...groups,{id:gid,name:n,collapsed:false}]); setGName(""); setGAdd(false); };
+  const addGroup=name=>{ const n=(name??gName).trim(); if(!n){setGAdd(false);return;} const gid="g"+Date.now(); write([...order,gid],parentRaw,[...groups,{id:gid,name:n,collapsed:false}]); setGName(""); setGAdd(false); };
   const renGroup=(id,n)=>write(order,parentRaw,groups.map(g=>g.id===id?{...g,name:n||g.name}:g));
   const delGroup=id=>{ const pg=parentOf(id); const np={...parentRaw}; order.forEach(x=>{ if(parentOf(x)===id){ if(pg)np[x]=pg; else delete np[x]; } }); delete np[id]; write(order.filter(x=>x!==id),np,groups.filter(g=>g.id!==id)); };
   const toggle=id=>write(order,parentRaw,groups.map(g=>g.id===id?{...g,collapsed:!g.collapsed}:g));
@@ -2660,15 +2692,14 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
   return (
     <div data-rootdrop>
       {renderLevel(null,0)}
-      <div style={{display:"flex",alignItems:"center",gap:6,padding:"10px 10px 4px"}}>
-        <input value={newList} onChange={e=>setNewList(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"&&newList.trim()){ if(onAddList?.(newList)!==false) setNewList(""); } }} placeholder="+ New list…" data-nodrag style={{flex:1,minWidth:0,boxSizing:"border-box",padding:"7px 9px",borderRadius:8,border:`1px dashed ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
-        {newList.trim()&&<button onClick={()=>{ if(onAddList?.(newList)!==false) setNewList(""); }} data-nodrag style={{padding:"7px 10px",borderRadius:8,border:"none",cursor:"pointer",background:T.accentGlow,color:T.accent,fontSize:12,fontWeight:800,flexShrink:0}}>✓</button>}
+      <div style={{display:"flex",gap:6,padding:"10px 10px 4px"}}>
+        <button onClick={()=>setCreating("list")} data-nodrag style={{flex:1,padding:"8px 9px",borderRadius:9,border:`1px dashed ${T.border}`,background:T.surface2,cursor:"pointer",color:T.text,display:"flex",alignItems:"center",justifyContent:"center",gap:5,fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}><Ico n="plus" s={12}/> New list</button>
+        <button onClick={()=>setCreating("group")} data-nodrag style={{flex:1,padding:"8px 9px",borderRadius:9,border:`1px dashed ${T.border}`,background:T.surface2,cursor:"pointer",color:T.text,display:"flex",alignItems:"center",justifyContent:"center",gap:5,fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>📁 New folder</button>
       </div>
-      <div style={{padding:"4px 10px 2px"}}>
-        <button onClick={()=>setGAdd(a=>!a)} data-nodrag style={{width:"100%",padding:"7px 9px",borderRadius:8,border:`1px dashed ${T.border}`,background:"transparent",cursor:"pointer",color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",gap:4,fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}><Ico n="plus" s={11}/> New folder for lists</button>
-      </div>
-      {gAdd&&<div style={{padding:"4px 10px 6px"}}><input autoFocus value={gName} onChange={e=>setGName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addGroup();if(e.key==="Escape")setGAdd(false);}} onBlur={addGroup} placeholder="Folder name… e.g. Work stuff" data-nodrag style={{width:"100%",boxSizing:"border-box",padding:"6px 9px",borderRadius:8,border:`1px solid ${T.accent}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/></div>}
-      <div style={{fontSize:9,color:T.textMuted,opacity:.6,padding:"2px 10px 12px",lineHeight:1.5}}>💡 Hold & drag to reorder · drop a list onto a folder to tuck it inside · ⋯ to rename, share or delete</div>
+      <div style={{fontSize:9,color:T.textMuted,opacity:.6,padding:"4px 10px 12px",lineHeight:1.5}}>💡 Hold & drag to reorder · drop a list onto a folder to tuck it inside · ⋯ to rename, share or delete</div>
+      {creating&&<SidebarCreate T={T} mode={creating} onClose={()=>setCreating(null)}
+        onCreateList={(name,icon,color)=>{ const ok=onAddList?.(name,icon,color)!==false; if(!ok) return false; setCreating(null); return true; }}
+        onCreateGroup={name=>{ addGroup(name); setCreating(null); }}/>}
       {manage&&(()=>{
         const isG=manage.type==="group";
         const childLists=isG?listNamesUnder(manage.id):[manage.name];
@@ -2683,6 +2714,42 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
           onSetIcon={ic=>!isG&&setCats?.(c=>({...c,[manage.name]:{...c[manage.name],icon:ic}}))}
           onSetColor={col=>!isG&&setCats?.(c=>({...c,[manage.name]:{...c[manage.name],color:col}}))}/>;
       })()}
+    </div>
+  );
+}
+
+// Popup to create a new list (name + auto/pick icon + color) or a new folder — opened from the sidebar's New buttons.
+function SidebarCreate({T,mode,onClose,onCreateList,onCreateGroup}) {
+  const isGroup=mode==="group";
+  const [name,setName]=useState("");
+  const [icon,setIcon]=useState("📁");
+  const [iconPicked,setIconPicked]=useState(false);
+  const [color,setColor]=useState(CAT_COLORS[0]);
+  const onName=v=>{ setName(v); if(!isGroup&&!iconPicked) setIcon(guessIcon(v,"📁")); };
+  const create=()=>{ const v=name.trim(); if(!v) return; if(isGroup){ onCreateGroup(v); } else { if(onCreateList(v,icon,color)===false){ alert(`A list called "${v.toLowerCase()}" already exists.`); return; } } };
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:2600,background:"rgba(5,6,12,.6)",display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
+      <div onClick={e=>e.stopPropagation()} data-nodrag style={{width:360,maxWidth:"94vw",maxHeight:"86vh",overflowY:"auto",background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,padding:18,boxShadow:"0 24px 80px rgba(0,0,0,.5)",fontFamily:"'DM Sans',sans-serif"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
+          <span style={{fontSize:20}}>{isGroup?"📁":icon}</span>
+          <div style={{flex:1,fontSize:15,fontWeight:800,fontFamily:"'Sora',sans-serif"}}>{isGroup?"New folder":"New list"}</div>
+          <button onClick={onClose} style={{width:26,height:26,borderRadius:7,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={13}/></button>
+        </div>
+        <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>Name</div>
+        <input autoFocus value={name} onChange={e=>onName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")create();}} placeholder={isGroup?"e.g. Work stuff":"e.g. Groceries"} style={{width:"100%",boxSizing:"border-box",padding:"9px 11px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:13,outline:"none",marginBottom:14,fontFamily:"'DM Sans',sans-serif"}}/>
+        {!isGroup&&(<>
+          <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>Icon <span style={{fontWeight:500,textTransform:"none"}}>· picks itself from the name</span></div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:12}}>
+            {CAT_ICONS.slice(0,24).map(em=><button key={em} onClick={()=>{setIcon(em);setIconPicked(true);}} style={{width:30,height:30,borderRadius:8,border:`1px solid ${icon===em?T.accent:T.border}`,background:icon===em?T.accentGlow:"transparent",cursor:"pointer",fontSize:15,padding:0}}>{em}</button>)}
+          </div>
+          <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>Color</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16}}>
+            {CAT_COLORS.map(col=><div key={col} onClick={()=>setColor(col)} style={{width:20,height:20,borderRadius:"50%",background:col,cursor:"pointer",border:`2px solid ${color===col?T.text:"transparent"}`}}/>)}
+          </div>
+        </>)}
+        {isGroup&&<div style={{fontSize:11,color:T.textMuted,marginBottom:16,lineHeight:1.5}}>Folders hold your lists. After creating it, drag lists onto it to tuck them inside.</div>}
+        <button onClick={create} disabled={!name.trim()} style={{width:"100%",padding:"10px",borderRadius:10,border:"none",cursor:name.trim()?"pointer":"default",background:name.trim()?T.grad:T.surface3,color:"#fff",fontSize:13,fontWeight:700,fontFamily:"'DM Sans',sans-serif",opacity:name.trim()?1:.5}}>{isGroup?"Create folder":"Create list"}</button>
+      </div>
     </div>
   );
 }
