@@ -5,6 +5,7 @@ export const fromDbTask = r => ({
   tag: r.tag, due: r.due, starred: r.starred, notes: r.notes || "",
   color: r.color, subtasks: r.subtasks || [], recurring: r.recurring,
   quadrant: r.quadrant || null, remindAt: r.remind_at || null, endTime: r.time_end || null,
+  assignedTo: r.assigned_to || null,
   attachments: r.attachments || [], owner: r.user_id,
   position: r.position != null ? r.position : (r.created_at ? new Date(r.created_at).getTime() : Date.now()),
   mydayDate: r.myday_date || null,
@@ -34,8 +35,9 @@ export const db = {
       quadrant: t.quadrant || null, remind_at: t.remindAt || null,
       attachments: t.attachments || [], position: t.position != null ? t.position : Date.now(),
       myday_date: t.mydayDate || null,
-      // Only send time_end when set — keeps inserts working on databases that haven't run the time_end migration yet.
+      // Only send time_end / assigned_to when set — keeps inserts working on databases that haven't run those migrations yet.
       ...(t.endTime ? { time_end: t.endTime } : {}),
+      ...(t.assignedTo ? { assigned_to: t.assignedTo } : {}),
     });
     if (error) throw error;
   },
@@ -47,6 +49,7 @@ export const db = {
     if (p.subtasks !== undefined) u.subtasks = p.subtasks;
     if (p.remindAt !== undefined) u.remind_at = p.remindAt || null;
     if (p.endTime !== undefined) u.time_end = p.endTime || null;
+    if (p.assignedTo !== undefined) u.assigned_to = p.assignedTo || null;
     if (p.attachments !== undefined) u.attachments = p.attachments;
     if (p.position !== undefined) u.position = p.position;
     if (p.mydayDate !== undefined) u.myday_date = p.mydayDate || null;
@@ -134,6 +137,27 @@ export const db = {
     const { error } = await supabase.from("habits").insert(habits.map(h => ({ ...base(h), ...extra(h) })));
     // days/prio columns missing (migration not run yet) → retry without them so habits are never lost.
     if (error) await supabase.from("habits").insert(habits.map(base));
+  },
+
+  // 1:1 direct messages. RLS limits rows to those where you're the sender or recipient.
+  async loadMessages(email) {
+    if (!email) return [];
+    const e = email.toLowerCase();
+    const { data } = await supabase.from("messages").select("*")
+      .or(`sender_email.eq.${e},recipient_email.eq.${e}`)
+      .order("created_at", { ascending: true });
+    return data || [];
+  },
+  async sendMessage(senderId, senderEmail, recipientEmail, body) {
+    const { data, error } = await supabase.from("messages").insert({
+      sender_id: senderId, sender_email: senderEmail.toLowerCase(),
+      recipient_email: recipientEmail.toLowerCase(), body,
+    }).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async markMessagesRead(ids) {
+    if (ids && ids.length) await supabase.from("messages").update({ read: true }).in("id", ids);
   },
 
   async loadCats(uid) {
