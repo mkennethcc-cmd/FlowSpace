@@ -2781,8 +2781,26 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
   const [name,setName]=useState(target.name);
   const [email,setEmail]=useState("");
   const [perm,setPerm]=useState("edit");
+  // Nickname/contact book — same localStorage store as Settings, so nicknames work in both places.
+  const [contacts,setContacts]=useState(()=>{try{return JSON.parse(localStorage.getItem("fs_contacts")||"{}");}catch{return{};}});
+  useEffect(()=>{try{localStorage.setItem("fs_contacts",JSON.stringify(contacts));}catch{}},[contacts]);
+  const setNick=(em,nm)=>setContacts(c=>({...c,[em]:nm}));
+  const knownEmails=[...new Set([...(shares||[]).map(s=>s.shared_with_email),...Object.keys(contacts)])].filter(Boolean);
   const saveName=()=>{ const v=name.trim(); if(v&&v.toLowerCase()!==target.name.toLowerCase()){ if(onRename(v)===false) return; } onClose(); };
-  const doShare=()=>{ const em=email.trim().toLowerCase(); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ alert("Enter a valid email like name@example.com"); return; } if(isGroup&&childLists.length===0){ alert("This folder has no lists inside it yet — drag a list in first."); return; } onShare(em,perm==="delete"); setEmail(""); };
+  const doShare=()=>{
+    const raw=email.trim(); if(!raw) return;
+    const isEmail=/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw);
+    let em=raw.toLowerCase();
+    if(!isEmail){ // typed a nickname → resolve it to that person's saved email
+      const match=Object.entries(contacts).find(([mail,nick])=>nick&&nick.trim().toLowerCase()===raw.toLowerCase());
+      if(match) em=match[0];
+      else { alert(`"${raw}" isn't a valid email or a saved nickname. Enter an email like name@example.com.`); return; }
+    }
+    if(isGroup&&childLists.length===0){ alert("This folder has no lists inside it yet — drag a list in first."); return; }
+    onShare(em,perm==="delete");
+    setContacts(c=>em in c?c:{...c,[em]:""});
+    setEmail("");
+  };
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:2600,background:"rgba(5,6,12,.6)",display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
       <div onClick={e=>e.stopPropagation()} data-nodrag style={{width:360,maxWidth:"94vw",maxHeight:"86vh",overflowY:"auto",background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,padding:18,boxShadow:"0 24px 80px rgba(0,0,0,.5)",fontFamily:"'DM Sans',sans-serif"}}>
@@ -2813,15 +2831,31 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
         </>)}
 
         <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>Share 🤝</div>
-        <div style={{fontSize:10,color:T.textMuted,marginBottom:8,lineHeight:1.5}}>{isGroup?"Invites the person to every list inside this folder.":"Invite another FlowSpace user by the email they signed up with."}</div>
+        <div style={{fontSize:10,color:T.textMuted,marginBottom:8,lineHeight:1.5}}>{isGroup?"Invites the person to every list inside this folder.":"Invite another FlowSpace user by the email they signed up with — or a saved nickname."}</div>
         <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap"}}>
-          <input value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doShare();}} type="email" placeholder="their@email.com" style={{flex:1,minWidth:120,padding:"8px 10px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+          <input value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doShare();}} placeholder="their@email.com or nickname" style={{flex:1,minWidth:120,padding:"8px 10px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
           <select value={perm} onChange={e=>setPerm(e.target.value)} style={{padding:"8px 8px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",cursor:"pointer"}}>
             <option value="edit">Edit & add</option>
             <option value="delete">+ delete</option>
           </select>
           <button onClick={doShare} style={{padding:"8px 14px",borderRadius:9,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Share</button>
         </div>
+        {knownEmails.length>0&&<div style={{marginBottom:8}}>
+          <div style={{fontSize:8,fontWeight:700,letterSpacing:".4px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>Saved people — nickname them, tap Use</div>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            {knownEmails.map(em=>(
+              <div key={em} style={{display:"flex",alignItems:"center",gap:6,padding:"4px 8px",borderRadius:8,background:T.surface2,border:`1px solid ${email.trim().toLowerCase()===em?T.accent:T.border}`}}>
+                <span style={{fontSize:13}}>{contacts[em]?"⭐":"👤"}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <input value={contacts[em]||""} onChange={e=>setNick(em,e.target.value)} placeholder="Add a nickname…" style={{width:"100%",padding:"1px 0",border:"none",borderBottom:`1px dashed ${T.border}`,background:"transparent",color:T.text,fontSize:11,fontWeight:600,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+                  <div style={{fontSize:9,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{em}</div>
+                </div>
+                <button onClick={()=>setEmail(em)} style={{padding:"3px 10px",borderRadius:6,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Use</button>
+                <button onClick={()=>setContacts(c=>{const n={...c};delete n[em];return n;})} title="Forget this person" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex"}}><Ico n="x" s={10}/></button>
+              </div>
+            ))}
+          </div>
+        </div>}
         {shares.length>0&&<div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:6}}>
           {shares.map(s=>(
             <div key={s.id} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
