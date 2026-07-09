@@ -83,6 +83,12 @@ const CAT_KEYWORDS = {
 };
 const guessCat = (title, cats) => {
   const t = (title || "").toLowerCase();
+  // A list's own name typed in the task wins ("ACA essay 4pm" → the "aca" list, not just its work folder).
+  // Longest name first so "aca essays" beats a hypothetical "aca" prefix list.
+  for (const name of Object.keys(cats).sort((a,b)=>b.length-a.length)) {
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (esc && new RegExp("(^|[^a-z0-9])" + esc + "($|[^a-z0-9])", "i").test(t)) return name;
+  }
   for (const cat of ["health","personal","finance","school","work"]) {
     if (cats[cat] && CAT_KEYWORDS[cat].some(k => t.includes(k))) return cat;
   }
@@ -798,6 +804,18 @@ export default function FlowSpace() {
     ...sharedWithMe.map(s=>({id:"s:"+s.owner_id+":"+s.folder, view:"shared:"+s.owner_id+":"+s.folder, label:s.folder, icon:"🤝", iconType:"cat", cap:true, badge:tasks.filter(t=>t.owner===s.owner_id&&t.tag===s.folder&&!t.done).length})),
   ];
   const addSidebarList=name=>{ const n=(name||"").trim().toLowerCase(); if(!n||cats[n]) return false; setCats(c=>({...c,[n]:{color:CAT_COLORS[Object.keys(c).length%CAT_COLORS.length],icon:guessIcon(n)}})); return true; };
+  // Rename a list: carries its color/icon, moves every task's tag, keeps shares alive under the new name.
+  const renameCat=(old,nuRaw)=>{
+    const nu=(nuRaw||"").trim().toLowerCase();
+    if(!nu||nu===old) return false;
+    if(cats[nu]){ showToast(`A list called "${nu}" already exists`); return false; }
+    setCats(c=>{ const n={}; Object.entries(c).forEach(([k,v])=>{ n[k===old?nu:k]=v; }); return n; });
+    tasks.filter(t=>t.tag===old&&t.owner===user?.id).forEach(t=>updateTask(t.id,{tag:nu}));
+    ownedShares.filter(s=>s.folder===old).forEach(s=>{ db.addShare(user.id,nu,s.shared_with_email,s.can_delete).then(()=>db.removeShare(s.id)).then(()=>refreshShares()).catch(()=>{}); });
+    if(view==="cat:"+old) setView("cat:"+nu);
+    showToast(`Renamed "${old}" → "${nu}" ✓`);
+    return true;
+  };
 
   if(confirmFlow==="signup") return <SignupSuccess onContinue={()=>{ try{window.history.replaceState(null,"",window.location.pathname);}catch{} setConfirmFlow(null); }}/>;
   if(confirmFlow==="recovery") return <ResetPassword onDone={()=>{ try{window.history.replaceState(null,"",window.location.pathname);}catch{} setConfirmFlow(null); }}/>;
@@ -860,7 +878,7 @@ export default function FlowSpace() {
       {delCatModal&&<DelCatModal T={T} name={delCatModal} count={tasks.filter(t=>t.owner===user?.id&&t.tag===delCatModal).length} onConfirm={a=>confirmDeleteCat(delCatModal,a)} onClose={()=>setDelCatModal(null)}/>}
       {linkPick&&<LinkPicker T={T} tasks={myTasks.filter(t=>!t.done)} onPick={t=>{linkPick.onPick(t);setLinkPick(null);}} onClose={()=>setLinkPick(null)}/>}
       {cmdOpen&&<CmdPalette T={T} tasks={tasks} notes={notes} onClose={()=>setCmdOpen(false)} onGo={v=>{setView(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}} onPickTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);setCmdOpen(false);}}/>}
-      <aside onPointerDown={sideSwipe} style={{width:sideOpen?224:60,transition:"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:30,touchAction:"pan-y"}}>
+      <aside onPointerDown={sideSwipe} style={{width:sideOpen?224:60,transition:"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:30,touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}>
         <div style={{padding:"18px 14px",display:"flex",alignItems:"center",gap:9}}>
           <button onClick={()=>setAboutOpen(true)} title="About FlowSpace" style={{display:"flex",alignItems:"center",gap:9,background:"none",border:"none",cursor:"pointer",padding:0,flex:1,minWidth:0}}>
             <div style={{width:30,height:30,borderRadius:9,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:`0 3px 12px ${T.accent}55`}}>
@@ -889,7 +907,7 @@ export default function FlowSpace() {
           </div>
         )}
         <nav style={{flex:1,minHeight:0,padding:"0 6px",overflowY:"auto",overflowX:"hidden"}}>
-          <SidebarTree T={T} sideOpen={sideOpen} items={sidebarItems} view={view} onOpen={goView} org={navOrg} setOrg={setNavOrg} onAddList={addSidebarList}/>
+          <SidebarTree T={T} sideOpen={sideOpen} items={sidebarItems} view={view} onOpen={goView} org={navOrg} setOrg={setNavOrg} onAddList={addSidebarList} onRenameList={renameCat}/>
         </nav>
         {sideOpen&&(
           <div style={{padding:"10px 12px"}}>
@@ -1672,15 +1690,26 @@ function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit
     </div>
   );
   return (
-    <div data-mnote-id={task.id} onPointerDown={e=>onDown?.(e,task)} onClick={()=>onClickNote?.()}
-      onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
-      style={{padding:"7px 9px",borderRadius:8,background:swipeX<-30?T.danger+"22":swipeX>30?"#f59e0b22":qColor+"1a",border:`1px solid ${swipeX<-30?T.danger:swipeX>30?"#f59e0b":sel?qColor:qColor+"44"}`,boxShadow:sel?`0 0 0 2px ${qColor}55`:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",fontSize:12,color:T.text,lineHeight:1.5,position:"relative",minWidth:88,maxWidth:160,cursor:"grab",transition:swipeX?"none":"transform .15s,box-shadow .15s",transform:swipeX?`translateX(${swipeX}px)`:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
-      <div style={{borderLeft:`3px solid ${qColor}`,paddingLeft:6}}>{task.title}</div>
-      {catMeta&&<div style={{marginTop:4,fontSize:9,color:catMeta.color,fontWeight:600}}>{catMeta.icon} {task.tag}</div>}
-      {inMyDay&&swipeX===0&&<div style={{position:"absolute",top:-7,left:-4,width:16,height:16,borderRadius:"50%",background:"#f59e0b",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 5px rgba(0,0,0,.3)"}}><Ico n="sun" s={9} c="#fff"/></div>}
-      {swipeX<-30&&<div style={{position:"absolute",top:4,right:6,fontSize:12}}>🗑</div>}
-      {swipeX>30&&<div style={{position:"absolute",top:4,left:6,fontSize:12}}>☀️</div>}
-      {hov&&!editing&&swipeX===0&&<button title="Remove from board (keep task)" onClick={e=>{e.stopPropagation();onRemove();}} style={{position:"absolute",top:-8,right:-6,width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:T.surface,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)",zIndex:10}}><Ico n="x" s={9}/></button>}
+    <div style={{position:"relative",minWidth:88,maxWidth:160}}>
+      {/* Same swipe reveal UI as the task list, so the gesture reads the same everywhere. */}
+      {swipeX<0&&(
+        <div style={{position:"absolute",inset:0,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"flex-end",gap:4,paddingRight:8,background:`linear-gradient(270deg,${T.danger}44,transparent)`,color:T.danger,fontWeight:700,fontSize:10,pointerEvents:"none"}}>
+          {swipeX<-70?"Release to delete 🗑":"Delete"}<Ico n="trash" s={12} c={T.danger}/>
+        </div>
+      )}
+      {swipeX>0&&(
+        <div style={{position:"absolute",inset:0,borderRadius:8,display:"flex",alignItems:"center",gap:4,paddingLeft:8,background:`linear-gradient(90deg,${T.warning}44,transparent)`,color:T.warning,fontWeight:700,fontSize:10,pointerEvents:"none"}}>
+          <Ico n="sun" s={12} c={T.warning}/>{swipeX>70?"Release for My Day ☀️":"My Day"}
+        </div>
+      )}
+      <div data-mnote-id={task.id} onPointerDown={e=>onDown?.(e,task)} onClick={()=>onClickNote?.()}
+        onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
+        style={{padding:"7px 9px",borderRadius:8,background:swipeX!==0?T.surface:qColor+"1a",border:`1px solid ${swipeX<-30?T.danger:swipeX>30?"#f59e0b":sel?qColor:qColor+"44"}`,boxShadow:sel?`0 0 0 2px ${qColor}55`:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",fontSize:12,color:T.text,lineHeight:1.5,position:"relative",cursor:"grab",transition:swipeX?"none":"transform .15s,box-shadow .15s",transform:swipeX?`translateX(${swipeX}px)`:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
+        <div style={{borderLeft:`3px solid ${qColor}`,paddingLeft:6}}>{task.title}</div>
+        {catMeta&&<div style={{marginTop:4,fontSize:9,color:catMeta.color,fontWeight:600}}>{catMeta.icon} {task.tag}</div>}
+        {inMyDay&&swipeX===0&&<div style={{position:"absolute",top:-7,left:-4,width:16,height:16,borderRadius:"50%",background:"#f59e0b",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 5px rgba(0,0,0,.3)"}}><Ico n="sun" s={9} c="#fff"/></div>}
+        {hov&&!editing&&swipeX===0&&<button title="Remove from board (keep task)" onClick={e=>{e.stopPropagation();onRemove();}} style={{position:"absolute",top:-8,right:-6,width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:T.surface,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)",zIndex:10}}><Ico n="x" s={9}/></button>}
+      </div>
     </div>
   );
 }
@@ -2515,7 +2544,7 @@ function AnalyticsView({T,tasks,xp,level,streak,habits=[],dayStats={},todStr}) {
 }
 
 // Unified sidebar tree: views + folders + shared, all reorderable and nestable into groups. Persists in localStorage (fs_navorg).
-function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList}) {
+function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRenameList}) {
   const [dragId,setDragId]=useState(null);
   const [drop,setDrop]=useState(null);
   const dropRef=useRef(null);
@@ -2574,16 +2603,33 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList}) {
   const delGroup=id=>{ const pg=parentOf(id); const np={...parentRaw}; order.forEach(x=>{ if(parentOf(x)===id){ if(pg)np[x]=pg; else delete np[x]; } }); delete np[id]; write(order.filter(x=>x!==id),np,groups.filter(g=>g.id!==id)); };
   const toggle=id=>write(order,parentRaw,groups.map(g=>g.id===id?{...g,collapsed:!g.collapsed}:g));
 
-  const Leaf=(it,depth)=>{ const active=view===it.view,isDrag=dragId===it.id,isTarget=drop?.item===it.id;
+  // Renaming a list: remap its sidebar-org id ("c:old" → "c:new") so it keeps its position/group, then let the app rename the cat.
+  const commitLeafRename=(it,val)=>{
+    setRenaming(null);
+    const nu=(val||"").trim().toLowerCase(); const old=it.label;
+    if(!nu||nu===old) return;
+    if(onRenameList?.(old,nu)===false) return;
+    const oldId=it.id,newId="c:"+nu;
+    const no=order.map(x=>x===oldId?newId:x);
+    const np={}; Object.entries(parentRaw).forEach(([k,v])=>{ np[k===oldId?newId:k]=v; });
+    write(no,np,groups);
+  };
+  const Leaf=(it,depth)=>{ const active=view===it.view,isDrag=dragId===it.id,isTarget=drop?.item===it.id,canRen=!!onRenameList&&it.id.startsWith("c:");
+    if(renaming===it.id) return (
+      <div key={it.id} data-item={it.id} style={{padding:`4px 10px 4px ${10+depth*14}px`}}>
+        <input autoFocus defaultValue={it.label} onKeyDown={e=>{if(e.key==="Enter")commitLeafRename(it,e.target.value);if(e.key==="Escape")setRenaming(null);}} onBlur={e=>commitLeafRename(it,e.target.value)} data-nodrag style={{width:"100%",boxSizing:"border-box",padding:"5px 8px",borderRadius:7,border:`1px solid ${T.accent}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+      </div>
+    );
     return (
       <div key={it.id} data-item={it.id} onPointerDown={e=>startDrag(e,it.id)} onMouseEnter={()=>setHov(it.id)} onMouseLeave={()=>setHov(null)}
-        style={{opacity:isDrag?.4:1,borderTop:isTarget?`2px solid ${T.accent}`:"2px solid transparent",touchAction:"none"}}>
-        <button onClick={()=>{ if(didDrag.current){didDrag.current=false;return;} onOpen(it.view); }} style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:`7px 10px 7px ${10+depth*14}px`,borderRadius:9,border:"none",cursor:"grab",marginBottom:1,background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
+        style={{opacity:isDrag?.4:1,borderTop:isTarget?`2px solid ${T.accent}`:"2px solid transparent",touchAction:"none",display:"flex",alignItems:"center"}}>
+        <button onClick={()=>{ if(didDrag.current){didDrag.current=false;return;} onOpen(it.view); }} style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:8,padding:`7px ${canRen?4:10}px 7px ${10+depth*14}px`,borderRadius:9,border:"none",cursor:"grab",marginBottom:1,background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
           <Ico n="grip" s={11} c={T.textMuted} st={{opacity:hov===it.id?.5:.16,flexShrink:0}}/>
           {it.iconType==="ico"?<Ico n={it.icon} s={16} c={active?T.accent:T.textMuted}/>:(isImgIcon(it.icon)?<img src={it.icon} alt="" style={{width:16,height:16,borderRadius:4,objectFit:"cover",flexShrink:0}}/>:<span style={{fontSize:15,width:16,textAlign:"center",flexShrink:0}}>{it.icon}</span>)}
           <span style={{flex:1,textAlign:"left",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",textTransform:it.cap?"capitalize":"none"}}>{it.label}</span>
           {it.badge>0&&<span style={{background:active?T.accent:T.surface3,color:active?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{it.badge}</span>}
         </button>
+        {canRen&&<button onClick={()=>setRenaming(it.id)} data-nodrag title="Rename this list" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0,padding:"6px 8px 6px 2px",opacity:hov===it.id?.9:.35}}><Ico n="edit" s={11}/></button>}
       </div>
     );
   };
@@ -2598,10 +2644,8 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList}) {
             {renaming===id
               ? <input autoFocus defaultValue={g.name} onKeyDown={e=>{if(e.key==="Enter"){renGroup(id,e.target.value.trim());setRenaming(null);}if(e.key==="Escape")setRenaming(null);}} onBlur={e=>{renGroup(id,e.target.value.trim());setRenaming(null);}} data-nodrag style={{flex:1,minWidth:0,padding:"2px 6px",borderRadius:6,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,fontWeight:700,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
               : <button onClick={()=>toggle(id)} onDoubleClick={()=>setRenaming(id)} data-nodrag style={{flex:1,minWidth:0,textAlign:"left",background:"none",border:"none",cursor:"pointer",color:T.text,fontSize:11,fontWeight:700,letterSpacing:".3px",textTransform:"uppercase",fontFamily:"'DM Sans',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name} {cnt>0&&<span style={{color:T.textMuted,fontWeight:600}}>({cnt})</span>}</button>}
-            {hov===id&&<>
-              <button onClick={()=>setRenaming(id)} data-nodrag title="Rename" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex"}}><Ico n="edit" s={11}/></button>
-              <button onClick={()=>delGroup(id)} data-nodrag title="Delete group (keeps items)" style={{background:"none",border:"none",cursor:"pointer",color:T.danger,display:"flex"}}><Ico n="x" s={11}/></button>
-            </>}
+            <button onClick={()=>setRenaming(id)} data-nodrag title="Rename folder" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",padding:"4px 3px",opacity:hov===id?.9:.35}}><Ico n="edit" s={11}/></button>
+            <button onClick={()=>delGroup(id)} data-nodrag title="Delete folder (keeps its lists)" style={{background:"none",border:"none",cursor:"pointer",color:T.danger,display:"flex",padding:"4px 3px",opacity:hov===id?.9:.35}}><Ico n="x" s={11}/></button>
           </div>
           {!g.collapsed&&<div data-groupdrop={id} style={{background:isZone?T.accentGlow:"transparent",borderRadius:8}}>
             {renderLevel(id,depth+1)}
@@ -2622,15 +2666,15 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList}) {
   return (
     <div data-rootdrop>
       {renderLevel(null,0)}
-      <div style={{display:"flex",alignItems:"center",gap:6,padding:"8px 10px 2px"}}>
-        <button onClick={()=>setGAdd(a=>!a)} data-nodrag style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",alignItems:"center",gap:3,fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}><Ico n="plus" s={11}/> New group</button>
+      <div style={{display:"flex",alignItems:"center",gap:6,padding:"10px 10px 4px"}}>
+        <input value={newList} onChange={e=>setNewList(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"&&newList.trim()){ if(onAddList?.(newList)!==false) setNewList(""); } }} placeholder="+ New list…" data-nodrag style={{flex:1,minWidth:0,boxSizing:"border-box",padding:"7px 9px",borderRadius:8,border:`1px dashed ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+        {newList.trim()&&<button onClick={()=>{ if(onAddList?.(newList)!==false) setNewList(""); }} data-nodrag style={{padding:"7px 10px",borderRadius:8,border:"none",cursor:"pointer",background:T.accentGlow,color:T.accent,fontSize:12,fontWeight:800,flexShrink:0}}>✓</button>}
       </div>
-      {gAdd&&<div style={{padding:"2px 10px 6px"}}><input autoFocus value={gName} onChange={e=>setGName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addGroup();if(e.key==="Escape")setGAdd(false);}} onBlur={addGroup} placeholder="Group name…" data-nodrag style={{width:"100%",boxSizing:"border-box",padding:"5px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/></div>}
-      <div style={{display:"flex",alignItems:"center",gap:6,padding:"2px 10px 8px"}}>
-        <Ico n="plus" s={12} c={T.textMuted}/>
-        <input value={newList} onChange={e=>setNewList(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"&&newList.trim()){ if(onAddList?.(newList)!==false) setNewList(""); } }} placeholder="New list…" data-nodrag style={{flex:1,minWidth:0,padding:"4px 6px",borderRadius:6,border:"none",borderBottom:`1px dashed ${T.border}`,background:"transparent",color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+      <div style={{padding:"4px 10px 2px"}}>
+        <button onClick={()=>setGAdd(a=>!a)} data-nodrag style={{width:"100%",padding:"7px 9px",borderRadius:8,border:`1px dashed ${T.border}`,background:"transparent",cursor:"pointer",color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",gap:4,fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}><Ico n="plus" s={11}/> New folder for lists</button>
       </div>
-      <div style={{fontSize:9,color:T.textMuted,opacity:.6,padding:"0 10px 8px",lineHeight:1.5}}>💡 Hold & drag any item to reorder · drop it on a group to tuck it inside</div>
+      {gAdd&&<div style={{padding:"4px 10px 6px"}}><input autoFocus value={gName} onChange={e=>setGName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addGroup();if(e.key==="Escape")setGAdd(false);}} onBlur={addGroup} placeholder="Folder name… e.g. Work stuff" data-nodrag style={{width:"100%",boxSizing:"border-box",padding:"6px 9px",borderRadius:8,border:`1px solid ${T.accent}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/></div>}
+      <div style={{fontSize:9,color:T.textMuted,opacity:.6,padding:"2px 10px 8px",lineHeight:1.5}}>💡 Hold & drag to reorder · drop a list onto a folder to tuck it inside · ✎ renames</div>
     </div>
   );
 }
