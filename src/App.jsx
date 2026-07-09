@@ -163,6 +163,12 @@ const initialOf = email => (nickOf(email)||"?").trim().charAt(0).toUpperCase();
 // Stable-ish color for an avatar from the email string.
 const AVATAR_COLORS = ["#c084fc","#818cf8","#fda4af","#6ee7b7","#fcd34d","#93c5fd","#fb7185","#14b8a6"];
 const avatarColor = email => AVATAR_COLORS[[...(email||"?")].reduce((a,c)=>a+c.charCodeAt(0),0)%AVATAR_COLORS.length];
+// People pick their own emoji avatar (stored in their profile; cached locally in fs_avatars for instant rendering).
+const AVATAR_EMOJI = ["😀","😎","🤓","🥳","😺","🦊","🐼","🐸","🦄","🐯","🐨","🦁","🐵","🤖","👻","🐙","🦋","🌟","🔥","🌈","🍀","🍕","⚡","🎧"];
+const avatarOf = email => { if(!email) return ""; try{ const a=JSON.parse(localStorage.getItem("fs_avatars")||"{}"); return a[email.toLowerCase()]||""; }catch{ return ""; } };
+const Avatar = ({email,size=18}) => avatarOf(email)
+  ? <span style={{width:size,height:size,borderRadius:"50%",background:"rgba(128,128,128,.18)",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:size*0.68,flexShrink:0,lineHeight:1}}>{avatarOf(email)}</span>
+  : <span style={{width:size,height:size,borderRadius:"50%",background:avatarColor(email),color:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:Math.max(8,size*0.5),fontWeight:700,flexShrink:0}}>{initialOf(email)}</span>;
 
 // "…THH:MM" or bare "HH:MM" → "4:00 PM"
 const fmtClock = s => {
@@ -404,8 +410,10 @@ export default function FlowSpace() {
   const [navOrg, setNavOrg] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_navorg")||"null"); }catch{ return null; } });
   const [hiddenTabs, setHiddenTabs] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_hidden_tabs")||"[]"); }catch{ return []; } });
   useEffect(()=>{ try{ localStorage.setItem("fs_hidden_tabs",JSON.stringify(hiddenTabs)); }catch{} },[hiddenTabs]);
-  const [peopleGroups, setPeopleGroups] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_people_groups")||"[]"); }catch{ return []; } });
-  useEffect(()=>{ try{ localStorage.setItem("fs_people_groups",JSON.stringify(peopleGroups)); }catch{} },[peopleGroups]);
+  const [sGroups,setSGroups]=useState([]);   // server-side teams: [{id,name,icon,created_by,members:[emails]}]
+  const [chatReqs,setChatReqs]=useState([]); // chat requests involving me
+  const [profRows,setProfRows]=useState([]); // profiles (id,email,avatar) — powers avatars + account lookups
+  const [myAvatar,setMyAvatar]=useState(()=>{ try{ return localStorage.getItem("fs_avatar")||""; }catch{ return ""; } });
   useEffect(()=>{ if(navOrg) try{ localStorage.setItem("fs_navorg",JSON.stringify(navOrg)); }catch{} },[navOrg]);
   const [cats, setCats] = useState(DEFAULT_CATS);
   const [sideOpen, setSideOpen] = useState(true);
@@ -470,10 +478,14 @@ export default function FlowSpace() {
   },[]);
 
   useEffect(()=>{
-    if(!user){setTasks([]);setCanvasNotes([]);setNotes([]);setHabits([]);setCats(DEFAULT_CATS);setOwnedShares([]);setSharedWithMe([]);setMessages([]);return;}
+    if(!user){setTasks([]);setCanvasNotes([]);setNotes([]);setHabits([]);setCats(DEFAULT_CATS);setOwnedShares([]);setSharedWithMe([]);setMessages([]);setSGroups([]);setChatReqs([]);return;}
     isLoadingData.current=true; setSyncing(true);
     db.loadHabits(user.id).then(setHabits).catch(()=>{});
-    db.loadMessages(user.email).then(setMessages).catch(()=>{});
+    db.loadMessages().then(setMessages).catch(()=>{});
+    db.loadChatReqs(user.email).then(setChatReqs).catch(()=>{});
+    db.loadProfiles().then(rows=>{ setProfRows(rows); try{ localStorage.setItem("fs_avatars",JSON.stringify(Object.fromEntries(rows.map(r=>[r.email,r.avatar||""])))); }catch{} }).catch(()=>{});
+    db.upsertProfile(user.id,user.email,myAvatar||undefined).catch(()=>{});
+    refreshGroups();
     Promise.all([db.loadTasks(),db.loadCanvas(user.id),db.loadNotes(user.id),db.loadCats(user.id),db.loadOwnedShares(user.id),db.loadSharedWithMe(user.email)])
       .then(([t,c,n,cats,os,sm])=>{
         setTasks(t); setCanvasNotes(c); setNotes(n);
@@ -506,6 +518,12 @@ export default function FlowSpace() {
     db.loadOwnedShares(user.id).then(setOwnedShares).catch(()=>{});
     db.loadSharedWithMe(user.email).then(setSharedWithMe).catch(()=>{});
   },[user]);
+  const refreshGroups=useCallback(()=>{
+    if(!user) return;
+    Promise.all([db.loadGroups(),db.loadGroupMembers()])
+      .then(([gs,ms])=>setSGroups(gs.map(g=>({...g,members:ms.filter(m=>m.group_id===g.id).map(m=>m.email)}))))
+      .catch(()=>{});
+  },[user]);
 
   useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.c);syncTimers.current.c=setTimeout(()=>db.syncCanvas(canvasNotes,user.id).catch(console.error),1500);},[canvasNotes]);
   useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.n);syncTimers.current.n=setTimeout(()=>db.syncNotes(notes,user.id).catch(console.error),1500);},[notes]);
@@ -522,7 +540,10 @@ export default function FlowSpace() {
         if(eventType==="DELETE") setTasks(ts=>ts.filter(t=>t.id!==o.id));
       })
       .on("postgres_changes",{event:"*",schema:"public",table:"folder_shares"},()=>{ refreshShares(); })
-      .on("postgres_changes",{event:"INSERT",schema:"public",table:"messages"},({new:m})=>{ const me=user.email.toLowerCase(); if(m.sender_email===me||m.recipient_email===me) setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,m]); })
+      .on("postgres_changes",{event:"INSERT",schema:"public",table:"messages"},({new:m})=>{ setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,m]); }) // RLS only delivers rows we may see (own DMs + our team chats)
+      .on("postgres_changes",{event:"*",schema:"public",table:"group_members"},()=>{ refreshGroups(); })
+      .on("postgres_changes",{event:"*",schema:"public",table:"groups"},()=>{ refreshGroups(); })
+      .on("postgres_changes",{event:"*",schema:"public",table:"chat_requests"},()=>{ db.loadChatReqs(user.email).then(setChatReqs).catch(()=>{}); })
       .subscribe();
     const onVisible=()=>{
       if(!document.hidden){
@@ -768,14 +789,58 @@ export default function FlowSpace() {
     if(Object.keys(patch).length) updateTask(task.id,patch);
   };
   const startFocus=t=>{ setFocusTask({id:t.id,title:t.title}); setPomSecs(pomLen*60); setPomRun(true); setZenOpen(true); navigator.vibrate?.(20); showToast(`🍅 Focusing on "${t.title}" — ${pomLen} min timer started`); };
-  // Send a 1:1 DM (optimistic — realtime also echoes it, de-duped by id).
-  const sendDM=async(to,body)=>{ if(!user||!to||!body.trim()) return; try{ const m=await db.sendMessage(user.id,user.email,to,body.trim()); setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,m]); }catch(e){ showToast("Message failed: "+(e.message||e)); } };
-  const openDM=peer=>{ setDmPeer(peer); setView("messages"); setSideOpen(false);
-    const unread=messages.filter(m=>m.recipient_email===user?.email?.toLowerCase()&&m.sender_email===peer&&!m.read).map(m=>m.id);
-    if(unread.length){ setMessages(ms=>ms.map(m=>unread.includes(m.id)?{...m,read:true}:m)); db.markMessagesRead(unread).catch(()=>{}); }
+  const meEmail=user?.email?.toLowerCase();
+  // People I'm properly linked to: folder shares (both directions, via profiles for owner emails) + teammates.
+  const idEmail=Object.fromEntries(profRows.map(r=>[r.id,r.email]));
+  const trusted=[...new Set([
+    ...(ownedShares||[]).map(s=>s.shared_with_email),
+    ...sharedWithMe.map(s=>idEmail[s.owner_id]).filter(Boolean),
+    ...sGroups.flatMap(g=>g.members||[]),
+  ])].filter(e=>e&&e!==meEmail);
+  // Everyone pickable in assign/chat lists = trusted + anyone I've exchanged DMs with.
+  const knownPeople=[...new Set([...trusted,...messages.filter(m=>!m.group_id).map(m=>m.sender_email===meEmail?m.recipient_email:m.sender_email)])].filter(e=>e&&e!==meEmail);
+  // Can I chat freely with them? (trusted, accepted request either way, or they've messaged me)
+  const chatLinked=em=>trusted.includes(em)
+    ||chatReqs.some(r=>r.status==="accepted"&&((r.from_email===em&&r.to_email===meEmail)||(r.to_email===em&&r.from_email===meEmail)))
+    ||messages.some(m=>!m.group_id&&m.sender_email===em&&m.recipient_email===meEmail);
+  // Send a DM or a team-chat message (peer "g:<id>" = team). First DM to a stranger also files a chat request.
+  const sendDM=async(peer,body)=>{ if(!user||!peer||!body.trim()) return;
+    try{
+      if(typeof peer==="string"&&peer.startsWith("g:")){
+        const m=await db.sendMessage(user.id,user.email,null,body.trim(),parseInt(peer.slice(2),10));
+        setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,m]); return;
+      }
+      const firstContact=!chatLinked(peer);
+      const m=await db.sendMessage(user.id,user.email,peer,body.trim());
+      setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,m]);
+      if(firstContact){ db.sendChatReq(user.email,peer).catch(()=>{}); showToast("Request sent — you can chat freely once they reply or accept 🤝"); }
+    }catch(e){ showToast(/policy|violates/i.test(e.message||"")?"They haven't accepted your request yet — one message at a time until they do.":"Message failed: "+(e.message||e)); }
   };
-  // People I can @mention/assign/DM = everyone I share a folder with, plus anyone I've messaged. Nicknames come from fs_contacts.
-  const knownPeople=[...new Set([...(ownedShares||[]).map(s=>s.shared_with_email),...messages.map(m=>m.sender_email),...messages.map(m=>m.recipient_email)])].filter(e=>e&&e!==user?.email?.toLowerCase());
+  const openDM=peer=>{ setDmPeer(peer); setView("messages"); setSideOpen(false);
+    if(typeof peer==="string"&&!peer.startsWith("g:")){
+      const unread=messages.filter(m=>m.recipient_email===meEmail&&m.sender_email===peer&&!m.read).map(m=>m.id);
+      if(unread.length){ setMessages(ms=>ms.map(m=>unread.includes(m.id)?{...m,read:true}:m)); db.markMessagesRead(unread).catch(()=>{}); }
+    }
+  };
+  // Message anyone with a FlowSpace account: look the email up in profiles first.
+  const startChat=async raw=>{ const em=(raw||"").trim().toLowerCase();
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ showToast("Enter a valid email like name@example.com"); return; }
+    if(em===meEmail){ showToast("That's you 😄"); return; }
+    try{ const p=await db.findProfile(em); if(!p){ showToast("No FlowSpace account uses that email yet — invite them to sign up!"); return; } openDM(em); }
+    catch(e){ showToast("Couldn't look that up: "+(e.message||e)); }
+  };
+  const answerReq=(id,status)=>{ setChatReqs(rs=>rs.map(r=>r.id===id?{...r,status}:r)); db.answerChatReq(id,status).catch(()=>{}); if(status==="accepted") showToast("Request accepted — you're connected 🤝"); };
+  const pickAvatar=em=>{ setMyAvatar(em); try{ localStorage.setItem("fs_avatar",em); const a=JSON.parse(localStorage.getItem("fs_avatars")||"{}"); a[meEmail]=em; localStorage.setItem("fs_avatars",JSON.stringify(a)); }catch{} setProfRows(rs=>rs.map(r=>r.email===meEmail?{...r,avatar:em}:r)); if(user) db.upsertProfile(user.id,user.email,em).catch(()=>{}); showToast("Avatar updated "+em); };
+  // Teams: create / any member adds members (accounts only) / leave-remove / creator deletes.
+  const createTeam=async name=>{ if(!user||!name.trim()) return; try{ await db.createGroup(user.id,name.trim(),guessIcon(name,"👥"),user.email); refreshGroups(); showToast(`Team "${name.trim()}" created ✓`); }catch(e){ showToast("Couldn't create team: "+(e.message||e)); } };
+  const addTeamMember=async(gid,emRaw)=>{ const em=(emRaw||"").trim().toLowerCase(); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ showToast("Enter a valid email"); return; }
+    try{ const p=await db.findProfile(em); if(!p){ showToast("No FlowSpace account uses that email yet"); return; } await db.addGroupMember(gid,em,user.email); refreshGroups(); showToast(`Added ${nickOf(em)} ✓`); }catch(e){ showToast("Couldn't add: "+(e.message||e)); } };
+  const removeTeamMember=async(gid,em)=>{ await db.removeGroupMember(gid,em).catch(()=>{}); refreshGroups(); };
+  const deleteTeam=async gid=>{ await db.deleteGroup(gid).catch(()=>{}); refreshGroups(); };
+  // Bulk assign: add these people to every not-done task in the given lists.
+  const assignAllInLists=(names,emails)=>{ const add=emails.map(e=>e.toLowerCase()).filter(Boolean); if(!add.length) return; let n=0;
+    tasks.filter(t=>names.includes(t.tag)&&t.owner===user?.id&&!t.done).forEach(t=>{ const merged=[...new Set([...assigneesOf(t),...add])]; updateTask(t.id,{assignedTo:merged.join(",")}); n++; });
+    showToast(n?`Assigned ${n} task${n===1?"":"s"} ✓`:"No open tasks in there yet"); };
   // Habits scheduled for today (day-picked habits only count on their weekdays) — shown as a strip in My Day.
   const todWd=new Date(todStr+"T12:00:00").getDay();
   const habitsToday=habits.filter(h=>!h.days||h.days.length===0||h.days.includes(todWd)).slice().sort((a,b)=>(a.prio??999)-(b.prio??999));
@@ -947,7 +1012,7 @@ export default function FlowSpace() {
           </div>
         )}
         <nav style={{flex:1,minHeight:0,padding:"0 6px",overflowY:"auto",overflowX:"hidden"}}>
-          <SidebarTree T={T} sideOpen={sideOpen} items={sidebarItems} view={view} onOpen={goView} org={navOrg} setOrg={setNavOrg} onAddList={addSidebarList} onRenameList={renameCat} onShareFolder={shareFolder} onUnshare={unshareFolder} ownedShares={ownedShares} onDeleteList={deleteCat} setCats={setCats} cats={cats}/>
+          <SidebarTree T={T} sideOpen={sideOpen} items={sidebarItems} view={view} onOpen={goView} org={navOrg} setOrg={setNavOrg} onAddList={addSidebarList} onRenameList={renameCat} onShareFolder={shareFolder} onUnshare={unshareFolder} ownedShares={ownedShares} onDeleteList={deleteCat} setCats={setCats} cats={cats} onAssignAll={assignAllInLists} assignGroups={sGroups}/>
         </nav>
         {sideOpen&&(
           <div style={{padding:"10px 12px"}}>
@@ -1007,11 +1072,11 @@ export default function FlowSpace() {
           {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} showToast={showToast} onCheckin={key=>{awardXp("habit-"+key+"-"+todStr,15);markActiveDay();navigator.vibrate?.(20);}}/>}
           {view==="calendar"&&<CalendarView T={T} tasks={myTasks} cats={cats} todStr={todStr} onToggle={toggleTask} onToggleStep={toggleStep} onQuickAdd={addCalendarTask} onMoveTask={moveTaskDay} onMoveStep={moveStep} onOpenTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={dayStats} todStr={todStr}/>}
-          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} peopleGroups={peopleGroups} setPeopleGroups={setPeopleGroups} knownPeople={knownPeople}/>}
+          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar}/>}
           {(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={user?.email?.toLowerCase()} people={knownPeople} peopleGroups={peopleGroups} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}/>
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={sGroups} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}/>
           )}
-          {view==="messages"&&<MessagesView T={T} myEmail={user?.email?.toLowerCase()} messages={messages} people={knownPeople} peer={dmPeer} onOpenPeer={openDM} onSend={sendDM}/>}
+          {view==="messages"&&<MessagesView T={T} myEmail={meEmail} messages={messages} people={knownPeople} groups={sGroups} reqs={chatReqs} trusted={trusted} peer={dmPeer} onOpenPeer={openDM} onSend={sendDM} onAnswerReq={answerReq} onStartChat={startChat}/>}
         </div>
       </main>
       {!selTask&&(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
@@ -1574,7 +1639,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
           {cur.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:5,marginBottom:7}}>
             {cur.map(em=>(
               <span key={em} style={{display:"inline-flex",alignItems:"center",gap:5,padding:"3px 6px 3px 3px",borderRadius:20,background:em===myEmail?T.accentGlow:T.surface2,border:`1px solid ${T.border}`,fontSize:11,fontWeight:600,color:T.text}}>
-                <span style={{width:16,height:16,borderRadius:"50%",background:avatarColor(em),color:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:8,fontWeight:700}}>{initialOf(em)}</span>
+                <Avatar email={em} size={16}/>
                 {em===myEmail?"You":nickOf(em).split("@")[0]}
                 <button onClick={()=>toggle(em)} title="Remove" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",padding:0}}><Ico n="x" s={10}/></button>
               </span>
@@ -1597,7 +1662,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
           <div style={{display:"flex",gap:5,marginTop:7}}>
             <input value={assignInput} onChange={e=>setAssignInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){const em=assignInput.trim().toLowerCase();if(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){toggle(em);setAssignInput("");}else alert("Enter a valid email.");}}} placeholder="add by email…" style={{flex:1,minWidth:0,padding:"5px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:11,outline:"none"}}/>
           </div>
-          <div style={{fontSize:9,color:T.textMuted,marginTop:4,lineHeight:1.5}}>Each person sees it only if this list is shared with them. Create groups in Settings › People groups.</div>
+          <div style={{fontSize:9,color:T.textMuted,marginTop:4,lineHeight:1.5}}>Each person sees it only if this list is shared with them. Create teams in Settings › Teams.</div>
         </DL>
         );
       })()}
@@ -2665,7 +2730,7 @@ function AnalyticsView({T,tasks,xp,level,streak,habits=[],dayStats={},todStr}) {
 }
 
 // Unified sidebar tree: views + folders + shared, all reorderable and nestable into groups. Persists in localStorage (fs_navorg).
-function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRenameList,onShareFolder,onUnshare,ownedShares=[],onDeleteList,setCats,cats={}}) {
+function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRenameList,onShareFolder,onUnshare,ownedShares=[],onDeleteList,setCats,cats={},onAssignAll,assignGroups=[]}) {
   const [dragId,setDragId]=useState(null);
   const [drop,setDrop]=useState(null);
   const dropRef=useRef(null);
@@ -2815,6 +2880,7 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
         const shares=(ownedShares||[]).filter(s=>childLists.includes(s.folder));
         const meta=isG?{icon:gmap[manage.id]?.icon||guessIcon(manage.name)}:(cats[manage.name]||{});
         return <SidebarManage T={T} target={manage} isGroup={isG} childLists={childLists} shares={shares} meta={meta}
+          onAssignAll={onAssignAll?emails=>onAssignAll(childLists,emails):null} assignGroups={assignGroups}
           onClose={()=>setManage(null)}
           onRename={v=>{ if(isG){ renGroup(manage.id,v); return true; } return onRenameList?.(manage.name,v)!==false; }}
           onShare={(email,canDel)=>{ childLists.forEach(n=>onShareFolder?.(n,email,canDel)); }}
@@ -2863,10 +2929,11 @@ function SidebarCreate({T,mode,onClose,onCreateList,onCreateGroup}) {
 }
 
 // Popup to manage a list or folder right from the sidebar: rename, recolor/re-icon, share (a folder shares all its lists), delete.
-function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename,onShare,onUnshare,onDelete,onSetIcon,onSetColor}) {
+function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename,onShare,onUnshare,onDelete,onSetIcon,onSetColor,onAssignAll,assignGroups=[]}) {
   const [name,setName]=useState(target.name);
   const [email,setEmail]=useState("");
   const [perm,setPerm]=useState("edit");
+  const [assignEmail,setAssignEmail]=useState("");
   // Nickname/contact book — same localStorage store as Settings, so nicknames work in both places.
   const [contacts,setContacts]=useState(()=>{try{return JSON.parse(localStorage.getItem("fs_contacts")||"{}");}catch{return{};}});
   useEffect(()=>{try{localStorage.setItem("fs_contacts",JSON.stringify(contacts));}catch{}},[contacts]);
@@ -2953,6 +3020,18 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
           ))}
         </div>}
 
+        {onAssignAll&&(<>
+          <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,margin:"12px 0 4px"}}>Assign every task 📌</div>
+          <div style={{fontSize:10,color:T.textMuted,marginBottom:8,lineHeight:1.5}}>{isGroup?"Adds them to every open task in every list inside this folder.":"Adds them to every open task in this list."}</div>
+          <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:6}}>
+            {assignGroups.filter(g=>(g.members||[]).length).map(g=>(
+              <button key={g.id} onClick={()=>onAssignAll(g.members)} title={(g.members||[]).map(m=>nickOf(m)).join(", ")} style={{display:"inline-flex",alignItems:"center",gap:4,padding:"4px 10px",borderRadius:20,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}><Ico n="users" s={10} c={T.textMuted}/> {g.name} ({(g.members||[]).length})</button>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:5}}>
+            <input value={assignEmail} onChange={e=>setAssignEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){const em=assignEmail.trim().toLowerCase();if(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){onAssignAll([em]);setAssignEmail("");}else alert("Enter a valid email.");}}} placeholder="or assign everyone to an email…" style={{flex:1,minWidth:0,padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:11,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+          </div>
+        </>)}
         <button onClick={onDelete} style={{width:"100%",marginTop:12,padding:"9px",borderRadius:9,border:`1px solid ${T.danger}44`,background:T.danger+"11",color:T.danger,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
           <Ico n="trash" s={13} c={T.danger}/>{isGroup?"Delete folder (keeps its lists)":"Delete this list"}
         </button>
@@ -2961,52 +3040,104 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
   );
 }
 
-// 1:1 direct messages. Single-pane (list → thread with a back button) so it works cleanly on mobile.
-function MessagesView({T,myEmail,messages,people=[],peer,onOpenPeer,onSend}) {
+// Messages: 1:1 DMs (message anyone with an account — one intro message until they accept/reply) + team chats.
+function MessagesView({T,myEmail,messages,people=[],groups=[],reqs=[],trusted=[],peer,onOpenPeer,onSend,onAnswerReq,onStartChat}) {
   const [text,setText]=useState("");
+  const [newChat,setNewChat]=useState("");
   const endRef=useRef(null);
-  const partners=[...new Set([...messages.map(m=>m.sender_email===myEmail?m.recipient_email:m.sender_email),...people])].filter(e=>e&&e!==myEmail);
-  const lastMsg=em=>{ const ms=messages.filter(m=>m.sender_email===em||m.recipient_email===em); return ms[ms.length-1]; };
-  const unreadFrom=em=>messages.filter(m=>m.sender_email===em&&m.recipient_email===myEmail&&!m.read).length;
-  partners.sort((a,b)=>((lastMsg(b)?.created_at)||"").localeCompare((lastMsg(a)?.created_at)||""));
-  const thread=peer?messages.filter(m=>(m.sender_email===peer&&m.recipient_email===myEmail)||(m.sender_email===myEmail&&m.recipient_email===peer)).slice().sort((a,b)=>(a.created_at||"").localeCompare(b.created_at||"")):[];
+  const isG=typeof peer==="string"&&peer.startsWith("g:");
+  const gid=isG?parseInt(peer.slice(2),10):null;
+  const group=isG?groups.find(g=>g.id===gid):null;
+  const dms=messages.filter(m=>!m.group_id);
+  const partners=[...new Set([...dms.map(m=>m.sender_email===myEmail?m.recipient_email:m.sender_email),...people])].filter(e=>e&&e!==myEmail);
+  const lastDm=em=>{ const ms=dms.filter(m=>m.sender_email===em||m.recipient_email===em); return ms[ms.length-1]; };
+  const lastG=g=>{ const ms=messages.filter(m=>m.group_id===g.id); return ms[ms.length-1]; };
+  partners.sort((a,b)=>((lastDm(b)?.created_at)||"").localeCompare((lastDm(a)?.created_at)||""));
+  const unreadFrom=em=>dms.filter(m=>m.sender_email===em&&m.recipient_email===myEmail&&!m.read).length;
+  const acceptedWith=em=>trusted.includes(em)
+    ||reqs.some(r=>r.status==="accepted"&&((r.from_email===em&&r.to_email===myEmail)||(r.to_email===em&&r.from_email===myEmail)))
+    ||dms.some(m=>m.sender_email===em&&m.recipient_email===myEmail);
+  const thread=isG
+    ? messages.filter(m=>m.group_id===gid)
+    : (peer?dms.filter(m=>(m.sender_email===peer&&m.recipient_email===myEmail)||(m.sender_email===myEmail&&m.recipient_email===peer)):[]);
   useEffect(()=>{ endRef.current?.scrollIntoView({behavior:"smooth"}); },[thread.length,peer]);
-  const send=()=>{ const t=text.trim(); if(!t||!peer) return; onSend(peer,t); setText(""); };
+  const iSentAny=peer&&!isG?dms.some(m=>m.sender_email===myEmail&&m.recipient_email===peer):false;
+  const canSend=!peer||isG||acceptedWith(peer)||!iSentAny;
+  const pendingIn=peer&&!isG?reqs.find(r=>r.from_email===peer&&r.to_email===myEmail&&r.status==="pending"):null;
+  const send=()=>{ const t=text.trim(); if(!t||!peer||!canSend) return; onSend(peer,t); setText(""); };
   if(peer) return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
       <div style={{display:"flex",alignItems:"center",gap:10,padding:"14px 20px",borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
-        <button onClick={()=>onOpenPeer(null)} title="Back to chats" style={{background:T.surface2,border:"none",cursor:"pointer",color:T.text,borderRadius:8,width:30,height:30,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>‹</button>
-        <span style={{width:32,height:32,borderRadius:"50%",background:avatarColor(peer),color:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,flexShrink:0}}>{initialOf(peer)}</span>
-        <div style={{minWidth:0}}><div style={{fontFamily:"'Sora',sans-serif",fontSize:15,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nickOf(peer)}</div><div style={{fontSize:10,color:T.textMuted}}>{peer}</div></div>
+        <button onClick={()=>onOpenPeer(null)} title="Back to chats" style={{background:T.surface2,border:"none",cursor:"pointer",color:T.text,borderRadius:8,width:30,height:30,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:16}}>‹</button>
+        {isG
+          ? <span style={{width:32,height:32,borderRadius:"50%",background:T.accentGlow,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>{group?.icon||"👥"}</span>
+          : <Avatar email={peer} size={32}/>}
+        <div style={{minWidth:0}}>
+          <div style={{fontFamily:"'Sora',sans-serif",fontSize:15,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{isG?(group?.name||"Team"):nickOf(peer)}</div>
+          <div style={{fontSize:10,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{isG?`Team chat · ${(group?.members||[]).length} members`:peer}</div>
+        </div>
       </div>
+      {pendingIn&&(
+        <div style={{display:"flex",alignItems:"center",gap:8,padding:"9px 20px",background:T.accentGlow,borderBottom:`1px solid ${T.border}`,flexShrink:0,flexWrap:"wrap"}}>
+          <span style={{fontSize:12,color:T.text,flex:1,minWidth:140}}>🤝 <b>{nickOf(peer)}</b> wants to chat with you</span>
+          <button onClick={()=>onAnswerReq(pendingIn.id,"accepted")} style={{padding:"5px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Accept</button>
+          <button onClick={()=>onAnswerReq(pendingIn.id,"declined")} style={{padding:"5px 12px",borderRadius:8,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Decline</button>
+        </div>
+      )}
       <div style={{flex:1,overflowY:"auto",padding:"16px 20px",display:"flex",flexDirection:"column",gap:8}}>
         {thread.length===0&&<div style={{margin:"auto",fontSize:12,color:T.textMuted,textAlign:"center"}}>No messages yet — say hi 👋</div>}
         {thread.map(m=>{ const mine=m.sender_email===myEmail; return (
-          <div key={m.id} style={{alignSelf:mine?"flex-end":"flex-start",maxWidth:"78%",padding:"8px 12px",borderRadius:14,borderBottomRightRadius:mine?4:14,borderBottomLeftRadius:mine?14:4,background:mine?T.grad:T.surface2,color:mine?"#fff":T.text,fontSize:13,lineHeight:1.45,wordBreak:"break-word"}}>{m.body}</div>
+          <div key={m.id} style={{alignSelf:mine?"flex-end":"flex-start",maxWidth:"78%",display:"flex",flexDirection:"column",gap:2}}>
+            {isG&&!mine&&<div style={{display:"flex",alignItems:"center",gap:4,fontSize:9,color:T.textMuted,paddingLeft:2}}><Avatar email={m.sender_email} size={14}/>{nickOf(m.sender_email).split("@")[0]}</div>}
+            <div style={{padding:"8px 12px",borderRadius:14,borderBottomRightRadius:mine?4:14,borderBottomLeftRadius:mine?14:4,background:mine?T.grad:T.surface2,color:mine?"#fff":T.text,fontSize:13,lineHeight:1.45,wordBreak:"break-word"}}>{m.body}</div>
+          </div>
         );})}
         <div ref={endRef}/>
       </div>
-      <div style={{display:"flex",gap:8,padding:"12px 20px",borderTop:`1px solid ${T.border}`,flexShrink:0}}>
-        <input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")send();}} placeholder="Message…" style={{flex:1,minWidth:0,padding:"10px 14px",borderRadius:22,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:13,outline:"none"}}/>
-        <button onClick={send} disabled={!text.trim()} style={{width:42,height:42,borderRadius:"50%",border:"none",cursor:text.trim()?"pointer":"default",background:text.trim()?T.grad:T.surface3,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:text.trim()?1:.5}}><Ico n="send" s={16} c="#fff"/></button>
-      </div>
+      {canSend?(
+        <div style={{display:"flex",gap:8,padding:"12px 20px",borderTop:`1px solid ${T.border}`,flexShrink:0}}>
+          <input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")send();}} placeholder="Message…" style={{flex:1,minWidth:0,padding:"10px 14px",borderRadius:22,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:13,outline:"none"}}/>
+          <button onClick={send} disabled={!text.trim()} style={{width:42,height:42,borderRadius:"50%",border:"none",cursor:text.trim()?"pointer":"default",background:text.trim()?T.grad:T.surface3,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:text.trim()?1:.5}}><Ico n="send" s={16} c="#fff"/></button>
+        </div>
+      ):(
+        <div style={{padding:"12px 20px",borderTop:`1px solid ${T.border}`,flexShrink:0,fontSize:11,color:T.textMuted,textAlign:"center",lineHeight:1.5}}>⏳ Request sent — you can send more messages once {nickOf(peer).split("@")[0]} replies or accepts.</div>
+      )}
     </div>
   );
   return (
     <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
       <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px",marginBottom:6}}>Messages</h1>
-      <p style={{fontSize:12,color:T.textMuted,marginBottom:16}}>Direct 1:1 chat with people you collaborate with.</p>
-      {partners.length===0
-        ? <div style={{fontSize:13,color:T.textMuted,background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"20px",textAlign:"center",lineHeight:1.6}}>💬 No one to message yet.<br/>Share a list or folder with someone (via its ⋯ menu), then they'll show up here.</div>
+      <p style={{fontSize:12,color:T.textMuted,marginBottom:12}}>Chat with teammates and collaborators — or message any FlowSpace user by email (they get a request; you can send one message until they accept or reply).</p>
+      <div style={{display:"flex",gap:6,marginBottom:16}}>
+        <input value={newChat} onChange={e=>setNewChat(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&newChat.trim()){onStartChat(newChat);setNewChat("");}}} placeholder="Start a chat — type any FlowSpace user's email…" style={{flex:1,minWidth:0,padding:"9px 12px",borderRadius:10,border:`1px dashed ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+        <button onClick={()=>{ if(newChat.trim()){onStartChat(newChat);setNewChat("");} }} disabled={!newChat.trim()} style={{padding:"0 16px",borderRadius:10,border:"none",cursor:newChat.trim()?"pointer":"default",background:newChat.trim()?T.grad:T.surface3,color:"#fff",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif",opacity:newChat.trim()?1:.5}}>Chat</button>
+      </div>
+      {groups.length>0&&(<>
+        <div style={{fontSize:10,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>Team chats</div>
+        <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:14}}>
+          {groups.map(g=>{ const lm=lastG(g); return (
+            <button key={g.id} onClick={()=>onOpenPeer("g:"+g.id)} style={{display:"flex",alignItems:"center",gap:11,padding:"11px 13px",borderRadius:12,border:`1px solid ${T.border}`,background:T.surface,cursor:"pointer",textAlign:"left"}}>
+              <span style={{width:38,height:38,borderRadius:"50%",background:T.accentGlow,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>{g.icon||"👥"}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:700,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name} <span style={{fontWeight:500,color:T.textMuted,fontSize:11}}>· {(g.members||[]).length} members</span></div>
+                <div style={{fontSize:11,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{lm?`${lm.sender_email===myEmail?"You":nickOf(lm.sender_email).split("@")[0]}: ${lm.body}`:"Say hi to the team 👋"}</div>
+              </div>
+            </button>
+          );})}
+        </div>
+      </>)}
+      {partners.length>0&&<div style={{fontSize:10,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>People</div>}
+      {partners.length===0&&groups.length===0
+        ? <div style={{fontSize:13,color:T.textMuted,background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"20px",textAlign:"center",lineHeight:1.6}}>💬 No chats yet.<br/>Type someone's email above, create a team in Settings, or share a list with a friend.</div>
         : <div style={{display:"flex",flexDirection:"column",gap:6}}>
-            {partners.map(em=>{ const lm=lastMsg(em); const u=unreadFrom(em); return (
-              <button key={em} onClick={()=>onOpenPeer(em)} style={{display:"flex",alignItems:"center",gap:11,padding:"11px 13px",borderRadius:12,border:`1px solid ${T.border}`,background:T.surface,cursor:"pointer",textAlign:"left"}}>
-                <span style={{width:38,height:38,borderRadius:"50%",background:avatarColor(em),color:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:15,fontWeight:700,flexShrink:0}}>{initialOf(em)}</span>
+            {partners.map(em=>{ const lm=lastDm(em); const u=unreadFrom(em); return (
+              <button key={em} onClick={()=>onOpenPeer(em)} style={{display:"flex",alignItems:"center",gap:11,padding:"11px 13px",borderRadius:12,border:`1px solid ${u?T.accent+"66":T.border}`,background:T.surface,cursor:"pointer",textAlign:"left"}}>
+                <Avatar email={em} size={38}/>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:13,fontWeight:700,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nickOf(em)}</div>
                   <div style={{fontSize:11,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{lm?`${lm.sender_email===myEmail?"You: ":""}${lm.body}`:"Tap to start chatting"}</div>
                 </div>
-                {u>0&&<span style={{background:T.accent,color:"#fff",fontSize:10,fontWeight:700,minWidth:18,height:18,borderRadius:9,display:"inline-flex",alignItems:"center",justifyContent:"center",padding:"0 5px",flexShrink:0}}>{u}</span>}
+                {u>0&&<span style={{background:"#ef4444",color:"#fff",fontSize:10,fontWeight:700,minWidth:18,height:18,borderRadius:9,display:"inline-flex",alignItems:"center",justifyContent:"center",padding:"0 5px",flexShrink:0}}>{u}</span>}
               </button>
             );})}
           </div>}
@@ -3014,56 +3145,61 @@ function MessagesView({T,myEmail,messages,people=[],peer,onOpenPeer,onSend}) {
   );
 }
 
-// Create/manage groups of people, so you can assign a task (or share) to a whole team at once.
-function PeopleGroupsSettings({T,peopleGroups,setPeopleGroups,knownPeople=[]}) {
+// Teams are shared with everyone in them: teammates see the team, chat in its team chat,
+// pull in other members, and assign tasks to the whole team. (Server-side, RLS-protected.)
+function TeamsSettings({T,teams=[],myEmail,myId,knownPeople=[],onCreate,onAddMember,onRemoveMember,onDelete}) {
   const [name,setName]=useState("");
   const [openId,setOpenId]=useState(null);
   const [addEmail,setAddEmail]=useState("");
-  const create=()=>{ const n=name.trim(); if(!n) return; const id="pg"+Date.now(); setPeopleGroups(g=>[...g,{id,name:n,members:[]}]); setName(""); setOpenId(id); };
-  const del=id=>setPeopleGroups(g=>g.filter(x=>x.id!==id));
-  const toggleMember=(id,em)=>setPeopleGroups(g=>g.map(x=>x.id===id?{...x,members:x.members.includes(em)?x.members.filter(m=>m!==em):[...x.members,em]}:x));
-  const addManual=id=>{ const em=addEmail.trim().toLowerCase(); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ alert("Enter a valid email."); return; } setPeopleGroups(g=>g.map(x=>x.id===id&&!x.members.includes(em)?{...x,members:[...x.members,em]}:x)); setAddEmail(""); };
+  const create=()=>{ const n=name.trim(); if(!n) return; onCreate(n); setName(""); };
   return (
     <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 16px 14px",marginBottom:14}}>
-      <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>People groups 👥</div>
-      <div style={{fontSize:11,color:T.textMuted,marginBottom:10}}>Bundle people into a team (e.g. “Design”), then assign a task to the whole group at once.</div>
+      <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>Teams 👥</div>
+      <div style={{fontSize:11,color:T.textMuted,marginBottom:10,lineHeight:1.5}}>Everyone in a team can see it, chat in its team chat, add teammates, and assign tasks to the whole team. Members need a FlowSpace account.</div>
       <div style={{display:"flex",flexDirection:"column",gap:8}}>
-        {peopleGroups.map(g=>(
+        {teams.map(g=>{ const isCreator=g.created_by===myId; return (
           <div key={g.id} style={{border:`1px solid ${T.border}`,borderRadius:10,padding:"8px 10px"}}>
             <div style={{display:"flex",alignItems:"center",gap:6}}>
-              <Ico n="users" s={13} c={T.accent}/>
-              <span style={{flex:1,fontSize:13,fontWeight:700}}>{g.name}</span>
-              <span style={{fontSize:10,color:T.textMuted}}>{g.members.length} {g.members.length===1?"person":"people"}</span>
-              <button onClick={()=>setOpenId(openId===g.id?null:g.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,fontSize:11,fontWeight:700}}>{openId===g.id?"Done":"Edit"}</button>
-              <button onClick={()=>del(g.id)} title="Delete group" style={{background:"none",border:"none",cursor:"pointer",color:T.danger,display:"flex"}}><Ico n="x" s={12}/></button>
+              <span style={{fontSize:14}}>{g.icon||"👥"}</span>
+              <span style={{flex:1,minWidth:0,fontSize:13,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name}</span>
+              <span style={{fontSize:10,color:T.textMuted,flexShrink:0}}>{(g.members||[]).length} member{(g.members||[]).length===1?"":"s"}</span>
+              <button onClick={()=>setOpenId(openId===g.id?null:g.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.accent,fontSize:11,fontWeight:700,flexShrink:0}}>{openId===g.id?"Done":"Manage"}</button>
+              {isCreator&&<button onClick={()=>{if(window.confirm(`Delete team "${g.name}" for everyone?`))onDelete(g.id);}} title="Delete team (creator only)" style={{background:"none",border:"none",cursor:"pointer",color:T.danger,display:"flex",flexShrink:0}}><Ico n="x" s={12}/></button>}
             </div>
             {openId===g.id&&(
               <div style={{marginTop:8}}>
-                {knownPeople.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:7}}>
-                  {knownPeople.map(em=>{ const on=g.members.includes(em); return (
-                    <button key={em} onClick={()=>toggleMember(g.id,em)} style={{padding:"3px 10px",borderRadius:20,border:`1px solid ${on?T.accent:T.border}`,background:on?T.accentGlow:"transparent",color:on?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{on?"✓ ":""}{nickOf(em).split("@")[0]}</button>
-                  );})}
+                <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:7}}>
+                  {(g.members||[]).map(em=>(
+                    <div key={em} style={{display:"flex",alignItems:"center",gap:7,padding:"3px 6px",borderRadius:7,background:T.surface2}}>
+                      <Avatar email={em} size={18}/>
+                      <span style={{flex:1,minWidth:0,fontSize:11,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{em===myEmail?"You":nickOf(em)}</span>
+                      {(isCreator||em===myEmail)&&<button onClick={()=>onRemoveMember(g.id,em)} title={em===myEmail?"Leave team":"Remove"} style={{background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:9,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{em===myEmail?"Leave":"✕"}</button>}
+                    </div>
+                  ))}
+                </div>
+                {knownPeople.filter(em=>!(g.members||[]).includes(em)).length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:6}}>
+                  {knownPeople.filter(em=>!(g.members||[]).includes(em)).map(em=>(
+                    <button key={em} onClick={()=>onAddMember(g.id,em)} style={{padding:"3px 10px",borderRadius:20,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>+ {nickOf(em).split("@")[0]}</button>
+                  ))}
                 </div>}
-                {g.members.filter(em=>!knownPeople.includes(em)).map(em=>(
-                  <div key={em} style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:T.text,marginBottom:3}}><span style={{flex:1}}>{nickOf(em)}</span><button onClick={()=>toggleMember(g.id,em)} style={{background:"none",border:"none",cursor:"pointer",color:T.danger}}><Ico n="x" s={10}/></button></div>
-                ))}
-                <div style={{display:"flex",gap:5,marginTop:4}}>
-                  <input value={addEmail} onChange={e=>setAddEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addManual(g.id);}} placeholder="add by email…" style={{flex:1,minWidth:0,padding:"5px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:11,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+                <div style={{display:"flex",gap:5}}>
+                  <input value={addEmail} onChange={e=>setAddEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&addEmail.trim()){onAddMember(g.id,addEmail);setAddEmail("");}}} placeholder="add teammate by email…" style={{flex:1,minWidth:0,padding:"5px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:11,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+                  <button onClick={()=>{if(addEmail.trim()){onAddMember(g.id,addEmail);setAddEmail("");}}} style={{padding:"5px 12px",borderRadius:7,border:"none",cursor:"pointer",background:T.accentGlow,color:T.accent,fontSize:11,fontWeight:700}}>Add</button>
                 </div>
               </div>
             )}
           </div>
-        ))}
+        );})}
       </div>
-      <div style={{display:"flex",gap:6,marginTop:peopleGroups.length?10:0}}>
-        <input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")create();}} placeholder="New group name… e.g. Design" style={{flex:1,minWidth:0,padding:"7px 10px",borderRadius:9,border:`1px dashed ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
-        <button onClick={create} disabled={!name.trim()} style={{padding:"7px 14px",borderRadius:9,border:"none",cursor:name.trim()?"pointer":"default",background:name.trim()?T.grad:T.surface3,color:"#fff",fontSize:12,fontWeight:700,opacity:name.trim()?1:.5}}>Add</button>
+      <div style={{display:"flex",gap:6,marginTop:teams.length?10:0}}>
+        <input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")create();}} placeholder="New team name… e.g. Design" style={{flex:1,minWidth:0,padding:"7px 10px",borderRadius:9,border:`1px dashed ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+        <button onClick={create} disabled={!name.trim()} style={{padding:"7px 14px",borderRadius:9,border:"none",cursor:name.trim()?"pointer":"default",background:name.trim()?T.grad:T.surface3,color:"#fff",fontSize:12,fontWeight:700,opacity:name.trim()?1:.5}}>Create</button>
       </div>
     </div>
   );
 }
 
-function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSound,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon,onDeleteCat,deletedCats,onRestoreCat,onPurgeCat,navTabs=[],hiddenTabs=[],setHiddenTabs,peopleGroups=[],setPeopleGroups,knownPeople=[]}) {
+function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSound,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon,onDeleteCat,deletedCats,onRestoreCat,onPurgeCat,navTabs=[],hiddenTabs=[],setHiddenTabs,knownPeople=[],teams=[],myEmail,myId,onTeamCreate,onTeamAddMember,onTeamRemoveMember,onTeamDelete,myAvatar,onPickAvatar}) {
   const importRef=useRef(null);
   const iconFileRef=useRef(null);
   const soundFileRef=useRef(null);
@@ -3134,8 +3270,17 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
         </div>
       </div>
 
-      {/* People groups for assigning */}
-      <PeopleGroupsSettings T={T} peopleGroups={peopleGroups} setPeopleGroups={setPeopleGroups} knownPeople={knownPeople}/>
+      {/* My avatar — shown to teammates on chats and assigned tasks */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 16px 14px",marginBottom:14}}>
+        <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>My avatar</div>
+        <div style={{fontSize:11,color:T.textMuted,marginBottom:10}}>Pick the face teammates see next to your messages and assigned tasks.</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:5,alignItems:"center"}}>
+          {AVATAR_EMOJI.map(em=><button key={em} onClick={()=>onPickAvatar?.(em)} style={{width:34,height:34,borderRadius:"50%",border:`2px solid ${myAvatar===em?T.accent:T.border}`,background:myAvatar===em?T.accentGlow:"transparent",cursor:"pointer",fontSize:17,padding:0}}>{em}</button>)}
+        </div>
+      </div>
+
+      {/* Teams (shared groups) */}
+      <TeamsSettings T={T} teams={teams} myEmail={myEmail} myId={myId} knownPeople={knownPeople} onCreate={onTeamCreate} onAddMember={onTeamAddMember} onRemoveMember={onTeamRemoveMember} onDelete={onTeamDelete}/>
 
       <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"0 16px",marginBottom:14}}>
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,padding:"12px 0 6px"}}>Categories</div>

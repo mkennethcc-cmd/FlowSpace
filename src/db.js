@@ -139,25 +139,78 @@ export const db = {
     if (error) await supabase.from("habits").insert(habits.map(base));
   },
 
-  // 1:1 direct messages. RLS limits rows to those where you're the sender or recipient.
-  async loadMessages(email) {
-    if (!email) return [];
-    const e = email.toLowerCase();
-    const { data } = await supabase.from("messages").select("*")
-      .or(`sender_email.eq.${e},recipient_email.eq.${e}`)
-      .order("created_at", { ascending: true });
+  // Messages (1:1 DMs + team chats). No filter — RLS returns exactly what this user may see.
+  async loadMessages() {
+    const { data } = await supabase.from("messages").select("*").order("created_at", { ascending: true });
     return data || [];
   },
-  async sendMessage(senderId, senderEmail, recipientEmail, body) {
+  async sendMessage(senderId, senderEmail, recipientEmail, body, groupId) {
     const { data, error } = await supabase.from("messages").insert({
       sender_id: senderId, sender_email: senderEmail.toLowerCase(),
-      recipient_email: recipientEmail.toLowerCase(), body,
+      recipient_email: recipientEmail ? recipientEmail.toLowerCase() : null, body,
+      ...(groupId ? { group_id: groupId } : {}),
     }).select().single();
     if (error) throw error;
     return data;
   },
   async markMessagesRead(ids) {
     if (ids && ids.length) await supabase.from("messages").update({ read: true }).in("id", ids);
+  },
+
+  // Profiles: lets the app check that an email belongs to a real account + stores the chosen avatar.
+  async upsertProfile(uid, email, avatar) {
+    await supabase.from("profiles").upsert({ id: uid, email: email.toLowerCase(), ...(avatar !== undefined ? { avatar } : {}) });
+  },
+  async findProfile(email) {
+    const { data } = await supabase.from("profiles").select("email,avatar").eq("email", email.toLowerCase()).maybeSingle();
+    return data;
+  },
+  async loadProfiles() {
+    const { data } = await supabase.from("profiles").select("id,email,avatar");
+    return data || [];
+  },
+
+  // Chat requests: message anyone once; more messages unlock when they accept or reply.
+  async loadChatReqs(email) {
+    const e = email.toLowerCase();
+    const { data } = await supabase.from("chat_requests").select("*").or(`from_email.eq.${e},to_email.eq.${e}`);
+    return data || [];
+  },
+  async sendChatReq(from, to) {
+    const { error } = await supabase.from("chat_requests").upsert(
+      { from_email: from.toLowerCase(), to_email: to.toLowerCase(), status: "pending" },
+      { onConflict: "from_email,to_email", ignoreDuplicates: true });
+    if (error && !/duplicate/i.test(error.message || "")) throw error;
+  },
+  async answerChatReq(id, status) {
+    await supabase.from("chat_requests").update({ status }).eq("id", id);
+  },
+
+  // Teams (server-side groups): visible to members, any member may add members, creator may delete.
+  async loadGroups() {
+    const { data } = await supabase.from("groups").select("*");
+    return data || [];
+  },
+  async loadGroupMembers() {
+    const { data } = await supabase.from("group_members").select("*");
+    return data || [];
+  },
+  async createGroup(uid, name, icon, myEmail) {
+    const { data, error } = await supabase.from("groups").insert({ name, icon: icon || null, created_by: uid }).select().single();
+    if (error) throw error;
+    const { error: e2 } = await supabase.from("group_members").insert({ group_id: data.id, email: myEmail.toLowerCase(), added_by: myEmail.toLowerCase() });
+    if (e2) throw e2;
+    return data;
+  },
+  async addGroupMember(gid, email, by) {
+    const { error } = await supabase.from("group_members").insert({ group_id: gid, email: email.toLowerCase(), added_by: (by || "").toLowerCase() });
+    if (error && !/duplicate/i.test(error.message || "")) throw error;
+  },
+  async removeGroupMember(gid, email) {
+    await supabase.from("group_members").delete().eq("group_id", gid).eq("email", email.toLowerCase());
+  },
+  async deleteGroup(id) {
+    await supabase.from("groups").delete().eq("id", id);
   },
 
   async loadCats(uid) {
