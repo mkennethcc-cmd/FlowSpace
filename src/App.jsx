@@ -986,8 +986,10 @@ export default function FlowSpace() {
       <aside onPointerDown={sideSwipe} style={{width:sideOpen?224:60,transition:"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:30,touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}>
         <div style={{padding:"18px 14px",display:"flex",alignItems:"center",gap:9}}>
           <button onClick={()=>setAboutOpen(true)} title="About FlowSpace" style={{display:"flex",alignItems:"center",gap:9,background:"none",border:"none",cursor:"pointer",padding:0,flex:1,minWidth:0}}>
-            <div style={{width:30,height:30,borderRadius:9,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:`0 3px 12px ${T.accent}55`}}>
+            {/* App logo: /public/logo.png when present; falls back to the ⚡ gradient if the file is missing. */}
+            <div style={{position:"relative",width:30,height:30,borderRadius:9,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:`0 3px 12px ${T.accent}55`,overflow:"hidden"}}>
               <Ico n="zap" s={14} c="#fff"/>
+              <img src="/logo.png" alt="" onError={e=>{e.currentTarget.style.display="none";}} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>
             </div>
             {sideOpen&&<span style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:16,letterSpacing:"-.4px",background:`linear-gradient(90deg,${T.accent},${T.accentAlt})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",whiteSpace:"nowrap"}}>FlowSpace</span>}
           </button>
@@ -1111,7 +1113,10 @@ function AboutModal({T,onClose}) {
       <div onClick={e=>e.stopPropagation()} style={{width:360,maxWidth:"100%",background:T.surface,border:`1px solid ${T.border}`,borderRadius:18,padding:26,boxShadow:"0 24px 60px rgba(0,0,0,.5)",animation:"slideIn .2s ease"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <div style={{width:40,height:40,borderRadius:11,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 4px 16px ${T.accent}55`}}><Ico n="zap" s={20} c="#fff"/></div>
+            <div style={{position:"relative",width:40,height:40,borderRadius:11,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 4px 16px ${T.accent}55`,overflow:"hidden"}}>
+              <Ico n="zap" s={20} c="#fff"/>
+              <img src="/logo.png" alt="" onError={e=>{e.currentTarget.style.display="none";}} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>
+            </div>
             <div>
               <div style={{fontFamily:"'Sora',sans-serif",fontSize:18,fontWeight:700,color:T.text}}>FlowSpace</div>
               <div style={{fontSize:11,color:T.textMuted}}>Focus. Flow. Finish.</div>
