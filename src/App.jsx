@@ -369,7 +369,7 @@ function playComplete(mode){
   }catch{}
 }
 
-export default function FlowSpace() {
+export default function Freely() {
   const [dark, setDark] = useState(true);
   const [scheme, setScheme] = useState(()=>localStorage.getItem("fs_scheme")||"lavender");
   useEffect(()=>{ try{localStorage.setItem("fs_scheme",scheme);}catch{} },[scheme]);
@@ -671,9 +671,9 @@ export default function FlowSpace() {
   const clearCompleted = ()=>{ const done=tasks.filter(t=>t.done); if(!done.length){showToast("No completed tasks");return;} setTasks(ts=>ts.filter(t=>!t.done)); if(user) done.forEach(t=>db.deleteTask(t.id).catch(()=>{})); showToast(`Cleared ${done.length} completed`); };
   const clearDone = ids=>{ if(!ids||!ids.length)return; setTasks(ts=>ts.filter(t=>!ids.includes(t.id))); if(user) ids.forEach(id=>db.deleteTask(id).catch(()=>{})); showToast(`Cleared ${ids.length} completed`); };
   const exportData = ()=>{
-    const data={app:"FlowSpace",exportedAt:new Date().toISOString(),tasks,notes,cats,canvasNotes};
+    const data={app:"Freely",exportedAt:new Date().toISOString(),tasks,notes,cats,canvasNotes};
     const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
-    const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="flowspace-backup.json"; a.click(); URL.revokeObjectURL(url);
+    const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="freely-backup.json"; a.click(); URL.revokeObjectURL(url);
     showToast("Backup downloaded");
   };
   const importData = file=>{
@@ -745,7 +745,7 @@ export default function FlowSpace() {
           remindedRef.current.add(t.id);
           try{ localStorage.setItem("fs_reminded",JSON.stringify([...remindedRef.current])); }catch{}
           navigator.vibrate?.([30,40,30]); playComplete(localStorage.getItem("fs_sound2")||"soft");
-          try{ if("Notification"in window&&Notification.permission==="granted") new Notification("FlowSpace reminder ⏰",{body:t.title}); }catch{}
+          try{ if("Notification"in window&&Notification.permission==="granted") new Notification("Freely reminder ⏰",{body:t.title}); }catch{}
           showToast(`⏰ Reminder: ${t.title}`);
         }
       });
@@ -822,11 +822,11 @@ export default function FlowSpace() {
       if(unread.length){ setMessages(ms=>ms.map(m=>unread.includes(m.id)?{...m,read:true}:m)); db.markMessagesRead(unread).catch(()=>{}); }
     }
   };
-  // Message anyone with a FlowSpace account: look the email up in profiles first.
+  // Message anyone with a Freely account: look the email up in profiles first.
   const startChat=async raw=>{ const em=(raw||"").trim().toLowerCase();
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ showToast("Enter a valid email like name@example.com"); return; }
     if(em===meEmail){ showToast("That's you 😄"); return; }
-    try{ const p=await db.findProfile(em); if(!p){ showToast("No FlowSpace account uses that email yet — invite them to sign up!"); return; } openDM(em); }
+    try{ const p=await db.findProfile(em); if(!p){ showToast("No Freely account uses that email yet — invite them to sign up!"); return; } openDM(em); }
     catch(e){ showToast("Couldn't look that up: "+(e.message||e)); }
   };
   const answerReq=(id,status)=>{ setChatReqs(rs=>rs.map(r=>r.id===id?{...r,status}:r)); db.answerChatReq(id,status).catch(()=>{}); if(status==="accepted") showToast("Request accepted — you're connected 🤝"); };
@@ -834,7 +834,7 @@ export default function FlowSpace() {
   // Teams: create / any member adds members (accounts only) / leave-remove / creator deletes.
   const createTeam=async name=>{ if(!user||!name.trim()) return; try{ await db.createGroup(user.id,name.trim(),guessIcon(name,"👥"),user.email); refreshGroups(); showToast(`Team "${name.trim()}" created ✓`); }catch(e){ showToast("Couldn't create team: "+(e.message||e)); } };
   const addTeamMember=async(gid,emRaw)=>{ const em=(emRaw||"").trim().toLowerCase(); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ showToast("Enter a valid email"); return; }
-    try{ const p=await db.findProfile(em); if(!p){ showToast("No FlowSpace account uses that email yet"); return; } await db.addGroupMember(gid,em,user.email); refreshGroups(); showToast(`Added ${nickOf(em)} ✓`); }catch(e){ showToast("Couldn't add: "+(e.message||e)); } };
+    try{ const p=await db.findProfile(em); if(!p){ showToast("No Freely account uses that email yet"); return; } await db.addGroupMember(gid,em,user.email); refreshGroups(); showToast(`Added ${nickOf(em)} ✓`); }catch(e){ showToast("Couldn't add: "+(e.message||e)); } };
   const removeTeamMember=async(gid,em)=>{ await db.removeGroupMember(gid,em).catch(()=>{}); refreshGroups(); };
   const deleteTeam=async gid=>{ await db.deleteGroup(gid).catch(()=>{}); refreshGroups(); };
   // Bulk assign: add these people to every not-done task in the given lists.
@@ -949,7 +949,7 @@ export default function FlowSpace() {
         </div>
       )}
       {tourStep>=0&&(()=>{ const TOUR=[
-          ["⚡","Welcome to FlowSpace","Tasks, habits, notes and focus — one calm place. Here's the 20-second tour."],
+          ["⚡","Welcome to Freely","Tasks, habits, notes and focus — one calm place. Here's the 20-second tour."],
           ["✨","Just type naturally","Type “Dentist Friday 3pm” anywhere you add a task — the date, time and category set themselves. Steps inside a task parse dates too."],
           ["👆","Gestures everywhere","Swipe a task → for My Day, ← to delete. Hold & drag to reorder lists, nest folders, or drop steps onto calendar days."],
           ["🎯","Build your rhythm","Give habits weekdays & a 1-2-3 priority, focus with the 🍅 Pomodoro for +25 XP, and share your week from Analytics."],
@@ -985,13 +985,13 @@ export default function FlowSpace() {
       {cmdOpen&&<CmdPalette T={T} tasks={tasks} notes={notes} onClose={()=>setCmdOpen(false)} onGo={v=>{setView(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}} onPickTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);setCmdOpen(false);}}/>}
       <aside onPointerDown={sideSwipe} style={{width:sideOpen?224:60,transition:"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:30,touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}>
         <div style={{padding:"18px 14px",display:"flex",alignItems:"center",gap:9}}>
-          <button onClick={()=>setAboutOpen(true)} title="About FlowSpace" style={{display:"flex",alignItems:"center",gap:9,background:"none",border:"none",cursor:"pointer",padding:0,flex:1,minWidth:0}}>
+          <button onClick={()=>setAboutOpen(true)} title="About Freely" style={{display:"flex",alignItems:"center",gap:9,background:"none",border:"none",cursor:"pointer",padding:0,flex:1,minWidth:0}}>
             {/* App logo: /public/logo.png when present; falls back to the ⚡ gradient if the file is missing. */}
             <div style={{position:"relative",width:30,height:30,borderRadius:9,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:`0 3px 12px ${T.accent}55`,overflow:"hidden"}}>
               <Ico n="zap" s={14} c="#fff"/>
               <img src="/logo.png" alt="" onError={e=>{e.currentTarget.style.display="none";}} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>
             </div>
-            {sideOpen&&<span style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:16,letterSpacing:"-.4px",background:`linear-gradient(90deg,${T.accent},${T.accentAlt})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",whiteSpace:"nowrap"}}>FlowSpace</span>}
+            {sideOpen&&<span style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:16,letterSpacing:"-.4px",background:`linear-gradient(90deg,${T.accent},${T.accentAlt})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",whiteSpace:"nowrap"}}>Freely</span>}
           </button>
           {sideOpen&&<button onClick={()=>goView("analytics")} title="Analytics" style={{width:28,height:28,borderRadius:7,border:"none",cursor:"pointer",background:view==="analytics"?T.accentGlow:"transparent",color:view==="analytics"?T.accent:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ico n="bar" s={15}/></button>}
           {sideOpen&&<button onClick={()=>goView("settings")} title="Settings" style={{width:28,height:28,borderRadius:7,border:"none",cursor:"pointer",background:view==="settings"?T.accentGlow:"transparent",color:view==="settings"?T.accent:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ico n="cog" s={15}/></button>}
@@ -1103,10 +1103,10 @@ const SB = ({onClick,T,children})=>(
 function AboutModal({T,onClose}) {
   // Placeholder links — replace the href/handles with your real accounts later.
   const socials=[
-    {label:"Instagram", handle:"@flowspace", href:"#", emoji:"📷"},
-    {label:"X", handle:"@flowspace", href:"#", emoji:"✖️"},
-    {label:"TikTok", handle:"@flowspace", href:"#", emoji:"🎵"},
-    {label:"Email", handle:"hello@flowspace.app", href:"mailto:hello@flowspace.app", emoji:"✉️"},
+    {label:"Instagram", handle:"@freely", href:"#", emoji:"📷"},
+    {label:"X", handle:"@freely", href:"#", emoji:"✖️"},
+    {label:"TikTok", handle:"@freely", href:"#", emoji:"🎵"},
+    {label:"Email", handle:"hello@freely.app", href:"mailto:hello@freely.app", emoji:"✉️"},
   ];
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.65)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
@@ -1118,7 +1118,7 @@ function AboutModal({T,onClose}) {
               <img src="/logo.png" alt="" onError={e=>{e.currentTarget.style.display="none";}} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>
             </div>
             <div>
-              <div style={{fontFamily:"'Sora',sans-serif",fontSize:18,fontWeight:700,color:T.text}}>FlowSpace</div>
+              <div style={{fontFamily:"'Sora',sans-serif",fontSize:18,fontWeight:700,color:T.text}}>Freely</div>
               <div style={{fontSize:11,color:T.textMuted}}>Focus. Flow. Finish.</div>
             </div>
           </div>
@@ -1134,7 +1134,7 @@ function AboutModal({T,onClose}) {
             </a>
           ))}
         </div>
-        <div style={{fontSize:10,color:T.textMuted,textAlign:"center",marginTop:16,opacity:.6}}>v1.0 · made with FlowSpace</div>
+        <div style={{fontSize:10,color:T.textMuted,textAlign:"center",marginTop:16,opacity:.6}}>v1.0 · made with Freely</div>
       </div>
     </div>
   );
@@ -2614,7 +2614,7 @@ function AnalyticsView({T,tasks,xp,level,streak,habits=[],dayStats={},todStr}) {
     const rr=(x0,y0,w,h,r)=>{ x.beginPath(); x.moveTo(x0+r,y0); x.arcTo(x0+w,y0,x0+w,y0+h,r); x.arcTo(x0+w,y0+h,x0,y0+h,r); x.arcTo(x0,y0+h,x0,y0,r); x.arcTo(x0,y0,x0+w,y0,r); x.closePath(); };
     const g=x.createLinearGradient(0,0,W,H); g.addColorStop(0,"#0c0e16"); g.addColorStop(1,"#1b1038"); x.fillStyle=g; x.fillRect(0,0,W,H);
     const g2=x.createRadialGradient(W/2,180,50,W/2,180,600); g2.addColorStop(0,"rgba(192,132,252,.25)"); g2.addColorStop(1,"rgba(192,132,252,0)"); x.fillStyle=g2; x.fillRect(0,0,W,900);
-    x.textAlign="center"; x.fillStyle="#c084fc"; x.font="700 44px Sora,Arial"; x.fillText("⚡ FlowSpace",W/2,110);
+    x.textAlign="center"; x.fillStyle="#c084fc"; x.font="700 44px Sora,Arial"; x.fillText("⚡ Freely",W/2,110);
     x.fillStyle="#eef0fa"; x.font="800 92px Sora,Arial"; x.fillText("My Week",W/2,230);
     const end=new Date((todStr||tod())+"T12:00:00"); const start=new Date(end); start.setDate(start.getDate()-6);
     const fd=d=>d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
@@ -2635,11 +2635,11 @@ function AnalyticsView({T,tasks,xp,level,streak,habits=[],dayStats={},todStr}) {
       x.fillStyle="#eef0fa"; x.font="800 52px Sora,Arial"; x.fillText(big,sx+sw/2,sy+82);
       x.fillStyle="#7a85a3"; x.font="500 28px Arial"; x.fillText(small,sx+sw/2,sy+134);
     });
-    x.fillStyle="rgba(122,133,163,.7)"; x.font="500 28px Arial"; x.fillText("made with FlowSpace ⚡",W/2,1300);
+    x.fillStyle="rgba(122,133,163,.7)"; x.font="500 28px Arial"; x.fillText("made with Freely ⚡",W/2,1300);
     const blob=await new Promise(r=>c.toBlob(r,"image/png"));
-    const file=new File([blob],"flowspace-week.png",{type:"image/png"});
-    if(navigator.canShare?.({files:[file]})){ try{ await navigator.share({files:[file],title:"My week in FlowSpace"}); return; }catch{} }
-    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="flowspace-week.png"; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+    const file=new File([blob],"freely-week.png",{type:"image/png"});
+    if(navigator.canShare?.({files:[file]})){ try{ await navigator.share({files:[file],title:"My week in Freely"}); return; }catch{} }
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="freely-week.png"; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
   };
   const runAI=()=>{setAiLoad(true);setAiMsg("");setTimeout(()=>{setAiLoad(false);setAiMsg(`🧠 You completed ${weekTotal} task${weekTotal===1?"":"s"} this week${weekTotal>0?" — nice momentum":""}. Overall completion rate: ${rate}%. ${topTag?`Most of your work lives in "${topTag[0]}" (${topTag[1]} tasks). `:""}${ov>0?`${ov} overdue — pull one into My Day and knock it out first. `:"No overdue tasks — inbox zero energy! "}${habits.length?`Habits: ${habitsDoneToday}/${habits.length} done today, best streak ${bestHabitStreak} day${bestHabitStreak===1?"":"s"} 🔥`:`Try adding a daily habit to build momentum.`}`);},1400);};
   return (
@@ -2989,7 +2989,7 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
         </>)}
 
         <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>Share 🤝</div>
-        <div style={{fontSize:10,color:T.textMuted,marginBottom:8,lineHeight:1.5}}>{isGroup?"Invites the person to every list inside this folder.":"Invite another FlowSpace user by the email they signed up with — or a saved nickname."}</div>
+        <div style={{fontSize:10,color:T.textMuted,marginBottom:8,lineHeight:1.5}}>{isGroup?"Invites the person to every list inside this folder.":"Invite another Freely user by the email they signed up with — or a saved nickname."}</div>
         <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap"}}>
           <input value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doShare();}} placeholder="their@email.com or nickname" style={{flex:1,minWidth:120,padding:"8px 10px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
           <select value={perm} onChange={e=>setPerm(e.target.value)} style={{padding:"8px 8px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",cursor:"pointer"}}>
@@ -3112,9 +3112,9 @@ function MessagesView({T,myEmail,messages,people=[],groups=[],reqs=[],trusted=[]
   return (
     <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
       <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px",marginBottom:6}}>Messages</h1>
-      <p style={{fontSize:12,color:T.textMuted,marginBottom:12}}>Chat with teammates and collaborators — or message any FlowSpace user by email (they get a request; you can send one message until they accept or reply).</p>
+      <p style={{fontSize:12,color:T.textMuted,marginBottom:12}}>Chat with teammates and collaborators — or message any Freely user by email (they get a request; you can send one message until they accept or reply).</p>
       <div style={{display:"flex",gap:6,marginBottom:16}}>
-        <input value={newChat} onChange={e=>setNewChat(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&newChat.trim()){onStartChat(newChat);setNewChat("");}}} placeholder="Start a chat — type any FlowSpace user's email…" style={{flex:1,minWidth:0,padding:"9px 12px",borderRadius:10,border:`1px dashed ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+        <input value={newChat} onChange={e=>setNewChat(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&newChat.trim()){onStartChat(newChat);setNewChat("");}}} placeholder="Start a chat — type any Freely user's email…" style={{flex:1,minWidth:0,padding:"9px 12px",borderRadius:10,border:`1px dashed ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
         <button onClick={()=>{ if(newChat.trim()){onStartChat(newChat);setNewChat("");} }} disabled={!newChat.trim()} style={{padding:"0 16px",borderRadius:10,border:"none",cursor:newChat.trim()?"pointer":"default",background:newChat.trim()?T.grad:T.surface3,color:"#fff",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif",opacity:newChat.trim()?1:.5}}>Chat</button>
       </div>
       {groups.length>0&&(<>
@@ -3160,7 +3160,7 @@ function TeamsSettings({T,teams=[],myEmail,myId,knownPeople=[],onCreate,onAddMem
   return (
     <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 16px 14px",marginBottom:14}}>
       <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>Teams 👥</div>
-      <div style={{fontSize:11,color:T.textMuted,marginBottom:10,lineHeight:1.5}}>Everyone in a team can see it, chat in its team chat, add teammates, and assign tasks to the whole team. Members need a FlowSpace account.</div>
+      <div style={{fontSize:11,color:T.textMuted,marginBottom:10,lineHeight:1.5}}>Everyone in a team can see it, chat in its team chat, add teammates, and assign tasks to the whole team. Members need a Freely account.</div>
       <div style={{display:"flex",flexDirection:"column",gap:8}}>
         {teams.map(g=>{ const isCreator=g.created_by===myId; return (
           <div key={g.id} style={{border:`1px solid ${T.border}`,borderRadius:10,padding:"8px 10px"}}>
@@ -3337,7 +3337,7 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
       </div>
       <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"0 16px",marginBottom:14}}>
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,padding:"12px 0 6px"}}>Share a folder 🤝</div>
-        <div style={{fontSize:11,color:T.textMuted,marginBottom:8,lineHeight:1.5}}>Invite another FlowSpace user by email. They'll see and can edit tasks in that folder. Use the email they signed up with.</div>
+        <div style={{fontSize:11,color:T.textMuted,marginBottom:8,lineHeight:1.5}}>Invite another Freely user by email. They'll see and can edit tasks in that folder. Use the email they signed up with.</div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap",paddingBottom:10}}>
           <select value={shareFolderName} onChange={e=>setShareFolderName(e.target.value)} style={{padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",cursor:"pointer"}}>
             <option value="">Choose folder…</option>

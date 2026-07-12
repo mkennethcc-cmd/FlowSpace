@@ -44,7 +44,7 @@ export default function AuthScreen() {
       <div style={{ width: 360, padding: 32, background: "#141828", borderRadius: 20, border: "1px solid rgba(255,255,255,.07)", boxShadow: "0 24px 60px rgba(0,0,0,.5)" }}>
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ width: 44, height: 44, borderRadius: 13, background: "linear-gradient(135deg,#c084fc,#818cf8)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", boxShadow: "0 4px 20px rgba(192,132,252,.4)", fontSize: 20 }}>⚡</div>
-          <h1 style={{ fontFamily: "'Sora',sans-serif", fontSize: 22, fontWeight: 700, color: "#eef0fa", letterSpacing: "-.5px", margin: 0 }}>FlowSpace</h1>
+          <h1 style={{ fontFamily: "'Sora',sans-serif", fontSize: 22, fontWeight: 700, color: "#eef0fa", letterSpacing: "-.5px", margin: 0 }}>Freely</h1>
           <p style={{ color: "#7a85a3", fontSize: 13, marginTop: 4 }}>{mode === "login" ? "Welcome back" : mode === "signup" ? "Create your account" : "Reset your password"}</p>
         </div>
         {mode === "reset" && <p style={{ color: "#7a85a3", fontSize: 12, textAlign: "center", marginBottom: 12, lineHeight: 1.5 }}>Enter your email and we'll send you a link to set a new password.</p>}
@@ -107,10 +107,10 @@ export function SignupSuccess({ onContinue }) {
         <div style={{ fontSize: 56, marginBottom: 14 }}>😊</div>
         <h1 style={{ fontFamily: "'Sora',sans-serif", fontSize: 22, fontWeight: 700, color: "#eef0fa", letterSpacing: "-.5px", margin: 0 }}>You're all set!</h1>
         <p style={{ color: "#7a85a3", fontSize: 14, marginTop: 10, lineHeight: 1.6 }}>
-          Your FlowSpace account is confirmed. Welcome aboard — let's get your day organized. 🎉
+          Your Freely account is confirmed. Welcome aboard — let's get your day organized. 🎉
         </p>
         <button onClick={onContinue} style={{ width: "100%", marginTop: 24, padding: 12, borderRadius: 10, border: "none", cursor: "pointer", background: "linear-gradient(135deg,#c084fc,#818cf8)", color: "#fff", fontWeight: 700, fontSize: 14, fontFamily: "'DM Sans',sans-serif" }}>
-          Start using FlowSpace
+          Start using Freely
         </button>
       </div>
     </div>
@@ -148,7 +148,7 @@ export function ResetPassword({ onDone }) {
             <h1 style={{ fontFamily: "'Sora',sans-serif", fontSize: 22, fontWeight: 700, color: "#eef0fa", margin: 0 }}>Password updated!</h1>
             <p style={{ color: "#7a85a3", fontSize: 14, marginTop: 10 }}>You can now use your new password.</p>
             <button onClick={onDone} style={{ width: "100%", marginTop: 24, padding: 12, borderRadius: 10, border: "none", cursor: "pointer", background: "linear-gradient(135deg,#c084fc,#818cf8)", color: "#fff", fontWeight: 700, fontSize: 14, fontFamily: "'DM Sans',sans-serif" }}>
-              Continue to FlowSpace
+              Continue to Freely
             </button>
           </>
         ) : (
