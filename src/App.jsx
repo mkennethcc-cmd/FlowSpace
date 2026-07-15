@@ -909,9 +909,14 @@ export default function Freely() {
     const nu=(nuRaw||"").trim().toLowerCase();
     if(!nu||nu===old) return false;
     if(cats[nu]){ showToast(`A list called "${nu}" already exists`); return false; }
-    // If the icon was still the auto-guessed one for the old name, re-guess it for the new name (keep hand-picked icons).
-    const autoOld=guessIcon(old);
-    setCats(c=>{ const n={}; Object.entries(c).forEach(([k,v])=>{ if(k===old){ const ic=(v.icon===autoOld)?guessIcon(nu):v.icon; n[nu]={...v,icon:ic}; } else n[k]=v; }); return n; });
+    // Re-guess the icon on rename — but only when the new name has a real keyword match, and the old icon
+    // looked auto (matched the old name's guess, the built-in default, or the plain fallback). Hand-picked icons stay.
+    const guessedNew=guessIcon(nu,null);
+    setCats(c=>{ const n={}; Object.entries(c).forEach(([k,v])=>{ if(k===old){
+      const wasAuto=!v.icon||v.icon==="📁"||v.icon===guessIcon(old)||v.icon===DEFAULT_CATS[old]?.icon;
+      const ic=(wasAuto&&guessedNew)?guessedNew:v.icon;
+      n[nu]={...v,icon:ic};
+    } else n[k]=v; }); return n; });
     tasks.filter(t=>t.tag===old&&t.owner===user?.id).forEach(t=>updateTask(t.id,{tag:nu}));
     ownedShares.filter(s=>s.folder===old).forEach(s=>{ db.addShare(user.id,nu,s.shared_with_email,s.can_delete).then(()=>db.removeShare(s.id)).then(()=>refreshShares()).catch(()=>{}); });
     // Keep the sidebar-org id in sync ("c:old" → "c:new") so the list keeps its position/group.
