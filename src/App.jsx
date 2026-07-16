@@ -157,6 +157,8 @@ const fmtDate = s => {
 
 // A task can be assigned to several people. Stored as a comma-separated email list in assigned_to.
 const assigneesOf = task => (task?.assignedTo||"").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean);
+// System notices in a team chat (e.g. "X was added") are normal messages prefixed with this marker.
+const SYS_MARK = "⁣sys⁣";
 // Display a person by their saved nickname (fs_contacts) when there is one, else their email.
 const nickOf = email => { if(!email) return ""; try{ const c=JSON.parse(localStorage.getItem("fs_contacts")||"{}"); return (c[email]&&c[email].trim())||email; }catch{ return email; } };
 const initialOf = email => (nickOf(email)||"?").trim().charAt(0).toUpperCase();
@@ -410,7 +412,8 @@ export default function Freely() {
   const [navOrg, setNavOrg] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_navorg")||"null"); }catch{ return null; } });
   const [hiddenTabs, setHiddenTabs] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_hidden_tabs")||"[]"); }catch{ return []; } });
   useEffect(()=>{ try{ localStorage.setItem("fs_hidden_tabs",JSON.stringify(hiddenTabs)); }catch{} },[hiddenTabs]);
-  const [sGroups,setSGroups]=useState([]);   // server-side teams: [{id,name,icon,created_by,members:[emails]}]
+  const [sGroups,setSGroups]=useState([]);   // teams I'm in (chat + manage): [{id,name,icon,created_by,members:[emails]}]
+  const [allGroups,setAllGroups]=useState([]); // every team I can see — used so you can assign to a team you're not on
   const [chatReqs,setChatReqs]=useState([]); // chat requests involving me
   const [profRows,setProfRows]=useState([]); // profiles (id,email,avatar) — powers avatars + account lookups
   const [myAvatar,setMyAvatar]=useState(()=>{ try{ return localStorage.getItem("fs_avatar")||""; }catch{ return ""; } });
@@ -519,9 +522,11 @@ export default function Freely() {
     db.loadSharedWithMe(user.email).then(setSharedWithMe).catch(()=>{});
   },[user]);
   const refreshGroups=useCallback(()=>{
-    if(!user) return;
+    if(!user) return; const me=user.email.toLowerCase();
     Promise.all([db.loadGroups(),db.loadGroupMembers()])
-      .then(([gs,ms])=>setSGroups(gs.map(g=>({...g,members:ms.filter(m=>m.group_id===g.id).map(m=>m.email)}))))
+      .then(([gs,ms])=>{ const withM=gs.map(g=>({...g,members:ms.filter(m=>m.group_id===g.id).map(m=>m.email)}));
+        setAllGroups(withM);
+        setSGroups(withM.filter(g=>g.members.includes(me)||g.created_by===user.id)); })
       .catch(()=>{});
   },[user]);
 
@@ -826,16 +831,28 @@ export default function Freely() {
   const startChat=async raw=>{ const em=(raw||"").trim().toLowerCase();
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ showToast("Enter a valid email like name@example.com"); return; }
     if(em===meEmail){ showToast("That's you 😄"); return; }
-    try{ const p=await db.findProfile(em); if(!p){ showToast("No Freely account uses that email yet — invite them to sign up!"); return; } openDM(em); }
-    catch(e){ showToast("Couldn't look that up: "+(e.message||e)); }
+    // Open the chat for ANY valid email. Profiles fill in on login, so we don't hard-block — if they have a
+    // Freely account they'll get your message (and replying unlocks full 2-way chat); otherwise it just waits.
+    try{ const p=await db.findProfile(em); if(!p) showToast("Heads-up: no Freely account seen for that email yet — they'll get it once they sign in."); }catch{}
+    openDM(em);
   };
   const answerReq=(id,status)=>{ setChatReqs(rs=>rs.map(r=>r.id===id?{...r,status}:r)); db.answerChatReq(id,status).catch(()=>{}); if(status==="accepted") showToast("Request accepted — you're connected 🤝"); };
   const pickAvatar=em=>{ setMyAvatar(em); try{ localStorage.setItem("fs_avatar",em); const a=JSON.parse(localStorage.getItem("fs_avatars")||"{}"); a[meEmail]=em; localStorage.setItem("fs_avatars",JSON.stringify(a)); }catch{} setProfRows(rs=>rs.map(r=>r.email===meEmail?{...r,avatar:em}:r)); if(user) db.upsertProfile(user.id,user.email,em).catch(()=>{}); showToast("Avatar updated "+em); };
   // Teams: create / any member adds members (accounts only) / leave-remove / creator deletes.
   const createTeam=async name=>{ if(!user||!name.trim()) return; try{ await db.createGroup(user.id,name.trim(),guessIcon(name,"👥"),user.email); refreshGroups(); showToast(`Team "${name.trim()}" created ✓`); }catch(e){ showToast("Couldn't create team: "+(e.message||e)); } };
   const addTeamMember=async(gid,emRaw)=>{ const em=(emRaw||"").trim().toLowerCase(); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ showToast("Enter a valid email"); return; }
-    try{ const p=await db.findProfile(em); if(!p){ showToast("No Freely account uses that email yet"); return; } await db.addGroupMember(gid,em,user.email); refreshGroups(); showToast(`Added ${nickOf(em)} ✓`); }catch(e){ showToast("Couldn't add: "+(e.message||e)); } };
-  const removeTeamMember=async(gid,em)=>{ await db.removeGroupMember(gid,em).catch(()=>{}); refreshGroups(); };
+    if(em===meEmail){ showToast("You're already in this team 🙂"); return; }
+    try{
+      await db.addGroupMember(gid,em,user.email); refreshGroups();
+      // Post a notice in the team chat so everyone sees who was pulled in.
+      db.sendMessage(user.id,user.email,null,`${SYS_MARK}👋 ${nickOf(user.email).split("@")[0]} added ${nickOf(em).split("@")[0]} to the team`,gid).catch(()=>{});
+      const known=await db.findProfile(em).catch(()=>null);
+      showToast(known?`Added ${nickOf(em)} ✓`:`Added ${nickOf(em)} — they'll see the team once they sign in`);
+    }catch(e){ showToast("Couldn't add: "+(e.message||e)); }
+  };
+  const removeTeamMember=async(gid,em)=>{ await db.removeGroupMember(gid,em).catch(()=>{});
+    if(em!==meEmail) db.sendMessage(user.id,user.email,null,`${SYS_MARK}👋 ${nickOf(em).split("@")[0]} left the team`,gid).catch(()=>{});
+    refreshGroups(); };
   const deleteTeam=async gid=>{ await db.deleteGroup(gid).catch(()=>{}); refreshGroups(); };
   // Bulk assign: add these people to every not-done task in the given lists.
   const assignAllInLists=(names,emails)=>{ const add=emails.map(e=>e.toLowerCase()).filter(Boolean); if(!add.length) return; let n=0;
@@ -1019,7 +1036,7 @@ export default function Freely() {
           </div>
         )}
         <nav style={{flex:1,minHeight:0,padding:"0 6px",overflowY:"auto",overflowX:"hidden"}}>
-          <SidebarTree T={T} sideOpen={sideOpen} items={sidebarItems} view={view} onOpen={goView} org={navOrg} setOrg={setNavOrg} onAddList={addSidebarList} onRenameList={renameCat} onShareFolder={shareFolder} onUnshare={unshareFolder} ownedShares={ownedShares} onDeleteList={deleteCat} setCats={setCats} cats={cats} onAssignAll={assignAllInLists} assignGroups={sGroups}/>
+          <SidebarTree T={T} sideOpen={sideOpen} items={sidebarItems} view={view} onOpen={goView} org={navOrg} setOrg={setNavOrg} onAddList={addSidebarList} onRenameList={renameCat} onShareFolder={shareFolder} onUnshare={unshareFolder} ownedShares={ownedShares} onDeleteList={deleteCat} setCats={setCats} cats={cats} onAssignAll={assignAllInLists} assignGroups={allGroups}/>
         </nav>
         {sideOpen&&(
           <div style={{padding:"10px 12px"}}>
@@ -1081,7 +1098,7 @@ export default function Freely() {
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={dayStats} todStr={todStr}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar}/>}
           {(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={sGroups} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}/>
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={allGroups} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}/>
           )}
           {view==="messages"&&<MessagesView T={T} myEmail={meEmail} messages={messages} people={knownPeople} groups={sGroups} reqs={chatReqs} trusted={trusted} peer={dmPeer} onOpenPeer={openDM} onSend={sendDM} onAnswerReq={answerReq} onStartChat={startChat}/>}
         </div>
@@ -3096,7 +3113,11 @@ function MessagesView({T,myEmail,messages,people=[],groups=[],reqs=[],trusted=[]
       )}
       <div style={{flex:1,overflowY:"auto",padding:"16px 20px",display:"flex",flexDirection:"column",gap:8}}>
         {thread.length===0&&<div style={{margin:"auto",fontSize:12,color:T.textMuted,textAlign:"center"}}>No messages yet — say hi 👋</div>}
-        {thread.map(m=>{ const mine=m.sender_email===myEmail; return (
+        {thread.map(m=>{
+          if((m.body||"").startsWith(SYS_MARK)) return (
+            <div key={m.id} style={{alignSelf:"center",fontSize:10,color:T.textMuted,background:T.surface2,borderRadius:20,padding:"3px 12px",margin:"2px 0"}}>{m.body.slice(SYS_MARK.length)}</div>
+          );
+          const mine=m.sender_email===myEmail; return (
           <div key={m.id} style={{alignSelf:mine?"flex-end":"flex-start",maxWidth:"78%",display:"flex",flexDirection:"column",gap:2}}>
             {isG&&!mine&&<div style={{display:"flex",alignItems:"center",gap:4,fontSize:9,color:T.textMuted,paddingLeft:2}}><Avatar email={m.sender_email} size={14}/>{nickOf(m.sender_email).split("@")[0]}</div>}
             <div style={{padding:"8px 12px",borderRadius:14,borderBottomRightRadius:mine?4:14,borderBottomLeftRadius:mine?14:4,background:mine?T.grad:T.surface2,color:mine?"#fff":T.text,fontSize:13,lineHeight:1.45,wordBreak:"break-word"}}>{m.body}</div>
