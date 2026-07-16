@@ -816,10 +816,11 @@ export default function Freely() {
         setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,m]); return;
       }
       const firstContact=!chatLinked(peer);
+      if(firstContact) await db.sendChatReq(user.email,peer).catch(()=>{}); // file the request first so it lands as "a new person"
       const m=await db.sendMessage(user.id,user.email,peer,body.trim());
       setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,m]);
-      if(firstContact){ db.sendChatReq(user.email,peer).catch(()=>{}); showToast("Request sent — you can chat freely once they reply or accept 🤝"); }
-    }catch(e){ showToast(/policy|violates/i.test(e.message||"")?"They haven't accepted your request yet — one message at a time until they do.":"Message failed: "+(e.message||e)); }
+      if(firstContact) showToast(`Friend request sent to ${nickOf(peer).split("@")[0]} 🤝 — they'll see it as a new chat.`);
+    }catch(e){ showToast(setupError(e)?"⚙️ Messaging needs the one-time database setup — run the SQL in Supabase, then reload.":/policy|violates/i.test(e.message||"")?"They haven't accepted your request yet — one message at a time until they do.":"Message failed: "+(e.message||e)); }
   };
   const openDM=peer=>{ setDmPeer(peer); setView("messages"); setSideOpen(false);
     if(typeof peer==="string"&&!peer.startsWith("g:")){
@@ -831,15 +832,14 @@ export default function Freely() {
   const startChat=async raw=>{ const em=(raw||"").trim().toLowerCase();
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ showToast("Enter a valid email like name@example.com"); return; }
     if(em===meEmail){ showToast("That's you 😄"); return; }
-    // Open the chat for ANY valid email. Profiles fill in on login, so we don't hard-block — if they have a
-    // Freely account they'll get your message (and replying unlocks full 2-way chat); otherwise it just waits.
-    try{ const p=await db.findProfile(em); if(!p) showToast("Heads-up: no Freely account seen for that email yet — they'll get it once they sign in."); }catch{}
+    // Just open the thread. Your first message files a friend request; no confusing account-lookup message.
     openDM(em);
   };
   const answerReq=(id,status)=>{ setChatReqs(rs=>rs.map(r=>r.id===id?{...r,status}:r)); db.answerChatReq(id,status).catch(()=>{}); if(status==="accepted") showToast("Request accepted — you're connected 🤝"); };
   const pickAvatar=em=>{ setMyAvatar(em); try{ localStorage.setItem("fs_avatar",em); const a=JSON.parse(localStorage.getItem("fs_avatars")||"{}"); a[meEmail]=em; localStorage.setItem("fs_avatars",JSON.stringify(a)); }catch{} setProfRows(rs=>rs.map(r=>r.email===meEmail?{...r,avatar:em}:r)); if(user) db.upsertProfile(user.id,user.email,em).catch(()=>{}); showToast("Avatar updated "+em); };
   // Teams: create / any member adds members (accounts only) / leave-remove / creator deletes.
-  const createTeam=async name=>{ if(!user||!name.trim()) return; try{ await db.createGroup(user.id,name.trim(),guessIcon(name,"👥"),user.email); refreshGroups(); showToast(`Team "${name.trim()}" created ✓`); }catch(e){ showToast("Couldn't create team: "+(e.message||e)); } };
+  const setupError=e=>/schema cache|find the table|does not exist|relation .* does not exist/i.test(e?.message||"");
+  const createTeam=async name=>{ if(!user||!name.trim()) return; try{ await db.createGroup(user.id,name.trim(),guessIcon(name,"👥"),user.email); refreshGroups(); showToast(`Team "${name.trim()}" created ✓`); }catch(e){ showToast(setupError(e)?"⚙️ Teams need a one-time database setup — run the SQL in Supabase, then reload. (Ask me for the exact steps.)":"Couldn't create team: "+(e.message||e)); } };
   const addTeamMember=async(gid,emRaw)=>{ const em=(emRaw||"").trim().toLowerCase(); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ showToast("Enter a valid email"); return; }
     if(em===meEmail){ showToast("You're already in this team 🙂"); return; }
     try{
@@ -3143,6 +3143,27 @@ function MessagesView({T,myEmail,messages,people=[],groups=[],reqs=[],trusted=[]
         <input value={newChat} onChange={e=>setNewChat(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&newChat.trim()){onStartChat(newChat);setNewChat("");}}} placeholder="Start a chat — type any Freely user's email…" style={{flex:1,minWidth:0,padding:"9px 12px",borderRadius:10,border:`1px dashed ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
         <button onClick={()=>{ if(newChat.trim()){onStartChat(newChat);setNewChat("");} }} disabled={!newChat.trim()} style={{padding:"0 16px",borderRadius:10,border:"none",cursor:newChat.trim()?"pointer":"default",background:newChat.trim()?T.grad:T.surface3,color:"#fff",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif",opacity:newChat.trim()?1:.5}}>Chat</button>
       </div>
+      {(()=>{ const incoming=reqs.filter(r=>r.to_email===myEmail&&r.status==="pending"); if(!incoming.length) return null;
+        const firstFrom=em=>{ const m=dms.filter(x=>x.sender_email===em&&x.recipient_email===myEmail)[0]; return m?.body||""; };
+        return (
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:10,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:"#ef4444",marginBottom:6}}>🤝 New friend requests</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {incoming.map(r=>(
+              <div key={r.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:12,border:`1px solid #ef444455`,background:"#ef44440d"}}>
+                <Avatar email={r.from_email} size={36}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:700,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nickOf(r.from_email)} <span style={{fontWeight:500,color:T.textMuted,fontSize:11}}>wants to connect</span></div>
+                  <div style={{fontSize:11,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{firstFrom(r.from_email)||"New chat request"}</div>
+                </div>
+                <button onClick={()=>onAnswerReq(r.id,"accepted")} style={{padding:"6px 13px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}>Accept</button>
+                <button onClick={()=>onOpenPeer(r.from_email)} title="Open" style={{padding:"6px 10px",borderRadius:8,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}>View</button>
+              </div>
+            ))}
+          </div>
+        </div>
+        );
+      })()}
       {groups.length>0&&(<>
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>Team chats</div>
         <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:14}}>
