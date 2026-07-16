@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { supabase } from "./supabase";
 import { db, fromDbTask } from "./db";
 import AuthScreen, { SignupSuccess, ResetPassword } from "./AuthScreen";
@@ -86,14 +86,20 @@ const CAT_KEYWORDS = {
   school:["homework","study","studying","exam","class","assignment","lecture","quiz","essay","thesis","school","course","revision"],
   work:["meeting","client","report","email","project","deadline","standup","presentation","interview","proposal","slides","sprint","ticket","work","launch"],
 };
-const guessCat = (title, cats) => {
-  const t = (title || "").toLowerCase();
-  // A list's own name typed in the task wins ("ACA essay 4pm" → the "aca" list, not just its work folder).
-  // Longest name first so "aca essays" beats a hypothetical "aca" prefix list.
+// A list's own name typed in the text wins ("ACA essay 4pm" → the "aca" list).
+// Longest name first so "aca essays" beats a hypothetical "aca" prefix list. Returns null when nothing matches.
+const matchListName = (text, cats) => {
+  const t = (text || "").toLowerCase();
   for (const name of Object.keys(cats).sort((a,b)=>b.length-a.length)) {
     const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     if (esc && new RegExp("(^|[^a-z0-9])" + esc + "($|[^a-z0-9])", "i").test(t)) return name;
   }
+  return null;
+};
+const guessCat = (title, cats) => {
+  const t = (title || "").toLowerCase();
+  const hit = matchListName(title, cats);
+  if (hit) return hit;
   for (const cat of ["health","personal","finance","school","work"]) {
     if (cats[cat] && CAT_KEYWORDS[cat].some(k => t.includes(k))) return cat;
   }
@@ -146,8 +152,13 @@ function runDrag(onMove, onDrop) {
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 const tod = () => ymd(new Date());
 const addDays = n => { const d=new Date(); d.setDate(d.getDate()+n); return ymd(d); };
+// "Date TBD": stored as a real far-future date so it flows through the existing due column,
+// sorts to the end of Upcoming, and never counts as overdue.
+const DUE_TBD = "9999-12-31";
+const isTbd = d => d === DUE_TBD;
 const fmtDate = s => {
   if (!s) return null;
+  if (isTbd(s)) return "Date TBD";
   const d = new Date(s+"T12:00:00"), t = new Date(); t.setHours(0,0,0,0);
   const diff = Math.round((d-t)/86400000);
   if (diff<0) return `${Math.abs(diff)}d overdue`;
@@ -182,7 +193,10 @@ const fmtClock = s => {
 };
 
 const parseNL = raw => {
-  let title = raw.trim(), due = null, time = null, endTime = null;
+  let title = raw.trim(), due = null, time = null, endTime = null, noDate = false;
+  // "tbd" / "unknown" etc. → the due date is explicitly undecided (shows as "Date TBD").
+  const nd = title.match(/(^|[^a-z0-9])(tbd|t\.b\.d\.?|to be decided|to be determined|date unknown|unknown date|unknown|no date yet|no date|someday)($|[^a-z0-9])/i);
+  if (nd) { noDate = true; title = title.replace(nd[2], ""); }
   // Time — a range first ("6-8pm" → 6pm start + 8pm end), then a single time, then a bare "at 4" (assume PM for 1–6).
   const pad=x=>String(x).padStart(2,"0");
   const to24=(h,m,ap)=>{ h=parseInt(h); m=m?parseInt(m):0; ap=(ap||"").toLowerCase(); if(ap==="pm"&&h<12)h+=12; if(ap==="am"&&h===12)h=0; return (h>=0&&h<24&&m<60)?`${pad(h)}:${pad(m)}`:null; };
@@ -218,8 +232,44 @@ const parseNL = raw => {
   // Tidy up leftover spaces / stray commas from stripped date & time tokens (kept conservative so real words like a trailing "on" survive).
   title=title.replace(/\s{2,}/g," ").replace(/\s+,/g,",").replace(/,\s*,/g,",").replace(/\b(on|at|by)\s+,/gi,",").replace(/\s{2,}/g," ").replace(/^[\s,\-–—]+|[\s,\-–—]+$/g,"").trim();
   if (!title) title=raw.trim();
+  if (noDate) due=DUE_TBD;
   return {title, due, time, endTime};
 };
+
+// Re-parse an edited task title: a typed date/time reschedules it, a typed list name re-files it.
+// Returns only the fields that actually change.
+const titleEditPatch = (task, raw, cats) => {
+  const p = parseNL(raw); const patch = {};
+  const newTitle = p.title || raw;
+  if (newTitle !== task.title) patch.title = newTitle;
+  if (p.due && p.due !== task.due) patch.due = p.due;
+  if (p.time) {
+    const d = (p.due && !isTbd(p.due) ? p.due : null) || (task.due && !isTbd(task.due) ? task.due : null) || tod();
+    const ra = `${d}T${p.time}`;
+    if (ra !== task.remindAt) { patch.remindAt = ra; if (!task.due && !p.due && !patch.due) patch.due = d; }
+    if (p.endTime && p.endTime !== task.endTime) patch.endTime = p.endTime;
+  }
+  const hit = matchListName(newTitle, cats || {});
+  if (hit && hit !== task.tag) patch.tag = hit;
+  return patch;
+};
+
+// Floating "ghost" chip that follows the pointer during any drag (Microsoft-To-Do-style).
+// Plain DOM node so it never fights React re-renders at 60fps.
+function makeDragGhost(label, color, T) {
+  const g = document.createElement("div");
+  g.textContent = (label||"").length > 36 ? label.slice(0,34)+"…" : (label||"");
+  g.style.cssText = `position:fixed;left:0;top:0;z-index:3000;pointer-events:none;padding:6px 12px;border-radius:10px;background:${T.surface};color:${T.text};font:600 12px 'DM Sans',sans-serif;border:1.5px solid ${color};box-shadow:0 10px 28px rgba(0,0,0,.45);max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transform:translate(-9999px,-9999px) rotate(2deg);`;
+  document.body.appendChild(g);
+  return {
+    move: (x,y) => { g.style.transform = `translate(${x+14}px,${y-34}px) rotate(2deg)`; },
+    remove: () => g.remove(),
+  };
+}
+// Accent insertion line showing exactly where a dragged item will land.
+const DropLine = ({T, vertical}) => vertical
+  ? <div style={{width:3,alignSelf:"stretch",minHeight:30,borderRadius:2,background:T.accent,boxShadow:`0 0 8px ${T.accent}`,flexShrink:0,animation:"fadeIn .12s"}}/>
+  : <div style={{height:3,borderRadius:2,background:T.accent,boxShadow:`0 0 8px ${T.accent}`,margin:"1px 4px",animation:"fadeIn .12s"}}/>;
 
 const DEFAULT_CATS = {
   work:     {color:"#0ea5e9", icon:"💼"},
@@ -229,6 +279,31 @@ const DEFAULT_CATS = {
   finance:  {color:"#a855f7", icon:"💰"},
 };
 const DEFAULT_CAT_NAMES = Object.keys(DEFAULT_CATS);
+
+// Starter tasks for a brand-new account — a tiny guided tour that lives right in the task list.
+const sampleTasks = (uid) => {
+  const base = Date.now(), today = tod(), tmrw = addDays(1);
+  const mk = (title, extra) => ({
+    id: crypto.randomUUID(), title, done:false, priority:"medium", tag:"personal", due:null, starred:false,
+    notes:"", color:null, subtasks:[], recurring:null, quadrant:null, remindAt:null, endTime:null,
+    attachments:[], owner:uid, position:0, mydayDate:null, ...extra,
+  });
+  return [
+    mk("👋 Welcome to Freely — tap me!", { position:base+6, mydayDate:today,
+      notes:"This card is a task. Tap it to open details — add steps, dates, photos, colors, priorities and more.\nSwipe me → for My Day, ← to delete. Hold & drag to reorder.",
+      subtasks:[{id:1,title:"Tap the circle on a step to finish it ✓",done:false,due:null,time:null},{id:2,title:"Add your own step below",done:false,due:null,time:null}] }),
+    mk("Type naturally — \"Call the dentist tomorrow 3pm\" ✨", { position:base+5, tag:"health", due:tmrw, remindAt:`${tmrw}T15:00`,
+      notes:"Freely read the date AND the time straight out of that sentence. Try it in any add-box — it works everywhere." }),
+    mk("Hold & drag me to reorder · swipe ← or → 👆", { position:base+4,
+      notes:"Hold for a moment, then drag — a line shows exactly where I'll land." }),
+    mk("Open me and set a priority 🔥", { position:base+3, tag:"work", quadrant:"q1",
+      notes:"I'm already marked Urgent & Important — find me on the Priority Matrix tab! Change my priority anytime in here." }),
+    mk("Plan ahead — I live in Upcoming 📅", { position:base+2, tag:"work", due:addDays(3),
+      notes:"Anything with a future date shows in Upcoming and on the Calendar." }),
+    mk("Date not decided? Type \"tbd\" — like me 🤷", { position:base+1, due:DUE_TBD,
+      notes:"Typing tbd or unknown next to a task means the date is still open — it shows as Date TBD instead of guessing." }),
+  ];
+};
 const isImgIcon = ic => typeof ic === "string" && (ic.startsWith("http") || ic.startsWith("data:"));
 const CatIcon = ({icon, size=14}) => isImgIcon(icon)
   ? <img src={icon} alt="" style={{width:size,height:size,borderRadius:4,objectFit:"cover",verticalAlign:"middle",flexShrink:0}}/>
@@ -492,6 +567,15 @@ export default function Freely() {
     Promise.all([db.loadTasks(),db.loadCanvas(user.id),db.loadNotes(user.id),db.loadCats(user.id),db.loadOwnedShares(user.id),db.loadSharedWithMe(user.email)])
       .then(([t,c,n,cats,os,sm])=>{
         setTasks(t); setCanvasNotes(c); setNotes(n);
+        // Brand-new account (no tasks anywhere, never seeded on this device) → drop in the starter tour tasks.
+        try{
+          if(t.length===0 && !localStorage.getItem("fs_seed_"+user.id)){
+            localStorage.setItem("fs_seed_"+user.id,"1");
+            const seeds=sampleTasks(user.id);
+            setTasks(seeds);
+            seeds.forEach(s=>db.insertTask(s,user.id).catch(()=>{}));
+          }
+        }catch{}
         if(cats) setCats(cats);
         setOwnedShares(os); setSharedWithMe(sm);
         setSyncing(false);
@@ -631,7 +715,7 @@ export default function Freely() {
       awardXp("done-"+id,20); markActiveDay(); navigator.vibrate?.(30); playComplete(sound);
       if(task.recurring && !awardedRef.current.has("recur-"+id)){
         awardedRef.current.add("recur-"+id);
-        const nd=nextDue(task.due,task.recurring);
+        const nd=nextDue(isTbd(task.due)?null:task.due,task.recurring);
         if(nd){ // carry the reminder's time-of-day onto the next occurrence (weekly 6pm stays 6pm)
           const oldTime=task.remindAt&&task.remindAt.includes("T")?task.remindAt.split("T")[1]:null;
           const clone={...task,id:crypto.randomUUID(),done:false,due:nd,quadrant:task.quadrant||null,remindAt:oldTime?`${nd}T${oldTime}`:null,attachments:[],mydayDate:null,subtasks:(task.subtasks||[]).map(s=>({...s,done:false,due:null,time:null}))};
@@ -694,17 +778,20 @@ export default function Freely() {
     reader.readAsText(file);
   };
   const updateTask = (id,patch)=>{setTasks(ts=>ts.map(t=>t.id===id?{...t,...patch}:t));if(selTask?.id===id)setSelTask(s=>({...s,...patch}));if(user)db.updateTask(id,patch).catch(console.error);};
-  const reorderTasks = (fromId,toId)=>{
-    if(fromId===toId) return;
+  // Drop-position aware reorder: `before` says whether the card lands above or below the target
+  // (from the pointer's position over the target's midpoint) — so first/last slots work too.
+  const reorderTasks = (fromId,toId,before)=>{
+    if(String(fromId)===String(toId)) return;
     const sorted=tasks.filter(t=>!t.done).sort((a,b)=>(b.position||0)-(a.position||0));
-    const fromIdx=sorted.findIndex(t=>t.id===fromId), toIdx=sorted.findIndex(t=>t.id===toId);
+    const fromIdx=sorted.findIndex(t=>String(t.id)===String(fromId)), toIdx=sorted.findIndex(t=>String(t.id)===String(toId));
     if(fromIdx<0||toIdx<0) return;
-    const toT=sorted[toIdx];
+    if(before===undefined) before=fromIdx>toIdx; // legacy callers: infer from drag direction
+    const toT=sorted[toIdx], fromT=sorted[fromIdx];
     let newPos;
-    if(fromIdx<toIdx){ const after=sorted[toIdx+1]; newPos=after?((toT.position||0)+(after.position||0))/2:(toT.position||0)-1; }
-    else { const before=sorted[toIdx-1]; newPos=before?((toT.position||0)+(before.position||0))/2:(toT.position||0)+1; }
-    setTasks(ts=>ts.map(t=>t.id===fromId?{...t,position:newPos}:t));
-    if(user) db.updateTask(fromId,{position:newPos}).catch(console.error);
+    if(before){ const above=sorted[toIdx-1]; if(above&&above.id===fromT.id) return; newPos=above?((above.position||0)+(toT.position||0))/2:(toT.position||0)+1; }
+    else { const below=sorted[toIdx+1]; if(below&&below.id===fromT.id) return; newPos=below?((toT.position||0)+(below.position||0))/2:(toT.position||0)-1; }
+    setTasks(ts=>ts.map(t=>t.id===fromT.id?{...t,position:newPos}:t));
+    if(user) db.updateTask(fromT.id,{position:newPos}).catch(console.error);
   };
 
   const todStr=tod();
@@ -920,7 +1007,15 @@ export default function Freely() {
     ...Object.entries(cats).map(([name,meta])=>({id:"c:"+name, view:"cat:"+name, label:name, icon:meta.icon, iconType:"cat", cap:true, badge:myTasks.filter(t=>t.tag===name&&!t.done).length})),
     ...sharedWithMe.map(s=>({id:"s:"+s.owner_id+":"+s.folder, view:"shared:"+s.owner_id+":"+s.folder, label:s.folder, icon:"🤝", iconType:"cat", cap:true, badge:tasks.filter(t=>t.owner===s.owner_id&&t.tag===s.folder&&!t.done).length})),
   ];
-  const addSidebarList=(name,icon,color)=>{ const n=(name||"").trim().toLowerCase(); if(!n||cats[n]) return false; setCats(c=>({...c,[n]:{color:color||CAT_COLORS[Object.keys(c).length%CAT_COLORS.length],icon:icon||guessIcon(n)}})); return true; };
+  const addSidebarList=(name,icon,color)=>{ const n=(name||"").trim().toLowerCase(); if(!n||cats[n]) return false;
+    setCats(c=>({...c,[n]:{color:color||CAT_COLORS[Object.keys(c).length%CAT_COLORS.length],icon:icon||guessIcon(n)}}));
+    // The new list adopts existing tasks that already mention its name ("ACA essay" → the new "aca" list).
+    const esc=n.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+    const rx=new RegExp("(^|[^a-z0-9])"+esc+"($|[^a-z0-9])","i");
+    const hits=tasks.filter(t=>t.owner===user?.id&&t.tag!==n&&rx.test(t.title));
+    hits.forEach(t=>updateTask(t.id,{tag:n}));
+    if(hits.length) showToast(`Moved ${hits.length} matching task${hits.length===1?"":"s"} into "${n}" 📁`);
+    return true; };
   // Rename a list: carries its color/icon, moves every task's tag, keeps shares alive under the new name.
   const renameCat=(old,nuRaw)=>{
     const nu=(nuRaw||"").trim().toLowerCase();
@@ -1011,7 +1106,8 @@ export default function Freely() {
             {/* App logo: /public/logo.png when present; falls back to the ⚡ gradient if the file is missing. */}
             <div style={{position:"relative",width:30,height:30,borderRadius:9,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:`0 3px 12px ${T.accent}55`,overflow:"hidden"}}>
               <Ico n="zap" s={14} c="#fff"/>
-              <img src="/logo.png" alt="" onError={e=>{e.currentTarget.style.display="none";}} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>
+              {/* logo-128 is pre-downscaled with a proper resampler so it stays crisp at icon size (the raw 1097px file goes mushy when the browser shrinks it 36×). */}
+              <img src="/logo-128.png" alt="" onError={e=>{ if(!e.currentTarget.dataset.f){e.currentTarget.dataset.f="1";e.currentTarget.src="/logo.png";} else e.currentTarget.style.display="none"; }} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>
             </div>
             {sideOpen&&<span style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:16,letterSpacing:"-.4px",background:`linear-gradient(90deg,${T.accent},${T.accentAlt})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",whiteSpace:"nowrap"}}>Freely</span>}
           </button>
@@ -1137,7 +1233,7 @@ function AboutModal({T,onClose}) {
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <div style={{position:"relative",width:40,height:40,borderRadius:11,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 4px 16px ${T.accent}55`,overflow:"hidden"}}>
               <Ico n="zap" s={20} c="#fff"/>
-              <img src="/logo.png" alt="" onError={e=>{e.currentTarget.style.display="none";}} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>
+              <img src="/logo-128.png" alt="" onError={e=>{ if(!e.currentTarget.dataset.f){e.currentTarget.dataset.f="1";e.currentTarget.src="/logo.png";} else e.currentTarget.style.display="none"; }} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>
             </div>
             <div>
               <div style={{fontFamily:"'Sora',sans-serif",fontSize:18,fontWeight:700,color:T.text}}>Freely</div>
@@ -1260,11 +1356,11 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const [sort,setSort]=useState("smart");
   const [showSugg,setShowSugg]=useState(true);
   const [dragId,setDragId]=useState(null);
-  const [dropId,setDropId]=useState(null);
+  const [drop,setDrop]=useState(null); // {id,before} — where the dragged card will land
   const [swipeId,setSwipeId]=useState(null);
   const [swipeX,setSwipeX]=useState(0);
   const dragIdRef=useRef(null);
-  const dropIdRef=useRef(null);
+  const dropRef=useRef(null);
   const didDragRef=useRef(false);
   const labels={myday:"My Day",flagged:"Flagged",upcoming:"Upcoming",all:"All Tasks",assigned:"Assigned to me"};
   const catKey=view.startsWith("cat:")?view.slice(4):null;
@@ -1288,20 +1384,37 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
 
   const beginReorder=id=>{
     didDragRef.current=true; dragIdRef.current=id; setDragId(id); navigator.vibrate?.(20);
+    const t=tasks.find(x=>String(x.id)===String(id));
+    const ghost=makeDragGhost(t?t.title:"Task",T.accent,T);
     runDrag(
-      ev=>{ const el=document.elementFromPoint(ev.clientX,ev.clientY); const card=el&&el.closest("[data-task-id]"); dropIdRef.current=card?card.getAttribute("data-task-id"):null; setDropId(dropIdRef.current); },
-      ()=>{ const from=dragIdRef.current,to=dropIdRef.current; if(from!=null&&to!=null&&String(from)!==String(to)) reorderTasks(from,to); dragIdRef.current=null; dropIdRef.current=null; setDragId(null); setDropId(null); }
+      ev=>{ ghost.move(ev.clientX,ev.clientY);
+        const el=document.elementFromPoint(ev.clientX,ev.clientY); const card=el&&el.closest("[data-task-id]");
+        let hit=null;
+        if(card){ const cid=card.getAttribute("data-task-id");
+          if(cid!==String(id)){ const r=card.getBoundingClientRect(); hit={id:cid,before:ev.clientY<r.top+r.height/2}; } }
+        dropRef.current=hit; setDrop(hit); },
+      ()=>{ ghost.remove(); const from=dragIdRef.current,to=dropRef.current;
+        if(from!=null&&to) reorderTasks(from,to.id,to.before);
+        dragIdRef.current=null; dropRef.current=null; setDragId(null); setDrop(null); }
     );
   };
+  // Swipe travel is capped short (±95) — pulling well past it means you wanted to move the card,
+  // so the gesture hands over to reorder-drag instead of My Day / delete.
   const beginSwipe=(id,sx)=>{
     didDragRef.current=true; setSwipeId(id); document.body.style.userSelect="none";
-    const mv=ev=>setSwipeX(Math.max(-130,Math.min(ev.clientX-sx,130)));
-    const up=ev=>{
-      window.removeEventListener("pointermove",mv); window.removeEventListener("pointerup",up); window.removeEventListener("pointercancel",up);
-      document.body.style.userSelect="";
+    let switched=false;
+    const done=()=>{ window.removeEventListener("pointermove",mv); window.removeEventListener("pointerup",up); window.removeEventListener("pointercancel",up); document.body.style.userSelect=""; };
+    const mv=ev=>{
       const dx=ev.clientX-sx;
-      if(dx>70){ navigator.vibrate?.(20); onToggleMyDay?.(id); }
-      else if(dx<-70){ navigator.vibrate?.(25); deleteTask(id); }
+      if(Math.abs(dx)>150){ switched=true; done(); setSwipeId(null); setSwipeX(0); beginReorder(id); return; }
+      setSwipeX(Math.max(-95,Math.min(dx,95)));
+    };
+    const up=ev=>{
+      if(switched) return;
+      done();
+      const dx=ev.clientX-sx;
+      if(dx>60){ navigator.vibrate?.(20); onToggleMyDay?.(id); }
+      else if(dx<-60){ navigator.vibrate?.(25); deleteTask(id); }
       setSwipeId(null); setSwipeX(0);
     };
     window.addEventListener("pointermove",mv); window.addEventListener("pointerup",up); window.addEventListener("pointercancel",up);
@@ -1415,7 +1528,10 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           </div>
         )}
         {view!=="myday"&&(
-          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,marginTop:-4}}>💡 Swipe a task ← left to delete · → right to add to My Day ☀️ · hold & drag to reorder</div>
+          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:view==="upcoming"?4:10,marginTop:-4}}>💡 Swipe a task ← left to delete · → right to add to My Day ☀️ · hold & drag to reorder</div>
+        )}
+        {view==="upcoming"&&(
+          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10}}>📅 No date in the text? It lands on Tomorrow. Date not decided yet? Type <b>tbd</b> or <b>unknown</b> — the task shows as "Date TBD" until you pick one.</div>
         )}
         {view!=="completed"&&(
           <div style={{display:"flex",gap:5,marginBottom:12}}>
@@ -1434,8 +1550,12 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
         )}
         <div style={{display:"flex",flexDirection:"column",gap:4}}>
           {sortList(show.filter(t=>!t.done)).map(task=>(
-            <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id} dropTarget={dropId===task.id}
-              onDown={onCardDown} onGrip={sort==="smart"?gripDown:undefined} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true} onToggleMyDay={onToggleMyDay} myEmail={myEmail}/>
+            <Fragment key={task.id}>
+              {drop?.id===String(task.id)&&drop.before&&<DropLine T={T}/>}
+              <TCard task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id}
+                onDown={onCardDown} onGrip={sort==="smart"?gripDown:undefined} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true} onToggleMyDay={onToggleMyDay} myEmail={myEmail}/>
+              {drop?.id===String(task.id)&&!drop.before&&<DropLine T={T}/>}
+            </Fragment>
           ))}
           {show.filter(t=>t.done).length>0&&<>
             <div style={{fontSize:10,color:T.textMuted,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",padding:"10px 2px 4px",display:"flex",alignItems:"center",gap:5}}>
@@ -1473,12 +1593,12 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
     <div style={{position:"relative",borderRadius:11,overflow:"hidden"}}>
     {swipeX>0&&(
       <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",gap:6,paddingLeft:16,background:`linear-gradient(90deg,${T.warning}44,transparent)`,color:T.warning,fontWeight:700,fontSize:12,pointerEvents:"none"}}>
-        <Ico n="sun" s={16} c={T.warning}/>{swipeX>70?"Release for My Day ☀️":"My Day"}
+        <Ico n="sun" s={16} c={T.warning}/>{swipeX>=95?"Release for My Day · keep pulling to drag ↕":swipeX>60?"Release for My Day ☀️":"My Day"}
       </div>
     )}
     {swipeX<0&&(
       <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"flex-end",gap:6,paddingRight:16,background:`linear-gradient(270deg,${T.danger}44,transparent)`,color:T.danger,fontWeight:700,fontSize:12,pointerEvents:"none"}}>
-        {swipeX<-70?"Release to delete 🗑":"Delete"}<Ico n="trash" s={16} c={T.danger}/>
+        {swipeX<=-95?"Release to delete · keep pulling to drag ↕":swipeX<-60?"Release to delete 🗑":"Delete"}<Ico n="trash" s={16} c={T.danger}/>
       </div>
     )}
     <div className={entering?"te":""} data-task-id={task.id}
@@ -1498,7 +1618,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
           {task.recurring&&<Ico n="repeat" s={11} c={T.textMuted} st={{flexShrink:0}}/>}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5,marginTop:3,flexWrap:"wrap"}}>
-          {task.tag&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:catColor+"22",color:catColor,fontWeight:600,display:"inline-flex",alignItems:"center",gap:3}}>{catMeta?.icon&&<CatIcon icon={catMeta.icon} size={10}/>}{task.tag}</span>}
+          {task.tag&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:catColor+"22",color:catColor,fontWeight:600,display:"inline-flex",alignItems:"center",gap:3,textTransform:"capitalize"}}>{catMeta?.icon&&<CatIcon icon={catMeta.icon} size={10}/>}{task.tag}</span>}
           {task.due&&<span style={{fontSize:11,color:ov?T.danger:T.textMuted,fontWeight:ov?700:400}}>{fmtDate(task.due)}</span>}
           {task.remindAt&&fmtClock(task.remindAt)&&<span style={{fontSize:10,color:T.accent,fontWeight:600,display:"inline-flex",alignItems:"center",gap:2}}>⏰ {fmtClock(task.remindAt)}{task.endTime?` – ${fmtClock(task.endTime)}`:""}</span>}
           {task.subtasks?.length>0&&<span style={{fontSize:10,color:T.textMuted}}>{task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</span>}
@@ -1557,24 +1677,33 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
     if(e.target.closest("input,textarea,select,button,a")) return;
     const sx=e.clientX,sy=e.clientY; let decided=false;
     const cleanup=()=>{ window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up);window.removeEventListener("pointercancel",up); };
-    const mv=ev=>{ const dx=ev.clientX-sx,dy=ev.clientY-sy; if(!decided){ if(Math.abs(dx)<10&&Math.abs(dy)<10)return; decided=true; if(Math.abs(dx)<=Math.abs(dy)){cleanup();return;} } if(dx>0)setCloseX(Math.min(dx,320)); };
-    const up=ev=>{ cleanup(); if(ev.clientX-sx>90)onClose(); else setCloseX(0); };
+    const mv=ev=>{ const dx=ev.clientX-sx,dy=ev.clientY-sy; if(!decided){ if(Math.abs(dx)<8&&Math.abs(dy)<8)return; decided=true; if(Math.abs(dx)<=Math.abs(dy)){cleanup();return;} } if(dx>0)setCloseX(Math.min(dx,320)); };
+    const up=ev=>{ cleanup(); if(ev.clientX-sx>60)onClose(); else setCloseX(0); };
+    window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up);window.addEventListener("pointercancel",up);
+  };
+  // The panel is dense with inputs/buttons, so give it an always-grabbable handle that tracks instantly.
+  const closeHandleDown=e=>{
+    e.stopPropagation(); e.preventDefault();
+    const sx=e.clientX;
+    const mv=ev=>setCloseX(Math.max(0,Math.min(ev.clientX-sx,320)));
+    const up=ev=>{ window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up);window.removeEventListener("pointercancel",up); if(ev.clientX-sx>60)onClose(); else setCloseX(0); };
     window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up);window.addEventListener("pointercancel",up);
   };
   return (
-    <div onPointerDown={panelDown} style={{width:280,borderLeft:`1px solid ${T.border}`,background:T.surface,overflowY:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:9,animation:closeX?"none":"slideIn .2s ease",flexShrink:0,transform:closeX?`translateX(${closeX}px)`:"none",transition:closeX?"none":"transform .2s ease"}}>
+    <div onPointerDown={panelDown} style={{width:280,borderLeft:`1px solid ${T.border}`,background:T.surface,overflowY:"auto",padding:"6px 14px 12px",display:"flex",flexDirection:"column",gap:9,animation:closeX?"none":"slideIn .2s ease",flexShrink:0,transform:closeX?`translateX(${closeX}px)`:"none",transition:closeX?"none":"transform .2s ease"}}>
+      <div onPointerDown={closeHandleDown} title="Drag right to close" style={{display:"flex",justifyContent:"center",padding:"3px 0 1px",cursor:"grab",touchAction:"none"}}>
+        <div style={{width:42,height:4,borderRadius:2,background:T.surface3}}/>
+      </div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
         <input value={ttl} onChange={e=>setTtl(e.target.value)} onBlur={()=>{
           const raw=ttl.trim();
           if(!raw){setTtl(task.title||"");return;}
           if(raw===(task.title||"")) return; // unchanged → don't re-parse (avoids stripping a legit word on a no-op blur)
-          const p=parseNL(raw); const newTitle=p.title||raw; const patch={};
-          if(newTitle!==task.title) patch.title=newTitle;
-          if(p.due && p.due!==task.due) patch.due=p.due;
-          if(p.time){ const d=p.due||task.due||tod(); const ra=`${d}T${p.time}`; if(ra!==task.remindAt){ patch.remindAt=ra; if(!task.due&&!p.due&&!patch.due) patch.due=d; } }
+          // Full re-parse: a typed date/time reschedules, a typed list name re-files the task.
+          const patch=titleEditPatch(task,raw,cats);
           if(Object.keys(patch).length) onUpdate(task.id,patch);
-          setTtl(newTitle);
-        }} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();}} placeholder="Task name" title="Tap to rename — you can retype a date/time and it re-schedules" style={{fontFamily:"'Sora',sans-serif",fontSize:13,fontWeight:600,flex:1,lineHeight:1.4,background:"transparent",border:"none",borderBottom:`1px dashed ${T.border}`,outline:"none",color:T.text,minWidth:0,padding:"1px 0"}}/>
+          setTtl(patch.title||raw);
+        }} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();}} placeholder="Task name" title="Tap to rename — retype a date/time or a list name and it re-files itself" style={{fontFamily:"'Sora',sans-serif",fontSize:13,fontWeight:600,flex:1,lineHeight:1.4,background:"transparent",border:"none",borderBottom:`1px dashed ${T.border}`,outline:"none",color:T.text,minWidth:0,padding:"1px 0"}}/>
         <button onClick={onClose} style={{width:24,height:24,borderRadius:6,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginLeft:6}}><Ico n="x" s={13}/></button>
       </div>
       <DL label="Notes" T={T}>
@@ -1612,12 +1741,12 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
       </DL>
       <DL label="Due · Repeat" T={T}>
         <div style={{display:"flex",gap:4,marginTop:5,marginBottom:5,flexWrap:"wrap"}}>
-          {[["Today",tod()],["Tmrw",addDays(1)],["+1wk",addDays(7)],["Clear",""]].map(([lbl,val])=>(
+          {[["Today",tod()],["Tmrw",addDays(1)],["+1wk",addDays(7)],["TBD 🤷",DUE_TBD],["Clear",""]].map(([lbl,val])=>(
             <button key={lbl} onClick={()=>onUpdate(task.id,{due:val||null})} style={{padding:"3px 9px",borderRadius:7,border:`1px solid ${task.due===val&&val?T.accent:T.border}`,background:task.due===val&&val?T.accentGlow:"transparent",color:task.due===val&&val?T.accent:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{lbl}</button>
           ))}
         </div>
         <div style={{display:"flex",gap:6,marginBottom:6}}>
-          <input type="date" value={task.due||""} onChange={e=>onUpdate(task.id,{due:e.target.value})} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+          <input type="date" value={isTbd(task.due)?"":(task.due||"")} onChange={e=>onUpdate(task.id,{due:e.target.value})} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
           <input type="time" title="Set a time (also sets a reminder)" value={task.remindAt&&task.remindAt.includes("T")?task.remindAt.split("T")[1].slice(0,5):""} onChange={e=>{ const t=e.target.value; if(t){ const d=task.due||tod(); onUpdate(task.id,{remindAt:`${d}T${t}`,...(task.due?{}:{due:d})}); } else onUpdate(task.id,{remindAt:null}); }} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${task.remindAt?T.accent:T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
         </div>
         <div style={{display:"flex",gap:6}}>
@@ -1652,7 +1781,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
       <DL label="Category" T={T}>
         <div style={{display:"flex",gap:4,marginTop:5,flexWrap:"wrap"}}>
           {Object.entries(cats).map(([tag,meta])=>(
-            <button key={tag} onClick={()=>onUpdate(task.id,{tag})} style={{padding:"3px 9px",borderRadius:20,border:`1px solid ${task.tag===tag?meta.color:T.border}`,background:task.tag===tag?meta.color+"22":"transparent",color:task.tag===tag?meta.color:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:task.tag===tag?700:400,fontFamily:"'DM Sans',sans-serif",display:"inline-flex",alignItems:"center",gap:3}}><CatIcon icon={meta.icon} size={10}/> {tag}</button>
+            <button key={tag} onClick={()=>onUpdate(task.id,{tag})} style={{padding:"3px 9px",borderRadius:20,border:`1px solid ${task.tag===tag?meta.color:T.border}`,background:task.tag===tag?meta.color+"22":"transparent",color:task.tag===tag?meta.color:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:task.tag===tag?700:400,fontFamily:"'DM Sans',sans-serif",display:"inline-flex",alignItems:"center",gap:3,textTransform:"capitalize"}}><CatIcon icon={meta.icon} size={10}/> {tag}</button>
           ))}
         </div>
       </DL>
@@ -1776,9 +1905,10 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
   const [dragOver,setDragOver]=useState(null);
   const [dragId,setDragId]=useState(null);
   const [editId,setEditId]=useState(null);
+  const [dropCard,setDropCard]=useState(null); // {id,before} — insertion slot for the dragged card
+  const [bigQ,setBigQ]=useState(null);         // a quadrant id → that quadrant fills the whole board
   const dragOverRef=useRef(null);
   const dropCardRef=useRef(null);
-  const dropBeforeRef=useRef(true);
   useEffect(()=>{
     const fn=e=>{if(e.key==="n"&&!e.metaKey&&!e.ctrlKey&&document.activeElement.tagName!=="INPUT"&&document.activeElement.tagName!=="TEXTAREA")setAddingIn("q1");};
     window.addEventListener("keydown",fn); return ()=>window.removeEventListener("keydown",fn);
@@ -1794,14 +1924,30 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
     const sx=e.clientX,sy=e.clientY,type=e.pointerType; let mode=null,hold=null;
     const cleanup=()=>{ clearTimeout(hold); window.removeEventListener("pointermove",mv); window.removeEventListener("pointerup",up); window.removeEventListener("pointercancel",up); };
     const startDrag=()=>{ if(mode)return; mode="drag"; clearTimeout(hold); setDragId(task.id); navigator.vibrate?.(20);
+      const ghost=makeDragGhost(task.title,QUAD[task.quadrant]?.color||T.accent,T);
       runDrag(
-        ev=>{ didDragNote.current=true; const el=document.elementFromPoint(ev.clientX,ev.clientY); const qd=el&&el.closest("[data-quadrant]"); const card=el&&el.closest("[data-mnote-id]"); dragOverRef.current=qd?qd.getAttribute("data-quadrant"):null; if(card&&card.getAttribute("data-mnote-id")!==String(task.id)){ dropCardRef.current=card.getAttribute("data-mnote-id"); const r=card.getBoundingClientRect(); dropBeforeRef.current=ev.clientX<(r.left+r.width/2); } else dropCardRef.current=null; setDragOver(dragOverRef.current); },
-        ()=>{ const q=dragOverRef.current, over=dropCardRef.current, before=dropBeforeRef.current; dragOverRef.current=null; dropCardRef.current=null; setDragId(null); setDragOver(null);
-          if(over){ // dropped on another card → drop where you point (left half = before it, right half = after it)
-            const tgt=tasks.find(t=>String(t.id)===over); if(tgt){ const quad=tgt.quadrant;
+        ev=>{ didDragNote.current=true; ghost.move(ev.clientX,ev.clientY);
+          const el=document.elementFromPoint(ev.clientX,ev.clientY);
+          const qd=el&&el.closest("[data-quadrant]"); const card=el&&el.closest("[data-mnote-id]");
+          dragOverRef.current=qd?qd.getAttribute("data-quadrant"):null;
+          let hit=null;
+          if(card&&card.getAttribute("data-mnote-id")!==String(task.id)){
+            const r=card.getBoundingClientRect(); hit={id:card.getAttribute("data-mnote-id"),before:ev.clientX<(r.left+r.width/2)};
+          } else if(qd){
+            // Over a quadrant's empty space → find the reading-order slot nearest the pointer,
+            // so a cross-quadrant drop lands exactly where you point (not just at the end).
+            const els=[...qd.querySelectorAll("[data-mnote-id]")].filter(n=>n.getAttribute("data-mnote-id")!==String(task.id));
+            for(const n of els){ const r=n.getBoundingClientRect();
+              if(ev.clientY<r.top-2||(ev.clientY<=r.bottom+2&&ev.clientX<r.left+r.width/2)){ hit={id:n.getAttribute("data-mnote-id"),before:true}; break; } }
+            if(!hit&&els.length){ const lastEl=els[els.length-1]; hit={id:lastEl.getAttribute("data-mnote-id"),before:false}; }
+          }
+          dropCardRef.current=hit; setDropCard(hit); setDragOver(dragOverRef.current); },
+        ()=>{ ghost.remove(); const q=dragOverRef.current, hit=dropCardRef.current; dragOverRef.current=null; dropCardRef.current=null; setDragId(null); setDragOver(null); setDropCard(null);
+          if(hit){ // land exactly at the pointed slot (works across quadrants too)
+            const tgt=tasks.find(t=>String(t.id)===hit.id); if(tgt){ const quad=tgt.quadrant;
               const cards=tasks.filter(t=>t.quadrant===quad&&!t.done&&t.id!==task.id).sort((a,b)=>(b.position||0)-(a.position||0));
-              const ti=cards.findIndex(t=>String(t.id)===over); let newPos;
-              if(before){ const above=cards[ti-1]; newPos=above?((above.position||0)+(tgt.position||0))/2:(tgt.position||0)+1; }
+              const ti=cards.findIndex(t=>String(t.id)===hit.id); let newPos;
+              if(hit.before){ const above=cards[ti-1]; newPos=above?((above.position||0)+(tgt.position||0))/2:(tgt.position||0)+1; }
               else { const below=cards[ti+1]; newPos=below?((tgt.position||0)+(below.position||0))/2:(tgt.position||0)-1; }
               updateTask(task.id,{position:newPos,...(quad!==task.quadrant?{quadrant:quad}:{})}); }
           } else if(q&&q!==task.quadrant){ updateTask(task.id,{quadrant:q}); }
@@ -1810,7 +1956,10 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
     };
     const mv=ev=>{
       const dx=ev.clientX-sx,dy=ev.clientY-sy;
-      if(mode==="swipe"){ didDragNote.current=true; setSwipeX(Math.max(-120,Math.min(dx,120))); return; }
+      if(mode==="swipe"){ didDragNote.current=true;
+        // Pulled far past the swipe's full travel → you meant to move the card: hand over to drag.
+        if(Math.abs(dx)>150){ mode=null; setSwipeId(null); setSwipeX(0); startDrag(); return; }
+        setSwipeX(Math.max(-95,Math.min(dx,95))); return; }
       if(mode) return;
       if(Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)){ mode="swipe"; clearTimeout(hold); setSwipeId(task.id); setSwipeX(dx); }
       else if(type==="mouse"&&(Math.abs(dx)>4||Math.abs(dy)>4)){ startDrag(); }
@@ -1818,8 +1967,8 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
     };
     const up=ev=>{
       if(mode==="swipe"){ const dx=ev.clientX-sx; cleanup(); setSwipeId(null); setSwipeX(0);
-        if(dx<-70){ navigator.vibrate?.(25); deleteTask(task.id); }
-        else if(dx>70){ navigator.vibrate?.(20); toggleMyDay(task.id); }
+        if(dx<-60){ navigator.vibrate?.(25); deleteTask(task.id); }
+        else if(dx>60){ navigator.vibrate?.(20); toggleMyDay(task.id); }
         return;
       }
       cleanup();
@@ -1829,8 +1978,8 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
   };
   const openNote=task=>{ if(didDragNote.current){ didDragNote.current=false; return; } onOpenTask?.(task); };
   return (
-    <div style={{flex:1,display:"grid",gridTemplateColumns:"1fr 1fr",gridTemplateRows:"1fr 1fr",gap:1,background:T.border,overflow:"hidden"}}>
-      {QUAD_ORDER.map(qid=>{const q=QUAD[qid];return(
+    <div style={{flex:1,display:"grid",gridTemplateColumns:bigQ?"1fr":"1fr 1fr",gridTemplateRows:bigQ?"1fr":"1fr 1fr",gap:1,background:T.border,overflow:"hidden"}}>
+      {QUAD_ORDER.filter(qid=>!bigQ||bigQ===qid).map(qid=>{const q=QUAD[qid];return(
         <div key={qid} data-quadrant={qid}
           style={{background:dragOver===qid?q.color+"12":T.bg,transition:"background .15s",display:"flex",flexDirection:"column",overflow:"hidden",outline:dragOver===qid?`2px dashed ${q.color}66`:"none",outlineOffset:"-2px"}}>
           <div style={{padding:"9px 14px 7px",borderBottom:`1px solid ${T.border}`,background:q.color+"12",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
@@ -1838,15 +1987,22 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
               <span style={{fontSize:11,fontWeight:700,color:q.color}}>{q.icon} {q.label}</span>
               <span style={{fontSize:9,color:T.textMuted,background:T.surface2,padding:"1px 6px",borderRadius:20,border:`1px solid ${T.border}`}}>{q.short}</span>
             </div>
-            <button onClick={()=>{setAddingIn(qid);setNewText("");}} style={{width:22,height:22,borderRadius:5,border:"none",cursor:"pointer",background:q.color+"22",color:q.color,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="plus" s={12} c={q.color}/></button>
+            <div style={{display:"flex",gap:4}}>
+              <button onClick={()=>setBigQ(bigQ===qid?null:qid)} title={bigQ===qid?"Back to all four quadrants":"Enlarge this quadrant"} style={{width:22,height:22,borderRadius:5,border:"none",cursor:"pointer",background:bigQ===qid?q.color:q.color+"22",color:bigQ===qid?"#fff":q.color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,lineHeight:1}}>{bigQ===qid?"🗗":"⛶"}</button>
+              <button onClick={()=>{setAddingIn(qid);setNewText("");}} style={{width:22,height:22,borderRadius:5,border:"none",cursor:"pointer",background:q.color+"22",color:q.color,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="plus" s={12} c={q.color}/></button>
+            </div>
           </div>
           <div onClick={e=>{if(e.target===e.currentTarget&&addingIn!==qid){setAddingIn(qid);setNewText("");}}} style={{flex:1,padding:10,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:7,alignContent:"flex-start",cursor:"text"}}>
             {tasks.filter(t=>t.quadrant===qid&&!t.done).sort((a,b)=>(b.position||0)-(a.position||0)).map(task=>(
-              <MNote key={task.id} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} onClickNote={()=>openNote(task)} dragging={dragId===task.id} sel={selId===task.id} swipeX={swipeId===task.id?swipeX:0} inMyDay={task.mydayDate===tod()} onRemove={()=>updateTask(task.id,{quadrant:null})} onDelete={()=>deleteTask(task.id)} onToMyDay={()=>toggleMyDay(task.id)} editing={editId===task.id} onEdit={()=>setEditId(task.id)} onSave={txt=>{const t=txt.trim();if(t)updateTask(task.id,{title:t});setEditId(null);}}/>
+              <Fragment key={task.id}>
+                {dropCard?.id===String(task.id)&&dropCard.before&&<DropLine T={T} vertical/>}
+                <MNote task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} onClickNote={()=>openNote(task)} dragging={dragId===task.id} sel={selId===task.id} swipeX={swipeId===task.id?swipeX:0} inMyDay={task.mydayDate===tod()} onRemove={()=>updateTask(task.id,{quadrant:null})} onDelete={()=>deleteTask(task.id)} onToMyDay={()=>toggleMyDay(task.id)} editing={editId===task.id} onEdit={()=>setEditId(task.id)} onSave={txt=>{const t=txt.trim();if(t&&t!==task.title){const patch=titleEditPatch(task,t,cats);if(Object.keys(patch).length)updateTask(task.id,patch);}setEditId(null);}}/>
+                {dropCard?.id===String(task.id)&&!dropCard.before&&<DropLine T={T} vertical/>}
+              </Fragment>
             ))}
             {addingIn===qid&&(
               <div style={{width:"100%",animation:"slideIn .2s ease"}}>
-                <textarea autoFocus value={newText} onChange={e=>setNewText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();addNote(qid);}if(e.key==="Escape")setAddingIn(null);}} placeholder="New task… Enter to save" style={{width:"100%",minHeight:58,padding:"7px",borderRadius:7,border:`1px solid ${q.color}88`,background:q.color+"11",color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"none"}}/>
+                <textarea autoFocus value={newText} onChange={e=>setNewText(e.target.value)} onBlur={()=>{if(!newText.trim())setAddingIn(null);}} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();addNote(qid);}if(e.key==="Escape")setAddingIn(null);}} placeholder="New task… Enter to save" style={{width:"100%",minHeight:58,padding:"7px",borderRadius:7,border:`1px solid ${q.color}88`,background:q.color+"11",color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"none"}}/>
                 <div style={{display:"flex",gap:5,marginTop:4}}>
                   <button onClick={()=>addNote(qid)} style={{flex:1,padding:"5px",borderRadius:6,border:"none",cursor:"pointer",background:q.color,color:"#fff",fontSize:11,fontWeight:700}}>Save</button>
                   <button onClick={()=>setAddingIn(null)} style={{flex:1,padding:"5px",borderRadius:6,border:`1px solid ${T.border}`,cursor:"pointer",background:"transparent",color:T.textMuted,fontSize:11}}>Cancel</button>
@@ -1876,19 +2032,24 @@ function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit
       {/* Same swipe reveal UI as the task list, so the gesture reads the same everywhere. */}
       {swipeX<0&&(
         <div style={{position:"absolute",inset:0,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"flex-end",gap:4,paddingRight:8,background:`linear-gradient(270deg,${T.danger}44,transparent)`,color:T.danger,fontWeight:700,fontSize:10,pointerEvents:"none"}}>
-          {swipeX<-70?"Release to delete 🗑":"Delete"}<Ico n="trash" s={12} c={T.danger}/>
+          {swipeX<-60?"Release to delete 🗑":"Delete"}<Ico n="trash" s={12} c={T.danger}/>
         </div>
       )}
       {swipeX>0&&(
         <div style={{position:"absolute",inset:0,borderRadius:8,display:"flex",alignItems:"center",gap:4,paddingLeft:8,background:`linear-gradient(90deg,${T.warning}44,transparent)`,color:T.warning,fontWeight:700,fontSize:10,pointerEvents:"none"}}>
-          <Ico n="sun" s={12} c={T.warning}/>{swipeX>70?"Release for My Day ☀️":"My Day"}
+          <Ico n="sun" s={12} c={T.warning}/>{swipeX>60?"Release for My Day ☀️":"My Day"}
         </div>
       )}
       <div data-mnote-id={task.id} onPointerDown={e=>onDown?.(e,task)} onClick={()=>onClickNote?.()}
         onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
         style={{padding:"7px 9px",borderRadius:8,background:swipeX!==0?T.surface:qColor+"1a",border:`1px solid ${swipeX<-30?T.danger:swipeX>30?"#f59e0b":sel?qColor:qColor+"44"}`,boxShadow:sel?`0 0 0 2px ${qColor}55`:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",fontSize:12,color:T.text,lineHeight:1.5,position:"relative",cursor:"grab",transition:swipeX?"none":"transform .15s,box-shadow .15s",transform:swipeX?`translateX(${swipeX}px)`:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
         <div style={{borderLeft:`3px solid ${qColor}`,paddingLeft:6}}>{task.title}</div>
-        {catMeta&&<div style={{marginTop:4,fontSize:9,color:catMeta.color,fontWeight:600}}>{catMeta.icon} {task.tag}</div>}
+        {task.notes&&task.notes.trim()&&<div style={{marginTop:4,fontSize:9.5,color:T.textMuted,lineHeight:1.4,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>📝 {task.notes.trim().split("\n")[0].slice(0,90)}</div>}
+        {(task.due||task.subtasks?.length>0)&&<div style={{marginTop:3,fontSize:8.5,color:T.textMuted,display:"flex",gap:6,flexWrap:"wrap"}}>
+          {task.due&&<span style={{color:(!isTbd(task.due)&&task.due<tod()&&!task.done)?T.danger:T.textMuted,fontWeight:(!isTbd(task.due)&&task.due<tod()&&!task.done)?700:500}}>📅 {fmtDate(task.due)}</span>}
+          {task.subtasks?.length>0&&<span>☑ {task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</span>}
+        </div>}
+        {catMeta&&<div style={{marginTop:4,fontSize:9,color:catMeta.color,fontWeight:600,textTransform:"capitalize",display:"flex",alignItems:"center",gap:3}}><CatIcon icon={catMeta.icon} size={9}/> {task.tag}</div>}
         {inMyDay&&swipeX===0&&<div style={{position:"absolute",top:-7,left:-4,width:16,height:16,borderRadius:"50%",background:"#f59e0b",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 5px rgba(0,0,0,.3)"}}><Ico n="sun" s={9} c="#fff"/></div>}
         {hov&&!editing&&swipeX===0&&<button title="Remove from board (keep task)" onClick={e=>{e.stopPropagation();onRemove();}} style={{position:"absolute",top:-8,right:-6,width:18,height:18,borderRadius:4,border:"none",cursor:"pointer",background:T.surface,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,.3)",zIndex:10}}><Ico n="x" s={9}/></button>}
       </div>
@@ -1926,7 +2087,7 @@ function FreeformCanvas({T,notes,setNotes,onCanvasToTask,requestLink,onCanvasToN
     const rect = canvasRef.current.getBoundingClientRect();
     const x = Math.max(0, e.clientX - rect.left - 70);
     const y = Math.max(0, e.clientY - rect.top - 40);
-    const newNote = { id: Date.now(), text: "New idea…", x, y, color: NOTE_COLS[notes.length % NOTE_COLS.length] };
+    const newNote = { id: Date.now(), text: "", x, y, color: NOTE_COLS[notes.length % NOTE_COLS.length] }; // stays empty — vanishes on blur if you don't type
     setNotes(ns => [...ns, newNote]);
     setEditingId(newNote.id);
   }, [notes.length, setNotes]);
@@ -1962,7 +2123,14 @@ function FreeformCanvas({T,notes,setNotes,onCanvasToTask,requestLink,onCanvasToN
       {notes.map(note => (
         <FreeNote key={note.id} note={note} T={T} editing={editingId===note.id}
           onPointerDown={e=>onPointerDown(e,note)} onEdit={()=>setEditingId(note.id)}
-          onSave={txt=>{setNotes(ns=>ns.map(n=>n.id===note.id?{...n,text:txt}:n));setEditingId(null);}}
+          onSave={txt=>{
+            const t=(txt||"").trim();
+            if(!t){ // nothing typed → a brand-new note simply disappears; an old note keeps its text
+              if(!(note.text||"").trim()||note.text==="New idea…") setNotes(ns=>ns.filter(n=>n.id!==note.id));
+              setEditingId(null); return;
+            }
+            setNotes(ns=>ns.map(n=>n.id===note.id?{...n,text:t}:n)); setEditingId(null);
+          }}
           onDelete={()=>setNotes(ns=>ns.filter(n=>n.id!==note.id))}
           onToMyDay={()=>convertToTask(note,true)}
           onConvert={()=>convertToTask(note,false)}
@@ -1984,7 +2152,7 @@ function FreeNote({note,T,editing,onPointerDown,onEdit,onSave,onDelete,onToMyDay
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}>
       {editing ? (
         <div style={{minWidth:130,padding:2}}>
-          <textarea autoFocus value={txt} onChange={e=>setTxt(e.target.value)}
+          <textarea autoFocus value={txt} onChange={e=>setTxt(e.target.value)} placeholder="New idea…"
             onFocus={e=>e.target.select()}
             onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();onSave(txt);}if(e.key==="Escape")onSave(note.text);}}
             onBlur={()=>onSave(txt)}
@@ -2260,12 +2428,40 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
     else navigator.vibrate?.(8); };
   const del=id=>{ const h=habits.find(x=>x.id===id); if(!h)return; const idx=habits.findIndex(x=>x.id===id); setHabits(hs=>hs.filter(x=>x.id!==id)); navigator.vibrate?.(15); showToast?.(`Habit "${h.name}" deleted`,()=>{ setHabits(hs=>{ const arr=[...hs]; arr.splice(Math.min(idx,arr.length),0,h); return arr; }); showToast?.("Habit restored ✓"); }); };
   const [dragId,setDragId]=useState(null);
+  const [dropH,setDropH]=useState(null); // {id,before} — insertion slot while dragging
   const dropRef=useRef(null);
   const beginHabitDrag=id=>{ setDragId(id); navigator.vibrate?.(15);
+    const hb=habits.find(x=>String(x.id)===String(id));
+    const ghost=makeDragGhost((hb?.icon?hb.icon+" ":"")+(hb?.name||"Habit"),hb?.color||T.accent,T);
     runDrag(
-      ev=>{ const el=document.elementFromPoint(ev.clientX,ev.clientY); const c=el&&el.closest("[data-habit-id]"); dropRef.current=c?c.getAttribute("data-habit-id"):null; },
-      ()=>{ const from=id,to=dropRef.current; dropRef.current=null; setDragId(null);
-        if(to&&String(from)!==String(to)) setHabits(hs=>{ const arr=[...hs]; const fi=arr.findIndex(x=>String(x.id)===String(from)),ti=arr.findIndex(x=>String(x.id)===String(to)); if(fi<0||ti<0)return hs; const [m]=arr.splice(fi,1); arr.splice(ti,0,m); return arr; }); }
+      ev=>{ ghost.move(ev.clientX,ev.clientY);
+        const el=document.elementFromPoint(ev.clientX,ev.clientY); const c=el&&el.closest("[data-habit-id]");
+        let hit=null;
+        if(c&&c.getAttribute("data-habit-id")!==String(id)){ const r=c.getBoundingClientRect(); hit={id:c.getAttribute("data-habit-id"),before:ev.clientY<r.top+r.height/2}; }
+        dropRef.current=hit; setDropH(hit); },
+      ()=>{ ghost.remove(); const hit=dropRef.current; dropRef.current=null; setDragId(null); setDropH(null);
+        if(!hit||String(hit.id)===String(id)) return;
+        const todayIds=todayHabits.map(x=>String(x.id));
+        if(todayIds.includes(String(id))&&todayIds.includes(String(hit.id))){
+          // Today's list displays in priority order — so a drag here rewrites the 1-2-3 numbers to
+          // match the new visual order. That's why dragging "sticks" even when priorities are set.
+          const seq=todayHabits.filter(x=>String(x.id)!==String(id));
+          const ti=seq.findIndex(x=>String(x.id)===String(hit.id));
+          seq.splice(hit.before?ti:ti+1,0,todayHabits.find(x=>String(x.id)===String(id)));
+          const anyPrio=todayHabits.some(x=>x.prio!=null);
+          const prioOf=Object.fromEntries(seq.map((x,i)=>[String(x.id),i+1]));
+          setHabits(hs=>{
+            const inSeq=new Set(seq.map(x=>String(x.id)));
+            const reordered=[...seq.map(x=>hs.find(h=>h.id===x.id)||x),...hs.filter(x=>!inSeq.has(String(x.id)))];
+            return anyPrio ? reordered.map(x=>prioOf[String(x.id)]?{...x,prio:prioOf[String(x.id)]}:x) : reordered;
+          });
+        } else {
+          // "Wanna do more?" section (or mixed) — plain manual order.
+          setHabits(hs=>{ const arr=[...hs]; const fi=arr.findIndex(x=>String(x.id)===String(id)); if(fi<0)return hs;
+            const [m]=arr.splice(fi,1); let ti=arr.findIndex(x=>String(x.id)===String(hit.id)); if(ti<0){ arr.splice(fi,0,m); return arr; }
+            if(!hit.before) ti++; arr.splice(ti,0,m); return arr; });
+        }
+      }
     );
   };
   const gripDown=(e,id)=>{ e.stopPropagation(); e.preventDefault(); beginHabitDrag(id); };
@@ -2347,7 +2543,7 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
       {habits.length>0&&<div style={{fontSize:10,color:T.textMuted,opacity:.6,marginBottom:8}}>💡 Tap the circle to check in · ✎ to edit, pick days & priority · swipe ← to delete · hold & drag to reorder · tap the trail bars to fix past days</div>}
       {(()=>{ const renderCard=h=>{ const done=has(h,todStr); const st=streakOf(h); const wc=weekCount(h); const sw=swipe?.id===h.id?swipe.x:0; const dl=daysLabel(h);
         return (
-          <div key={h.id} data-habit-id={h.id} style={{position:"relative"}}>
+          <div key={h.id} data-habit-id={h.id} style={{position:"relative",boxShadow:dropH?.id===String(h.id)?(dropH.before?`0 -3px 0 0 ${T.accent}`:`0 3px 0 0 ${T.accent}`):"none",borderRadius:14,transition:"box-shadow .1s"}}>
             {sw!==0&&<div style={{position:"absolute",inset:0,background:T.danger,borderRadius:14,display:"flex",alignItems:"center",justifyContent:"flex-end",padding:"0 16px",color:"#fff",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{sw<-90?"Release to delete":"Keep pulling ←"} 🗑</div>}
             <div onPointerDown={e=>bodyDown(e,h.id)} style={{background:T.surface,border:`1px solid ${dragId===h.id?T.accent:done?h.color+"66":T.border}`,borderRadius:14,padding:14,position:"relative",transform:sw!==0?`translateX(${sw}px)`:"none",transition:sw!==0?"border-color .2s":"border-color .2s, transform .15s ease",opacity:dragId===h.id?.5:1,touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -2450,7 +2646,8 @@ function CalendarView({T,tasks,cats,todStr,onToggle,onToggleStep,onQuickAdd,onOp
   const stepsByDay={}; tasks.forEach(t=>(t.subtasks||[]).forEach(s=>{ if(s.due){ (stepsByDay[s.due]=stepsByDay[s.due]||[]).push({t,s}); } }));
   // Drag-in tray: existing tasks you can pull onto a day. Source = Unscheduled / My Day / All / a folder.
   const srcTasks=tasks.filter(t=>{ if(t.done) return false;
-    if(src==="unscheduled") return !t.due;
+    if(src==="unscheduled") return !t.due||isTbd(t.due); // "Date TBD" counts as unscheduled — drag it onto a day to decide
+
     if(src==="myday") return t.mydayDate===todStr;
     if(src==="all") return true;
     if(src.startsWith("cat:")) return t.tag===src.slice(4);
