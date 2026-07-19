@@ -13,8 +13,11 @@ export const fromDbTask = r => ({
 
 // Canonical icons for the built-in folders. Used to heal old accounts whose rows
 // predate the icon feature (they were stamped with a placeholder). Keep in sync with App's DEFAULT_CATS.
-const DEFAULT_CAT_ICON = { work: "💼", school: "📚", health: "🏃", personal: "🌟", finance: "💰" };
-const healIcon = (name, icon) => (!icon || icon === "📌") ? (DEFAULT_CAT_ICON[name] || "📌") : icon;
+const DEFAULT_CAT_ICON = { work: "💼", school: "📚", health: "🏃", personal: "🌈", finance: "💰" };
+const healIcon = (name, icon) => {
+  if (name === "personal" && icon === "🌟") return "🌈"; // old default star looked like the My Day sun
+  return (!icon || icon === "📌") ? (DEFAULT_CAT_ICON[name] || "📌") : icon;
+};
 
 const fromDbCanvas = r => ({ id: r.id, text: r.text, x: r.x, y: r.y, color: r.color });
 const fromDbNote = r => ({ id: r.id, title: r.title, body: r.body || "", pinned: r.pinned, color: r.color, drawing: r.drawing || null, taskId: r.task_id != null ? r.task_id : null, created: r.created_at?.split("T")[0] || "" });
