@@ -13,9 +13,9 @@ export const fromDbTask = r => ({
 
 // Canonical icons for the built-in folders. Used to heal old accounts whose rows
 // predate the icon feature (they were stamped with a placeholder). Keep in sync with App's DEFAULT_CATS.
-const DEFAULT_CAT_ICON = { work: "💼", school: "📚", health: "🏃", personal: "🌈", finance: "💰" };
+const DEFAULT_CAT_ICON = { work: "💼", school: "📚", health: "🏃", personal: "💜", finance: "💰" };
 const healIcon = (name, icon) => {
-  if (name === "personal" && icon === "🌟") return "🌈"; // old default star looked like the My Day sun
+  if (name === "personal" && (icon === "🌟" || icon === "🌈")) return "💜"; // migrate the older defaults
   return (!icon || icon === "📌") ? (DEFAULT_CAT_ICON[name] || "📌") : icon;
 };
 

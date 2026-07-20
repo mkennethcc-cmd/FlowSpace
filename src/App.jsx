@@ -316,7 +316,7 @@ const DEFAULT_CATS = {
   work:     {color:"#0ea5e9", icon:"💼"},
   school:   {color:"#6366f1", icon:"📚"},
   health:   {color:"#10b981", icon:"🏃"},
-  personal: {color:"#f59e0b", icon:"🌈"}, // not a star/sun — those read like the My Day ☀️ marker
+  personal: {color:"#f59e0b", icon:"💜"}, // not a star/sun — those read like the My Day ☀️ marker
   finance:  {color:"#a855f7", icon:"💰"},
 };
 const DEFAULT_CAT_NAMES = Object.keys(DEFAULT_CATS);
@@ -1430,6 +1430,7 @@ const CR=({icon,label,sub,T,onClick})=>(
 
 function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],sharedInfo=null,onLeaveShare=null,listManage=null}) {
   const [manageOpen,setManageOpen]=useState(false);
+  const [collabOpen,setCollabOpen]=useState(false);
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
   const [sort,setSort]=useState("smart");
@@ -1477,15 +1478,15 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
         dragIdRef.current=null; dropRef.current=null; setDragId(null); setDrop(null); }
     );
   };
-  // Swipe travel is capped short (±95) — pulling well past it means you wanted to move the card,
-  // so the gesture hands over to reorder-drag instead of My Day / delete.
-  const beginSwipe=(id,sx)=>{
+  // Swipe travel is capped short (±95). Pulling far past it AND moving vertically hands over to
+  // reorder-drag — a pure horizontal fling (a fast delete/My-Day swipe) always stays a swipe.
+  const beginSwipe=(id,sx,sy)=>{
     didDragRef.current=true; setSwipeId(id); document.body.style.userSelect="none";
     let switched=false;
     const done=()=>{ window.removeEventListener("pointermove",mv); window.removeEventListener("pointerup",up); window.removeEventListener("pointercancel",up); document.body.style.userSelect=""; };
     const mv=ev=>{
-      const dx=ev.clientX-sx;
-      if(Math.abs(dx)>150){ switched=true; done(); setSwipeId(null); setSwipeX(0); beginReorder(id); return; }
+      const dx=ev.clientX-sx, dy=ev.clientY-(sy??0);
+      if(sy!=null && Math.abs(dx)>180 && Math.abs(dy)>14){ switched=true; done(); setSwipeId(null); setSwipeX(0); beginReorder(id); return; }
       setSwipeX(Math.max(-95,Math.min(dx,95)));
     };
     const up=ev=>{
@@ -1510,18 +1511,18 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
     const probe=ev=>{
       if(decided) return;
       const dx=ev.clientX-sx, dy=ev.clientY-sy; lastDx=dx; lastDy=dy;
-      if(Math.abs(dx)<8 && Math.abs(dy)<8) return;
+      if(Math.abs(dx)<6 && Math.abs(dy)<6) return;
       decided=true; teardown();
-      if(Math.abs(dx)>Math.abs(dy)) beginSwipe(id,sx);   // horizontal → swipe
-      else if(type==="mouse") beginReorder(id);          // desktop vertical drag anywhere → reorder
+      if(Math.abs(dx)>Math.abs(dy)) beginSwipe(id,sx,sy); // horizontal → swipe
+      else if(type==="mouse") beginReorder(id);           // desktop vertical drag anywhere → reorder
       // touch vertical: let the list scroll (reorder comes from the hold timer below)
     };
     const end=()=>teardown();
-    // Touch hold → reorder, but only if the finger isn't already pulling sideways (that's a swipe in progress).
+    // Touch hold-STILL → reorder. Any sideways pull at fire time means swipe, not drag.
     if(type!=="mouse") timer=setTimeout(()=>{ if(!decided){ decided=true; teardown();
-      if(Math.abs(lastDx)>Math.abs(lastDy)&&Math.abs(lastDx)>4) beginSwipe(id,sx);
+      if(Math.abs(lastDx)>Math.abs(lastDy)&&Math.abs(lastDx)>2) beginSwipe(id,sx,sy);
       else beginReorder(id);
-    } }, 180);
+    } }, 250);
     window.addEventListener("pointermove",probe); window.addEventListener("pointerup",end); window.addEventListener("pointercancel",end);
   };
   const gripDown=(e,id)=>{ e.stopPropagation(); e.preventDefault(); beginReorder(id); };
@@ -1557,10 +1558,48 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           {sharedKey&&(
             <div style={{fontSize:11,color:T.textMuted,marginTop:4,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
               <span>🤝 Shared by <b style={{color:T.text}}>{sharedInfo?.nick||"a collaborator"}</b>{sharedInfo?.email&&sharedInfo.nick!==sharedInfo.email?` (${sharedInfo.email})`:""}</span>
+              <button onClick={()=>setCollabOpen(true)} style={{padding:"2px 10px",borderRadius:8,border:`1px solid ${T.accent}55`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>👥 Collaborators</button>
               {onLeaveShare&&<button onClick={()=>{ if(window.confirm("Leave this shared list? You'll stop seeing its tasks.")) onLeaveShare(); }} style={{padding:"2px 10px",borderRadius:8,border:`1px solid ${T.danger}44`,background:T.danger+"11",color:T.danger,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Leave ✕</button>}
             </div>
           )}
         </div>
+        {collabOpen&&sharedKey&&(()=>{
+          const assignees=[...new Set(tasks.flatMap(t=>assigneesOf(t)))].filter(e=>e&&e!==sharedInfo?.email&&e!==myEmail);
+          return (
+            <div onClick={()=>setCollabOpen(false)} style={{position:"fixed",inset:0,zIndex:2600,background:"rgba(5,6,12,.6)",display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
+              <div onClick={e=>e.stopPropagation()} style={{width:320,maxWidth:"94vw",maxHeight:"80vh",overflowY:"auto",background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,padding:18,boxShadow:"0 24px 80px rgba(0,0,0,.5)",fontFamily:"'DM Sans',sans-serif"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+                  <span style={{fontSize:18}}>👥</span>
+                  <div style={{flex:1,fontSize:15,fontWeight:800,fontFamily:"'Sora',sans-serif"}}>People on this list</div>
+                  <button onClick={()=>setCollabOpen(false)} style={{width:26,height:26,borderRadius:7,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={13}/></button>
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {sharedInfo?.email&&(
+                    <div style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",borderRadius:9,background:T.surface2,border:`1px solid ${T.border}`}}>
+                      <Avatar email={sharedInfo.email} size={24}/>
+                      <div style={{flex:1,minWidth:0}}><div style={{fontSize:12,fontWeight:700,color:T.text}}>{sharedInfo.nick}</div><div style={{fontSize:9,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sharedInfo.email}</div></div>
+                      <span style={{fontSize:8,fontWeight:700,color:T.accent,background:T.accentGlow,padding:"2px 7px",borderRadius:8}}>OWNER</span>
+                    </div>
+                  )}
+                  {myEmail&&(
+                    <div style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",borderRadius:9,background:T.surface2,border:`1px solid ${T.border}`}}>
+                      <Avatar email={myEmail} size={24}/>
+                      <div style={{flex:1,minWidth:0}}><div style={{fontSize:12,fontWeight:700,color:T.text}}>You</div><div style={{fontSize:9,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{myEmail}</div></div>
+                    </div>
+                  )}
+                  {assignees.map(em=>(
+                    <div key={em} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",borderRadius:9,background:T.surface2,border:`1px solid ${T.border}`}}>
+                      <Avatar email={em} size={24}/>
+                      <div style={{flex:1,minWidth:0}}><div style={{fontSize:12,fontWeight:700,color:T.text}}>{nickOf(em).split("@")[0]}</div><div style={{fontSize:9,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{em}</div></div>
+                      <span style={{fontSize:8,fontWeight:700,color:T.textMuted,background:T.surface3,padding:"2px 7px",borderRadius:8}}>ASSIGNED</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{fontSize:9,color:T.textMuted,marginTop:10,lineHeight:1.5}}>Shown: the owner, you, and anyone assigned to a task here. Only the owner can see the full invite list.</div>
+              </div>
+            </div>
+          );
+        })()}
         {view==="myday"&&carriedCount>0&&(
           <button onClick={onUndoCarry} style={{display:"flex",alignItems:"center",gap:7,width:"100%",marginBottom:12,padding:"9px 12px",borderRadius:11,border:`1px solid ${T.border}`,background:T.surface2,color:T.textMuted,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>
             <Ico n="repeat" s={14} c={T.textMuted}/> Carried {carriedCount} unfinished {carriedCount===1?"task":"tasks"} forward · tap to undo
@@ -1673,7 +1712,8 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           onSetColor={col=>listManage.setCats?.(c=>({...c,[catKey]:{...c[catKey],color:col}}))}
           onAssignAll={listManage.onAssignAll?emails=>listManage.onAssignAll([catKey],emails):null}
           assignGroups={listManage.assignGroups||[]}
-          onUploadIcon={listManage.onUploadIcon}/>
+          onUploadIcon={listManage.onUploadIcon}
+          autoFocusName/>
       )}
     </div>
   );
@@ -1692,12 +1732,12 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
     <div style={{position:"relative",borderRadius:11,overflow:"hidden"}}>
     {swipeX>0&&(
       <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",gap:6,paddingLeft:16,background:`linear-gradient(90deg,${T.warning}44,transparent)`,color:T.warning,fontWeight:700,fontSize:12,pointerEvents:"none"}}>
-        <Ico n="sun" s={16} c={T.warning}/>{swipeX>=95?"Release for My Day · keep pulling to drag ↕":swipeX>60?"Release for My Day ☀️":"My Day"}
+        <Ico n="sun" s={16} c={T.warning}/>{swipeX>=95?"Release for My Day ☀️ · move ↕ too to drag":swipeX>60?"Release for My Day ☀️":"My Day"}
       </div>
     )}
     {swipeX<0&&(
       <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"flex-end",gap:6,paddingRight:16,background:`linear-gradient(270deg,${T.danger}44,transparent)`,color:T.danger,fontWeight:700,fontSize:12,pointerEvents:"none"}}>
-        {swipeX<=-95?"Release to delete · keep pulling to drag ↕":swipeX<-60?"Release to delete 🗑":"Delete"}<Ico n="trash" s={16} c={T.danger}/>
+        {swipeX<=-95?"Release to delete 🗑 · move ↕ too to drag":swipeX<-60?"Release to delete 🗑":"Delete"}<Ico n="trash" s={16} c={T.danger}/>
       </div>
     )}
     <div className={entering?"te":""} data-task-id={task.id}
@@ -1721,6 +1761,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
           {task.due&&<span style={{fontSize:11,color:ov?T.danger:T.textMuted,fontWeight:ov?700:400}}>{fmtDate(task.due)}</span>}
           {task.remindAt&&fmtClock(task.remindAt)&&<span style={{fontSize:10,color:T.accent,fontWeight:600,display:"inline-flex",alignItems:"center",gap:2}}>⏰ {fmtClock(task.remindAt)}{task.endTime?` – ${fmtClock(task.endTime)}`:""}</span>}
           {task.subtasks?.length>0&&<span style={{fontSize:10,color:T.textMuted}}>{task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</span>}
+          {task.attachments?.length>0&&<span title={`${task.attachments.length} attachment${task.attachments.length===1?"":"s"}`} style={{fontSize:10,color:T.textMuted,display:"inline-flex",alignItems:"center",gap:2}}>📎{task.attachments.length>1?` ${task.attachments.length}`:""}</span>}
           {assignees.length>0&&<span title={`Assigned to ${assignees.map(a=>a===myEmail?"you":nickOf(a)).join(", ")}`} style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:9,fontWeight:700,padding:"1px 7px 1px 2px",borderRadius:20,background:assignedToMe?T.accentGlow:T.surface3,color:assignedToMe?T.accent:T.textMuted}}>
             <span style={{display:"inline-flex"}}>{assignees.slice(0,3).map((a,i)=><span key={a} style={{width:14,height:14,borderRadius:"50%",background:avatarColor(a),color:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:8,marginLeft:i?-5:0,border:`1px solid ${T.bg}`}}>{initialOf(a)}</span>)}</span>
             {assignees.length===1?(assignedToMe?"You":nickOf(assignees[0]).split("@")[0]):`${assignees.length}`}
@@ -1747,7 +1788,12 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
   const [assignInput,setAssignInput]=useState("");
   const [uploading,setUploading]=useState(false);
   const fileRef=useRef(null);
-  const doAttach=async files=>{ if(!files?.length)return; setUploading(true); try{ for(const f of files) await onAttach?.(task,f); }catch(e){ alert("Upload failed: "+(e.message||e)); } setUploading(false); };
+  const doAttach=async files=>{ if(!files?.length)return; setUploading(true);
+    try{ for(const f of files){
+      if(f.size>50*1024*1024){ alert(`"${f.name}" is over the 50 MB per-file limit — try a smaller file.`); continue; }
+      await onAttach?.(task,f);
+    } }catch(e){ alert("Upload failed: "+(e.message||e)); }
+    setUploading(false); };
   const [nts,setNts]=useState(task.notes||"");
   const [ttl,setTtl]=useState(task.title||"");
   const [ns,setNs]=useState("");
@@ -1821,8 +1867,8 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
             </div>
           ))}
         </div>
-        <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple style={{display:"none"}} onChange={e=>{doAttach([...e.target.files]); e.target.value="";}}/>
-        <button onClick={()=>fileRef.current?.click()} disabled={uploading} style={{marginTop:7,width:"100%",padding:"7px",borderRadius:8,border:`1px dashed ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{uploading?"Uploading…":"+ Add photo / screenshot"}</button>
+        <input ref={fileRef} type="file" accept="image/*,.pdf,.doc,.docx,.txt,.md,.csv,.xls,.xlsx,.ppt,.pptx,.zip" multiple style={{display:"none"}} onChange={e=>{doAttach([...e.target.files]); e.target.value="";}}/>
+        <button onClick={()=>fileRef.current?.click()} disabled={uploading} style={{marginTop:7,width:"100%",padding:"7px",borderRadius:8,border:`1px dashed ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{uploading?"Uploading…":"+ Add photo / PDF / doc (max 50 MB)"}</button>
       </DL>
       <DL label="Color Label" T={T}>
         <div style={{display:"flex",gap:5,marginTop:5,flexWrap:"wrap"}}>
@@ -2058,11 +2104,11 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
     const mv=ev=>{
       const dx=ev.clientX-sx,dy=ev.clientY-sy; ldx=dx; ldy=dy;
       if(mode==="swipe"){ didDragNote.current=true;
-        // Pulled far past the swipe's full travel → you meant to move the card: hand over to drag.
-        if(Math.abs(dx)>150){ mode=null; setSwipeId(null); setSwipeX(0); startDrag(); return; }
+        // Far past the swipe's travel AND moving vertically → hand over to drag (a pure fling stays a swipe).
+        if(Math.abs(dx)>180&&Math.abs(dy)>14){ mode=null; setSwipeId(null); setSwipeX(0); startDrag(); return; }
         setSwipeX(Math.max(-95,Math.min(dx,95))); return; }
       if(mode) return;
-      if(Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)){ mode="swipe"; clearTimeout(hold); setSwipeId(task.id); setSwipeX(dx); }
+      if(Math.abs(dx)>6&&Math.abs(dx)>Math.abs(dy)){ mode="swipe"; clearTimeout(hold); setSwipeId(task.id); setSwipeX(dx); }
       else if(type==="mouse"&&(Math.abs(dx)>4||Math.abs(dy)>4)){ startDrag(); }
       // touch: vertical movement no longer cancels — the card is touchAction:none, so the hold-timer starts the drag reliably
     };
@@ -2074,11 +2120,11 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
       }
       cleanup();
     };
-    // Hold → drag between quadrants; but a finger already pulling sideways means swipe, not drag.
+    // Hold-STILL → drag between quadrants; a finger already pulling sideways means swipe, not drag.
     if(type!=="mouse") hold=setTimeout(()=>{ if(mode) return;
-      if(Math.abs(ldx)>Math.abs(ldy)&&Math.abs(ldx)>4){ mode="swipe"; setSwipeId(task.id); setSwipeX(ldx); }
+      if(Math.abs(ldx)>Math.abs(ldy)&&Math.abs(ldx)>2){ mode="swipe"; setSwipeId(task.id); setSwipeX(ldx); }
       else startDrag();
-    },220);
+    },260);
     window.addEventListener("pointermove",mv); window.addEventListener("pointerup",up); window.addEventListener("pointercancel",up);
   };
   const openNote=task=>{ if(didDragNote.current){ didDragNote.current=false; return; } onOpenTask?.(task); };
@@ -2154,9 +2200,10 @@ function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit
         style={{padding:"7px 9px",borderRadius:8,background:swipeX!==0?T.surface:qColor+"1a",border:`1px solid ${swipeX<-30?T.danger:swipeX>30?"#f59e0b":sel?qColor:qColor+"44"}`,boxShadow:sel?`0 0 0 2px ${qColor}55`:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",fontSize:12,color:T.text,lineHeight:1.5,position:"relative",cursor:"grab",transition:swipeX?"none":"transform .15s,box-shadow .15s",transform:swipeX?`translateX(${swipeX}px)`:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
         <div style={{borderLeft:`3px solid ${qColor}`,paddingLeft:6}}>{task.title}</div>
         {task.notes&&task.notes.trim()&&<div style={{marginTop:4,fontSize:9.5,color:T.textMuted,lineHeight:1.4,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>📝 {task.notes.trim().split("\n")[0].slice(0,90)}</div>}
-        {(task.due||task.subtasks?.length>0)&&<div style={{marginTop:3,fontSize:8.5,color:T.textMuted,display:"flex",gap:6,flexWrap:"wrap"}}>
+        {(task.due||task.subtasks?.length>0||task.attachments?.length>0)&&<div style={{marginTop:3,fontSize:8.5,color:T.textMuted,display:"flex",gap:6,flexWrap:"wrap"}}>
           {task.due&&<span style={{color:(!isTbd(task.due)&&task.due<tod()&&!task.done)?T.danger:T.textMuted,fontWeight:(!isTbd(task.due)&&task.due<tod()&&!task.done)?700:500}}>📅 {fmtDate(task.due)}</span>}
           {task.subtasks?.length>0&&<span>☑ {task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</span>}
+          {task.attachments?.length>0&&<span>📎 {task.attachments.length}</span>}
         </div>}
         {catMeta&&<div style={{marginTop:4,fontSize:9,color:catMeta.color,fontWeight:600,textTransform:"capitalize",display:"flex",alignItems:"center",gap:3}}><CatIcon icon={catMeta.icon} size={9}/> {task.tag}</div>}
         {inMyDay&&swipeX===0&&<div style={{position:"absolute",top:-7,left:-4,width:16,height:16,borderRadius:"50%",background:"#f59e0b",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 5px rgba(0,0,0,.3)"}}><Ico n="sun" s={9} c="#fff"/></div>}
@@ -2588,17 +2635,17 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
     const type=e.pointerType, sx=e.clientX, sy=e.clientY; let decided=false, timer=null, lastDx=0, lastDy=0;
     const teardown=()=>{ clearTimeout(timer); window.removeEventListener("pointermove",probe); window.removeEventListener("pointerup",end); window.removeEventListener("pointercancel",end); };
     const startR=()=>{ decided=true; teardown(); beginHabitDrag(id); };
-    const probe=ev=>{ if(decided)return; const dx=ev.clientX-sx,dy=ev.clientY-sy; lastDx=dx; lastDy=dy; if(Math.abs(dx)<8&&Math.abs(dy)<8)return;
+    const probe=ev=>{ if(decided)return; const dx=ev.clientX-sx,dy=ev.clientY-sy; lastDx=dx; lastDy=dy; if(Math.abs(dx)<6&&Math.abs(dy)<6)return;
       if(Math.abs(dx)>Math.abs(dy)&&dx<0){ decided=true; teardown(); runSwipe(id,sx); } // leftward = swipe-to-delete
       else if(type==="mouse") startR();                                                 // desktop vertical drag = reorder
       else { decided=true; teardown(); }                                                // touch vertical = let the page scroll
     };
     const end=()=>teardown();
-    // Touch hold → reorder, unless the finger is already pulling left (that's a swipe-to-delete).
+    // Touch hold-STILL → reorder; any leftward pull at fire time means swipe-to-delete.
     if(type!=="mouse") timer=setTimeout(()=>{ if(!decided){
-      if(Math.abs(lastDx)>Math.abs(lastDy)&&lastDx<-4){ decided=true; teardown(); runSwipe(id,sx); }
+      if(Math.abs(lastDx)>Math.abs(lastDy)&&lastDx<-2){ decided=true; teardown(); runSwipe(id,sx); }
       else startR();
-    } },180);
+    } },250);
     window.addEventListener("pointermove",probe); window.addEventListener("pointerup",end); window.addEventListener("pointercancel",end);
   };
   // Streak only counts scheduled days: a Mon/Wed/Fri habit doesn't lose its fire over the weekend.
@@ -2659,7 +2706,10 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
       {habits.length>0&&<div style={{fontSize:10,color:T.textMuted,opacity:.6,marginBottom:8}}>💡 Tap the circle to check in · ✎ to edit, pick days & priority · swipe ← to delete · hold & drag to reorder · tap the trail bars to fix past days</div>}
       {(()=>{ const renderCard=h=>{ const done=has(h,todStr); const st=streakOf(h); const wc=weekCount(h); const sw=swipe?.id===h.id?swipe.x:0; const dl=daysLabel(h);
         return (
-          <div key={h.id} data-habit-id={h.id} style={{position:"relative",boxShadow:dropH?.id===String(h.id)?(dropH.horiz?(dropH.before?`-3px 0 0 0 ${T.accent}`:`3px 0 0 0 ${T.accent}`):(dropH.before?`0 -3px 0 0 ${T.accent}`:`0 3px 0 0 ${T.accent}`)):"none",borderRadius:14,transition:"box-shadow .1s"}}>
+          <div key={h.id} data-habit-id={h.id} style={{position:"relative",borderRadius:14}}>
+            {dropH?.id===String(h.id)&&(dropH.horiz
+              ? <div style={{position:"absolute",top:8,bottom:8,[dropH.before?"left":"right"]:-4,width:3,borderRadius:2,background:T.accent,boxShadow:`0 0 8px ${T.accent}`,zIndex:5,pointerEvents:"none"}}/>
+              : <div style={{position:"absolute",left:8,right:8,[dropH.before?"top":"bottom"]:-4,height:3,borderRadius:2,background:T.accent,boxShadow:`0 0 8px ${T.accent}`,zIndex:5,pointerEvents:"none"}}/>)}
             {sw!==0&&<div style={{position:"absolute",inset:0,background:T.danger,borderRadius:14,display:"flex",alignItems:"center",justifyContent:"flex-end",padding:"0 16px",color:"#fff",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{sw<-90?"Release to delete":"Keep pulling ←"} 🗑</div>}
             <div onPointerDown={e=>bodyDown(e,h.id)} style={{background:T.surface,border:`1px solid ${dragId===h.id?T.accent:done?h.color+"66":T.border}`,borderRadius:14,padding:14,position:"relative",transform:sw!==0?`translateX(${sw}px)`:"none",transition:sw!==0?"border-color .2s":"border-color .2s, transform .15s ease",opacity:dragId===h.id?.5:1,touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -3135,7 +3185,7 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
       );
     });
   };
-  const addGroup=(name,icon)=>{ const n=(name??gName).trim(); if(!n){setGAdd(false);return;} const gid="g"+Date.now(); write([...order,gid],parentRaw,[...groups,{id:gid,name:n,icon:icon||null,collapsed:false}]); setGName(""); setGAdd(false); };
+  const addGroup=(name,icon)=>{ const n=(name??gName).trim(); if(!n){setGAdd(false);return null;} const gid="g"+Date.now(); write([...order,gid],parentRaw,[...groups,{id:gid,name:n,icon:icon||null,collapsed:false}]); setGName(""); setGAdd(false); return gid; };
   const renGroup=(id,n)=>write(order,parentRaw,groups.map(g=>{ if(g.id!==id) return g; const nm=n||g.name;
     // Re-guess the icon on rename when it was auto (null = live-auto, or equals the old name's guess); keep hand-picked ones.
     const icon=(!g.icon||g.icon===guessIcon(g.name))?guessIcon(nm):g.icon;
@@ -3147,7 +3197,8 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
   const Leaf=(it,depth)=>{ const active=view===it.view,isDrag=dragId===it.id,isTarget=drop?.item===it.id,canRen=!!onRenameList&&it.id.startsWith("c:");
     return (
       <div key={it.id} data-item={it.id} onPointerDown={e=>startDrag(e,it.id)} onMouseEnter={()=>setHov(it.id)} onMouseLeave={()=>setHov(null)}
-        style={{opacity:isDrag?.4:1,boxShadow:isTarget?(drop?.before===false?`0 2px 0 0 ${T.accent}`:`0 -2px 0 0 ${T.accent}`):"none",borderRadius:9,touchAction:"pan-y",display:"flex",alignItems:"center"}}>
+        style={{opacity:isDrag?.4:1,position:"relative",borderRadius:9,touchAction:"pan-y",display:"flex",alignItems:"center"}}>
+        {isTarget&&<div style={{position:"absolute",left:6,right:6,[drop?.before===false?"bottom":"top"]:-1,height:3,borderRadius:2,background:T.accent,boxShadow:`0 0 8px ${T.accent}`,zIndex:5,pointerEvents:"none"}}/>}
         <button onClick={()=>{ if(didDrag.current){didDrag.current=false;return;} onOpen(it.view); }} style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:8,padding:`7px ${canRen?4:10}px 7px ${10+depth*14}px`,borderRadius:9,border:"none",cursor:"grab",marginBottom:1,background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
           <Ico n="grip" s={11} c={T.textMuted} st={{opacity:hov===it.id?.5:.16,flexShrink:0}}/>
           {it.iconType==="ico"?<Ico n={it.icon} s={16} c={it.tint||(active?T.accent:T.textMuted)}/>:<span style={{width:16,textAlign:"center",flexShrink:0,display:"inline-flex",justifyContent:"center"}}><CatIcon icon={it.icon} size={14}/></span>}
@@ -3163,7 +3214,8 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
       return (
         <div key={id} style={{marginTop:2}}>
           <div data-item={id} onPointerDown={e=>startDrag(e,id)} onMouseEnter={()=>setHov(id)} onMouseLeave={()=>setHov(null)}
-            style={{display:"flex",alignItems:"center",gap:4,padding:`6px 8px 5px ${8+depth*14}px`,opacity:isDrag?.4:1,boxShadow:isTarget?(drop?.before===false?`0 2px 0 0 ${T.accent}`:`0 -2px 0 0 ${T.accent}`):"none",borderRadius:8,touchAction:"pan-y"}}>
+            style={{display:"flex",alignItems:"center",gap:4,padding:`6px 8px 5px ${8+depth*14}px`,opacity:isDrag?.4:1,position:"relative",borderRadius:8,touchAction:"pan-y"}}>
+            {isTarget&&<div style={{position:"absolute",left:6,right:6,[drop?.before===false?"bottom":"top"]:-1,height:3,borderRadius:2,background:T.accent,boxShadow:`0 0 8px ${T.accent}`,zIndex:5,pointerEvents:"none"}}/>}
             <button onClick={()=>toggle(id)} data-nodrag style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0}}><Ico n="chevron" s={11} c={T.textMuted} st={{transform:g.collapsed?"none":"rotate(90deg)",transition:"transform .15s"}}/></button>
             <span style={{fontSize:14,display:"inline-flex",alignItems:"center"}}><CatIcon icon={g.icon||guessIcon(g.name)} size={13}/></span>
             {renaming===id
@@ -3228,8 +3280,9 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
       </div>
 
       {creating&&<SidebarCreate T={T} mode={creating} onClose={()=>setCreating(null)} onUploadIcon={onUploadIcon}
-        onCreateList={(name,icon,color)=>{ const ok=onAddList?.(name,icon,color)!==false; if(!ok) return false; setCreating(null); return true; }}
-        onCreateGroup={(name,icon)=>{ addGroup(name,icon); setCreating(null); }}/>}
+        onCreateList={(name,icon,color)=>{ const n=(name||"").trim(); const ok=onAddList?.(n,icon,color)!==false; if(!ok) return false; setCreating(null);
+          setManage({type:"list",id:"c:"+n,name:n}); return true; }}   // land straight in the full settings (share, assign, …)
+        onCreateGroup={(name,icon)=>{ const gid=addGroup(name,icon); setCreating(null); if(gid) setManage({type:"group",id:gid,name:(name||"").trim()}); }}/>}
       {manage&&(()=>{
         const isG=manage.type==="group";
         const childLists=isG?listNamesUnder(manage.id):[manage.name];
@@ -3290,12 +3343,16 @@ function SidebarCreate({T,mode,onClose,onCreateList,onCreateGroup,onUploadIcon})
 }
 
 // Popup to manage a list or folder right from the sidebar: rename, recolor/re-icon, share (a folder shares all its lists), delete.
-function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename,onShare,onUnshare,onDelete,onSetIcon,onSetColor,onAssignAll,assignGroups=[],onUploadIcon}) {
+function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename,onShare,onUnshare,onDelete,onSetIcon,onSetColor,onAssignAll,assignGroups=[],onUploadIcon,autoFocusName=false}) {
   const [name,setName]=useState(target.name);
   const [email,setEmail]=useState("");
   const [perm,setPerm]=useState("edit");
   const [assignEmail,setAssignEmail]=useState("");
   const iconFileRef=useRef(null);
+  const nameRef=useRef(null);
+  // Opened via the list title's ✎ → jump straight into rename mode (focused, text selected).
+  useEffect(()=>{ if(autoFocusName) setTimeout(()=>{ nameRef.current?.focus(); nameRef.current?.select(); },60); // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
   // Nickname/contact book — same localStorage store as Settings, so nicknames work in both places.
   const [contacts,setContacts]=useState(()=>{try{return JSON.parse(localStorage.getItem("fs_contacts")||"{}");}catch{return{};}});
   useEffect(()=>{try{localStorage.setItem("fs_contacts",JSON.stringify(contacts));}catch{}},[contacts]);
@@ -3330,7 +3387,7 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
 
         <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>Name</div>
         <div style={{display:"flex",gap:6,marginBottom:14}}>
-          <input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveName();}} style={{flex:1,minWidth:0,padding:"8px 10px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:13,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+          <input ref={nameRef} value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveName();}} style={{flex:1,minWidth:0,padding:"8px 10px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:13,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
           <button onClick={saveName} style={{padding:"8px 14px",borderRadius:9,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Save</button>
         </div>
 
