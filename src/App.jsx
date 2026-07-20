@@ -346,20 +346,10 @@ const sampleTasks = (uid) => {
   ];
 };
 const isImgIcon = ic => typeof ic === "string" && (ic.startsWith("http") || ic.startsWith("data:"));
-// Windows renders the 📁 emoji as a flat gray folder — draw our own colorful one so it looks
-// the same warm yellow on every platform (phones already show it colorful).
-const FolderGlyph = ({size=14}) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" style={{flexShrink:0,verticalAlign:"middle",display:"inline-block"}}>
-    <path d="M2 6.5A2.5 2.5 0 0 1 4.5 4h4.6a2 2 0 0 1 1.6.8l1.1 1.45h7.7A2.5 2.5 0 0 1 22 8.75V18a2.5 2.5 0 0 1-2.5 2.5h-15A2.5 2.5 0 0 1 2 18z" fill="#f59e0b"/>
-    <path d="M2 9.6h20V18a2.5 2.5 0 0 1-2.5 2.5h-15A2.5 2.5 0 0 1 2 18z" fill="#fbbf24"/>
-    <path d="M2 9.6h20v1.6H2z" fill="#fcd34d"/>
-  </svg>
-);
+// Folders render as the platform's own 📁 emoji (the "3D" one) — the user prefers each device's native look.
 const CatIcon = ({icon, size=14}) => isImgIcon(icon)
   ? <img src={icon} alt="" style={{width:size,height:size,borderRadius:4,objectFit:"cover",verticalAlign:"middle",flexShrink:0}}/>
-  : (icon==="📁"||icon==="📂")
-    ? <FolderGlyph size={size+1}/>
-    : <span style={{fontSize:size+1,lineHeight:1}}>{icon}</span>;
+  : <span style={{fontSize:size+1,lineHeight:1}}>{icon}</span>;
 // Auto-pick a folder icon from its name; falls back to a varied (name-seeded) emoji.
 const ICON_KEYWORDS = [
   [["cat","cats","kitten","kitty"],"🐱"],[["dog","dogs","puppy","puppies","pup"],"🐶"],
@@ -1297,12 +1287,8 @@ const SB = ({onClick,T,children})=>(
 );
 
 function AboutModal({T,onClose}) {
-  // Placeholder links — replace the href/handles with your real accounts later.
   const socials=[
-    {label:"Instagram", handle:"@freely", href:"#", emoji:"📷"},
-    {label:"X", handle:"@freely", href:"#", emoji:"✖️"},
-    {label:"TikTok", handle:"@freely", href:"#", emoji:"🎵"},
-    {label:"Email", handle:"hello@freely.app", href:"mailto:hello@freely.app", emoji:"✉️"},
+    {label:"Instagram", handle:"@freelytodo", href:"https://instagram.com/freelytodo", emoji:"📷"},
   ];
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.65)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
@@ -1429,7 +1415,7 @@ const CR=({icon,label,sub,T,onClick})=>(
 );
 
 function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],sharedInfo=null,onLeaveShare=null,listManage=null}) {
-  const [manageOpen,setManageOpen]=useState(false);
+  const [manageMode,setManageMode]=useState(null); // "edit" (name/icon/color) | "share" (share/assign)
   const [collabOpen,setCollabOpen]=useState(false);
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
@@ -1534,7 +1520,10 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           {view==="myday"&&<div style={{fontSize:12,color:T.textMuted,fontWeight:500,marginBottom:3}}>{new Date().getHours()<12?"Good morning 🌤":new Date().getHours()<17?"Keep it up 💪":"Good evening 🌙"}</div>}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div style={{display:"flex",alignItems:"center",gap:12}}>
-              <h1 onClick={()=>{ if(catKey&&listManage) setManageOpen(true); }} title={catKey&&listManage?"Tap to manage this list — rename, icon, color, share":undefined} style={{fontFamily:"'Sora',sans-serif",fontSize:22,fontWeight:700,letterSpacing:"-.5px",display:"flex",alignItems:"center",gap:8,cursor:catKey&&listManage?"pointer":"default"}}>{titleIcon&&<CatIcon icon={titleIcon} size={20}/>}{titleText}{catKey&&listManage&&<Ico n="edit" s={13} c={T.textMuted} st={{opacity:.5}}/>}</h1>
+              <h1 onClick={()=>{ if(catKey&&listManage) setManageMode("edit"); }} title={catKey&&listManage?"Tap to edit this list — name, icon, color":undefined} style={{fontFamily:"'Sora',sans-serif",fontSize:22,fontWeight:700,letterSpacing:"-.5px",display:"flex",alignItems:"center",gap:8,cursor:catKey&&listManage?"pointer":"default"}}>{titleIcon&&<CatIcon icon={titleIcon} size={20}/>}{titleText}{catKey&&listManage&&<Ico n="edit" s={13} c={T.textMuted} st={{opacity:.5}}/>}</h1>
+              {catKey&&listManage&&(
+                <button onClick={()=>setManageMode("share")} title="Share this list & assign people" style={{display:"inline-flex",alignItems:"center",gap:5,padding:"4px 12px",borderRadius:20,border:`1px solid ${T.accent}55`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}>🤝 Share</button>
+              )}
               {view==="myday"&&dayTotal>0&&(
                 <div style={{position:"relative",width:34,height:34}} title={`${dayDone}/${dayTotal} done`}>
                   <svg width="34" height="34" style={{transform:"rotate(-90deg)"}}>
@@ -1700,20 +1689,21 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
         </div>
       </div>
       {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} onClose={()=>setSelTask(null)} onFocus={onFocusTask} myEmail={myEmail} people={people} onAssign={onAssign} peopleGroups={peopleGroups}/>}
-      {manageOpen&&catKey&&listManage&&(
+      {manageMode&&catKey&&listManage&&(
         <SidebarManage T={T} target={{type:"list",id:"c:"+catKey,name:catKey}} isGroup={false} childLists={[catKey]}
           shares={(listManage.ownedShares||[]).filter(s=>s.folder===catKey)} meta={cats[catKey]||{}}
-          onClose={()=>setManageOpen(false)}
-          onRename={v=>{ const ok=onRenameList?.(catKey,v)!==false; if(ok) setManageOpen(false); return ok; }}
+          onClose={()=>setManageMode(null)}
+          onRename={v=>{ const ok=onRenameList?.(catKey,v)!==false; if(ok) setManageMode(null); return ok; }}
           onShare={(em,cd)=>listManage.onShare?.(catKey,em,cd)}
           onUnshare={listManage.onUnshare}
-          onDelete={()=>{ setManageOpen(false); listManage.onDelete?.(catKey); }}
+          onDelete={()=>{ setManageMode(null); listManage.onDelete?.(catKey); }}
           onSetIcon={ic=>listManage.setCats?.(c=>({...c,[catKey]:{...c[catKey],icon:ic}}))}
           onSetColor={col=>listManage.setCats?.(c=>({...c,[catKey]:{...c[catKey],color:col}}))}
           onAssignAll={listManage.onAssignAll?emails=>listManage.onAssignAll([catKey],emails):null}
           assignGroups={listManage.assignGroups||[]}
           onUploadIcon={listManage.onUploadIcon}
-          autoFocusName/>
+          mode={manageMode}
+          autoFocusName={manageMode==="edit"}/>
       )}
     </div>
   );
@@ -2110,7 +2100,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
       if(mode) return;
       if(Math.abs(dx)>6&&Math.abs(dx)>Math.abs(dy)){ mode="swipe"; clearTimeout(hold); setSwipeId(task.id); setSwipeX(dx); }
       else if(type==="mouse"&&(Math.abs(dx)>4||Math.abs(dy)>4)){ startDrag(); }
-      // touch: vertical movement no longer cancels — the card is touchAction:none, so the hold-timer starts the drag reliably
+      // touch vertical: the card is pan-y now, so the quadrant scrolls naturally; drag comes ONLY from a still long-press
     };
     const up=ev=>{
       if(mode==="swipe"){ const dx=ev.clientX-sx; cleanup(); setSwipeId(null); setSwipeX(0);
@@ -2120,11 +2110,12 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
       }
       cleanup();
     };
-    // Hold-STILL → drag between quadrants; a finger already pulling sideways means swipe, not drag.
+    // Drag starts ONLY from a truly still long-press (finger within 6px when the timer fires).
+    // Any sideways motion at fire time = swipe; any other motion = the gesture was a scroll, do nothing.
     if(type!=="mouse") hold=setTimeout(()=>{ if(mode) return;
       if(Math.abs(ldx)>Math.abs(ldy)&&Math.abs(ldx)>2){ mode="swipe"; setSwipeId(task.id); setSwipeX(ldx); }
-      else startDrag();
-    },260);
+      else if(Math.abs(ldx)<6&&Math.abs(ldy)<6) startDrag();
+    },280);
     window.addEventListener("pointermove",mv); window.addEventListener("pointerup",up); window.addEventListener("pointercancel",up);
   };
   const openNote=task=>{ if(didDragNote.current){ didDragNote.current=false; return; } onOpenTask?.(task); };
@@ -2197,7 +2188,7 @@ function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit
       )}
       <div data-mnote-id={task.id} onPointerDown={e=>onDown?.(e,task)} onClick={()=>onClickNote?.()}
         onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
-        style={{padding:"7px 9px",borderRadius:8,background:swipeX!==0?T.surface:qColor+"1a",border:`1px solid ${swipeX<-30?T.danger:swipeX>30?"#f59e0b":sel?qColor:qColor+"44"}`,boxShadow:sel?`0 0 0 2px ${qColor}55`:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",fontSize:12,color:T.text,lineHeight:1.5,position:"relative",cursor:"grab",transition:swipeX?"none":"transform .15s,box-shadow .15s",transform:swipeX?`translateX(${swipeX}px)`:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
+        style={{padding:"7px 9px",borderRadius:8,background:swipeX!==0?T.surface:qColor+"1a",border:`1px solid ${swipeX<-30?T.danger:swipeX>30?"#f59e0b":sel?qColor:qColor+"44"}`,boxShadow:sel?`0 0 0 2px ${qColor}55`:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",fontSize:12,color:T.text,lineHeight:1.5,position:"relative",cursor:"grab",transition:swipeX?"none":"transform .15s,box-shadow .15s",transform:swipeX?`translateX(${swipeX}px)`:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"pan-y"}}>
         <div style={{borderLeft:`3px solid ${qColor}`,paddingLeft:6}}>{task.title}</div>
         {task.notes&&task.notes.trim()&&<div style={{marginTop:4,fontSize:9.5,color:T.textMuted,lineHeight:1.4,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>📝 {task.notes.trim().split("\n")[0].slice(0,90)}</div>}
         {(task.due||task.subtasks?.length>0||task.attachments?.length>0)&&<div style={{marginTop:3,fontSize:8.5,color:T.textMuted,display:"flex",gap:6,flexWrap:"wrap"}}>
@@ -3251,7 +3242,7 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
       {renderLevel(null,0)}
       <div style={{display:"flex",gap:6,padding:"10px 10px 4px"}}>
         <button onClick={()=>setCreating("list")} data-nodrag style={{flex:1,padding:"8px 9px",borderRadius:9,border:`1px dashed ${T.border}`,background:T.surface2,cursor:"pointer",color:T.text,display:"flex",alignItems:"center",justifyContent:"center",gap:5,fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}><Ico n="plus" s={12}/> New list</button>
-        <button onClick={()=>setCreating("group")} data-nodrag style={{flex:1,padding:"8px 9px",borderRadius:9,border:`1px dashed ${T.border}`,background:T.surface2,cursor:"pointer",color:T.text,display:"flex",alignItems:"center",justifyContent:"center",gap:5,fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}><FolderGlyph size={13}/> New folder</button>
+        <button onClick={()=>setCreating("group")} data-nodrag style={{flex:1,padding:"8px 9px",borderRadius:9,border:`1px dashed ${T.border}`,background:T.surface2,cursor:"pointer",color:T.text,display:"flex",alignItems:"center",justifyContent:"center",gap:5,fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>📁 New folder</button>
       </div>
       <div style={{fontSize:9,color:T.textMuted,opacity:.6,padding:"4px 10px 12px",lineHeight:1.5}}>💡 Hold & drag to reorder · drop a list onto a folder to tuck it inside · ⋯ to rename, share or delete</div>
 
@@ -3280,9 +3271,8 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
       </div>
 
       {creating&&<SidebarCreate T={T} mode={creating} onClose={()=>setCreating(null)} onUploadIcon={onUploadIcon}
-        onCreateList={(name,icon,color)=>{ const n=(name||"").trim(); const ok=onAddList?.(n,icon,color)!==false; if(!ok) return false; setCreating(null);
-          setManage({type:"list",id:"c:"+n,name:n}); return true; }}   // land straight in the full settings (share, assign, …)
-        onCreateGroup={(name,icon)=>{ const gid=addGroup(name,icon); setCreating(null); if(gid) setManage({type:"group",id:gid,name:(name||"").trim()}); }}/>}
+        onCreateList={(name,icon,color)=>{ const ok=onAddList?.((name||"").trim(),icon,color)!==false; if(!ok) return false; setCreating(null); return true; }}
+        onCreateGroup={(name,icon)=>{ addGroup(name,icon); setCreating(null); }}/>}
       {manage&&(()=>{
         const isG=manage.type==="group";
         const childLists=isG?listNamesUnder(manage.id):[manage.name];
@@ -3343,7 +3333,9 @@ function SidebarCreate({T,mode,onClose,onCreateList,onCreateGroup,onUploadIcon})
 }
 
 // Popup to manage a list or folder right from the sidebar: rename, recolor/re-icon, share (a folder shares all its lists), delete.
-function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename,onShare,onUnshare,onDelete,onSetIcon,onSetColor,onAssignAll,assignGroups=[],onUploadIcon,autoFocusName=false}) {
+// mode: "full" (sidebar ⋯) · "edit" (name/icon/color/delete only) · "share" (share + assign only).
+function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename,onShare,onUnshare,onDelete,onSetIcon,onSetColor,onAssignAll,assignGroups=[],onUploadIcon,autoFocusName=false,mode="full"}) {
+  const showEdit=mode!=="share", showShare=mode!=="edit";
   const [name,setName]=useState(target.name);
   const [email,setEmail]=useState("");
   const [perm,setPerm]=useState("edit");
@@ -3385,6 +3377,7 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
           <button onClick={onClose} style={{width:26,height:26,borderRadius:7,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={13}/></button>
         </div>
 
+        {showEdit&&<>
         <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>Name</div>
         <div style={{display:"flex",gap:6,marginBottom:14}}>
           <input ref={nameRef} value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveName();}} style={{flex:1,minWidth:0,padding:"8px 10px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:13,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
@@ -3405,7 +3398,9 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
             {CAT_COLORS.map(col=><div key={col} onClick={()=>onSetColor(col)} style={{width:20,height:20,borderRadius:"50%",background:col,cursor:"pointer",border:`2px solid ${meta.color===col?T.text:"transparent"}`}}/>)}
           </div>
         </>)}
+        </>}
 
+        {showShare&&<>
         <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>Share 🤝</div>
         <div style={{fontSize:10,color:T.textMuted,marginBottom:8,lineHeight:1.5}}>{isGroup?"Invites the person to every list inside this folder.":"Invite another Freely user by the email they signed up with — or a saved nickname."}</div>
         <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap"}}>
@@ -3455,9 +3450,10 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
             <input value={assignEmail} onChange={e=>setAssignEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){const em=assignEmail.trim().toLowerCase();if(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){onAssignAll([em]);setAssignEmail("");}else alert("Enter a valid email.");}}} placeholder="or assign everyone to an email…" style={{flex:1,minWidth:0,padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:11,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
           </div>
         </>)}
-        <button onClick={onDelete} style={{width:"100%",marginTop:12,padding:"9px",borderRadius:9,border:`1px solid ${T.danger}44`,background:T.danger+"11",color:T.danger,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+        </>}
+        {showEdit&&<button onClick={onDelete} style={{width:"100%",marginTop:12,padding:"9px",borderRadius:9,border:`1px solid ${T.danger}44`,background:T.danger+"11",color:T.danger,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
           <Ico n="trash" s={13} c={T.danger}/>{isGroup?"Delete folder (keeps its lists)":"Delete this list"}
-        </button>
+        </button>}
       </div>
     </div>
   );
