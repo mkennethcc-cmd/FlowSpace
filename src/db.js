@@ -2,13 +2,14 @@ import { supabase } from "./supabase";
 
 export const fromDbTask = r => ({
   id: r.id, title: r.title, done: r.done, priority: r.priority,
-  tag: r.tag, due: r.due, starred: r.starred, notes: r.notes || "",
+  // Dates stay plain "YYYY-MM-DD" strings — sliced so a timestamp-typed column can never shift the day by a timezone.
+  tag: r.tag, due: r.due ? String(r.due).slice(0, 10) : null, starred: r.starred, notes: r.notes || "",
   color: r.color, subtasks: r.subtasks || [], recurring: r.recurring,
   quadrant: r.quadrant || null, remindAt: r.remind_at || null, endTime: r.time_end || null,
   assignedTo: r.assigned_to || null,
   attachments: r.attachments || [], owner: r.user_id,
   position: r.position != null ? r.position : (r.created_at ? new Date(r.created_at).getTime() : Date.now()),
-  mydayDate: r.myday_date || null,
+  mydayDate: r.myday_date ? String(r.myday_date).slice(0, 10) : null,
 });
 
 // Canonical icons for the built-in folders. Used to heal old accounts whose rows
@@ -99,11 +100,14 @@ export const db = {
     return data || null;
   },
   async saveGami(uid, g) {
-    await supabase.from("gamification").upsert({
+    const base = {
       user_id: uid, xp: g.xp || 0, streak: g.streak || 0,
       last_active: g.lastActive || null, awarded: g.awarded || [],
       updated_at: new Date().toISOString(),
-    });
+    };
+    const { error } = await supabase.from("gamification").upsert(g.prefs !== undefined ? { ...base, prefs: g.prefs } : base);
+    // `prefs` column missing (migration not run yet) → save the rest so XP/streaks are never lost.
+    if (error && g.prefs !== undefined) await supabase.from("gamification").upsert(base);
   },
 
   async loadCanvas(uid) {

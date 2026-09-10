@@ -77,7 +77,8 @@ const QUAD = {
   q2:{label:"Important · Not Urgent", short:"Schedule", color:"#facc15", icon:"📅"},
   q4:{label:"Not Urgent · Not Important", short:"Whenever", color:"#2dd4bf", icon:"🌿"},
 };
-const QUAD_ORDER = ["q1","q3","q2","q4"];
+// Grid reads left→right, top→bottom: Do First · Schedule / Delegate · Whenever (classic Eisenhower layout).
+const QUAD_ORDER = ["q1","q2","q3","q4"];
 const MONTHS = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
 const WEEKDAYS = {sun:0,mon:1,tue:2,wed:3,thu:4,fri:5,sat:6};
 
@@ -223,48 +224,128 @@ const fmtClock = s => {
   return `${h}:${m||"00"} ${ap}`;
 };
 
-const parseNL = raw => {
-  let title = fuzzDateWords(raw.trim()), due = null, time = null, endTime = null, noDate = false;
-  // "tbd" / "tba" / "unknown" etc. → the due date is explicitly undecided (shows as "Date TBD").
-  const nd = title.match(/(^|[^a-z0-9])(tbd|tba|t\.b\.[da]\.?|to be decided|to be determined|to be announced|date unknown|unknown date|unknown|no date yet|no date|someday)($|[^a-z0-9])/i);
-  if (nd) { noDate = true; title = title.replace(nd[2], ""); }
-  // Time — a range first ("6-8pm" → 6pm start + 8pm end), then a single time, then a bare "at 4" (assume PM for 1–6).
-  const pad=x=>String(x).padStart(2,"0");
-  const to24=(h,m,ap)=>{ h=parseInt(h); m=m?parseInt(m):0; ap=(ap||"").toLowerCase(); if(ap==="pm"&&h<12)h+=12; if(ap==="am"&&h===12)h=0; return (h>=0&&h<24&&m<60)?`${pad(h)}:${pad(m)}`:null; };
-  const rg = title.match(/\b(?:from\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:[-–—]|to)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
-  if (rg) { time=to24(rg[1],rg[2],rg[5]); endTime=to24(rg[3],rg[4],rg[5]); title=title.replace(rg[0],""); }
-  else {
-    const tm = title.match(/\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i) || title.match(/\bat\s+(\d{1,2}):(\d{2})\b/);
-    if (tm) { time=to24(tm[1],tm[2],tm[3]); title=title.replace(tm[0],""); }
-    else { const bh = title.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\b/i); if (bh) { let h=parseInt(bh[1]); const m=bh[2]||"00"; if(h>=1&&h<=6)h+=12; if(h>=0&&h<24){ time=`${pad(h)}:${pad(parseInt(m))}`; title=title.replace(bh[0],""); } } }
+const MO_RE="jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+const WD_RE="sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?";
+const pad2=x=>String(x).padStart(2,"0");
+// One time token → {h,m}. Handles "4:30", "4 : 30", "4::30" (stray colon), "1840" (24h compact) and a bare "4".
+const timeTok=tok=>{
+  const c=(tok||"").replace(/\s+/g,"");
+  let m=c.match(/^(\d{1,2}):{1,2}(\d{2})$/); if(m) return {h:+m[1],m:+m[2],colon:true};
+  m=c.match(/^(\d{3,4})$/);                  if(m) return {h:+m[1].slice(0,-2),m:+m[1].slice(-2),compact:true};
+  return {h:+c,m:0,bare:true};
+};
+const hhmm=(t,ap)=>{ let h=t.h,m=t.m; ap=(ap||"").toLowerCase().replace(/[.\s]/g,"");
+  if(ap[0]==="p"&&h<12)h+=12; if(ap[0]==="a"&&h===12)h=0;
+  return (h>=0&&h<24&&m>=0&&m<60)?`${pad2(h)}:${pad2(m)}`:null; };
+// A number that may be a time, plus an optional am/pm that must not run into a word ("2 amazing" isn't 2am).
+const TIME_TOK="(\\d{1,2}\\s*:{1,2}\\s*\\d{2}|\\d{3,4}|\\d{1,2})\\s*(a\\.?m\\.?|p\\.?m\\.?)?(?![a-z])";
+const TIME_CUE="(\\bfrom\\s+|\\bat\\s+|\\bby\\s+|@\\s*|\\btimes?\\s*:\\s*|\\bwhen\\s*:\\s*|\\bhours?\\s*:\\s*)?";
+// Pull a time (and an end time) out of `text` → {time,endTime,rest}. Tolerates missing/extra spaces,
+// a meridiem on either end or neither, stray colons, and 24-hour "1840".
+function grabTime(text){
+  let rest=text||"", m;
+  const rangeRe=new RegExp(TIME_CUE+"\\b"+TIME_TOK+"\\s*(?:[-–—~]|to|until|til{1,2}|through|thru)\\s*"+TIME_TOK,"gi");
+  while((m=rangeRe.exec(rest))!==null){
+    const A=timeTok(m[2]), B=timeTok(m[4]); let apA=m[3]||""; const apB=m[5]||"";
+    // A bare "14-17" is a date range, not a time — demand some real time signal.
+    if(!(apA||apB||m[1]||A.colon||B.colon||A.compact||B.compact)) continue;
+    if(A.h>23||B.h>23) continue;
+    const inherited=!apA&&!!apB;
+    if(inherited) apA=apB;                                        // "4:00 - 5:30 pm" → both pm
+    let s=hhmm(A,apA), e=hhmm(B,apB);
+    if(s&&e&&s>=e&&inherited){ const alt=hhmm({h:A.h,m:A.m},"am"); if(alt&&alt<e) s=alt; } // "11 - 1 pm"
+    if(!s) continue;
+    return {time:s,endTime:(e&&e!==s)?e:null,rest:rest.slice(0,m.index)+" "+rest.slice(m.index+m[0].length)};
   }
-  const MO="jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
-  const WD="sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?";
-  if (/\btomorrow\b/i.test(title)) { due=addDays(1); title=title.replace(/\btomorrow\b/gi,""); }
-  else if (/\btonight\b/i.test(title)) { due=tod(); title=title.replace(/\btonight\b/gi,""); if(!time)time="20:00"; }
-  else if (/\btoday\b/i.test(title)) { due=tod(); title=title.replace(/\btoday\b/gi,""); }
-  else if (/\bnext week\b/i.test(title)) { due=addDays(7); title=title.replace(/\bnext week\b/gi,""); }
-  else {
-    // Explicit month-date wins over a bare weekday: "Friday July 24" means July 24 (which is a Friday), not "next Friday".
-    let mon=null, day=null, matched=null;
-    let m = title.match(new RegExp("\\b(?:(?:on|at)\\s+)?("+MO+")\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?","i"));
-    if (m) { mon=MONTHS[m[1].toLowerCase().substring(0,3)]; day=parseInt(m[2]); matched=m[0]; }
-    else { m = title.match(new RegExp("\\b(?:(?:on|at)\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?("+MO+")\\s*,?","i")); if (m) { mon=MONTHS[m[2].toLowerCase().substring(0,3)]; day=parseInt(m[1]); matched=m[0]; } }
-    if (matched!=null && mon!=null && day>=1 && day<=31) {
-      let yr=new Date().getFullYear();
-      if (new Date(yr,mon,day)<new Date(new Date().toDateString())) yr++;
-      due=ymd(new Date(yr,mon,day));
-      title=title.replace(matched,"").replace(new RegExp("\\b(?:this\\s+)?(?:next\\s+)?(?:(?:on|at)\\s+)?(?:"+WD+")\\b","i"),""); // drop a redundant weekday word
-    } else {
-      const wd = title.match(new RegExp("\\b(?:this\\s+)?(next\\s+)?(?:(?:on|at)\\s+)?("+WD+")\\b","i"));
-      if (wd) { const key=wd[2].toLowerCase().substring(0,3), target=WEEKDAYS[key], cur=new Date().getDay(); let delta=(target-cur+7)%7; if(delta===0)delta=7; if(wd[1])delta+=7; const d=new Date(); d.setDate(d.getDate()+delta); due=ymd(d); title=title.replace(wd[0],""); }
+  const oneRe=new RegExp(TIME_CUE+"\\b"+TIME_TOK,"gi");
+  while((m=oneRe.exec(rest))!==null){
+    const A=timeTok(m[2]), ap=m[3]||"", cue=!!m[1];
+    let h=A.h, mn=A.m, ok=false;
+    if(ap||A.colon) ok=true;                                      // "3pm", "15:30", "4:30"
+    else if(cue&&A.compact) ok=true;                              // "at 1840"
+    else if(cue&&A.bare){ if(h>=1&&h<=7)h+=12; ok=true; }         // "dinner at 7" → 7pm
+    if(!ok||h>23) continue;                                       // a bare year like "2026" is left alone
+    const v=hhmm({h,m:mn},ap); if(!v) continue;
+    return {time:v,endTime:null,rest:rest.slice(0,m.index)+" "+rest.slice(m.index+m[0].length)};
+  }
+  return {time:null,endTime:null,rest};
+}
+// Pull one date out of `text` → {due,rest,mon,day,yr}. `allowRelative` off = only explicit calendar dates.
+function grabDate(text,{allowRelative=true}={}){
+  let rest=text||"";
+  const cut=(s,i,len)=>s.slice(0,i)+" "+s.slice(i+len);
+  if(allowRelative){
+    let r=rest.match(/\btomorrow\b/i);    if(r) return {due:addDays(1),rest:cut(rest,r.index,r[0].length)};
+    r=rest.match(/\btonight\b/i);         if(r) return {due:tod(),rest:cut(rest,r.index,r[0].length),night:true};
+    r=rest.match(/\btoday\b/i);           if(r) return {due:tod(),rest:cut(rest,r.index,r[0].length)};
+    r=rest.match(/\bnext\s+week\b/i);     if(r) return {due:addDays(7),rest:cut(rest,r.index,r[0].length)};
+  }
+  // Explicit month-date wins over a bare weekday ("Friday July 24" means July 24). A trailing 4-digit year is used as-is.
+  let mon=null,day=null;
+  let m=rest.match(new RegExp("\\b(?:(?:on|at)\\s+)?("+MO_RE+")\\.?\\s+(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?\\s*,?\\s*(\\d{4})?","i"));
+  if(m){ mon=MONTHS[m[1].toLowerCase().substring(0,3)]; day=+m[2]; }
+  else { m=rest.match(new RegExp("\\b(?:(?:on|at)\\s+)?(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?\\s+(?:of\\s+)?("+MO_RE+")\\.?\\s*,?\\s*(\\d{4})?","i"));
+         if(m){ mon=MONTHS[m[2].toLowerCase().substring(0,3)]; day=+m[1]; } }
+  if(m&&mon!=null&&day>=1&&day<=31){
+    let yr=m[3]?+m[3]:new Date().getFullYear();
+    if(!m[3]&&new Date(yr,mon,day)<new Date(new Date().toDateString())) yr++;
+    let out=cut(rest,m.index,m[0].length);
+    out=out.replace(new RegExp("\\b(?:this\\s+)?(?:next\\s+)?(?:(?:on|at)\\s+)?(?:"+WD_RE+")\\b,?","i")," "); // drop a redundant weekday
+    return {due:ymd(new Date(yr,mon,day)),rest:out,mon,day,yr};
+  }
+  if(allowRelative){
+    const wd=rest.match(new RegExp("\\b(?:this\\s+)?(next\\s+)?(?:(?:on|at)\\s+)?("+WD_RE+")\\b","i"));
+    if(wd){ const key=wd[2].toLowerCase().substring(0,3),target=WEEKDAYS[key],cur=new Date().getDay();
+      let delta=(target-cur+7)%7; if(delta===0)delta=7; if(wd[1])delta+=7;
+      const d=new Date(); d.setDate(d.getDate()+delta);
+      return {due:ymd(d),rest:cut(rest,wd.index,wd[0].length)};
     }
   }
-  // Tidy up leftover spaces / stray commas from stripped date & time tokens (kept conservative so real words like a trailing "on" survive).
-  title=title.replace(/\s{2,}/g," ").replace(/\s+,/g,",").replace(/,\s*,/g,",").replace(/\b(on|at|by)\s+,/gi,",").replace(/\s{2,}/g," ").replace(/^[\s,\-–—]+|[\s,\-–—]+$/g,"").trim();
-  if (!title) title=raw.trim();
-  if (noDate) due=DUE_TBD;
-  return {title, due, time, endTime};
+  return {due:null,rest};
+}
+const tidyTitle=s=>s.replace(/[•*]/g," ").replace(/\s{2,}/g," ").replace(/\s+,/g,",").replace(/,\s*,/g,",")
+  .replace(/\b(on|at|by|from)\s*,/gi,",").replace(/\s{2,}/g," ").replace(/^[\s,;:\-–—]+|[\s,;:\-–—]+$/g,"").trim();
+// Labelled fields in a pasted blurb ("Club Fest · Dates: … · Time: …"). Pasting into an input flattens
+// the newlines, so we split on the labels themselves rather than on line breaks.
+const FIELD_RE=/\s*[•*\-–—]?\s*\b(dates?|time|times|when|hours?|location|where|place|venue|room|cost|price|rsvp|contact|notes?|details?|info)\s*:\s*/gi;
+
+const parseNL = raw => {
+  const src = fuzzDateWords(String(raw||"").replace(/[\r\n]+/g," • ").trim());
+
+  // ── Structured paste: title first, then "Dates:" / "Time:" / "Location:" fields ──
+  const segs=[]; let last=0, lab=null, mm; FIELD_RE.lastIndex=0;
+  while((mm=FIELD_RE.exec(src))!==null){ segs.push({lab,text:src.slice(last,mm.index)}); lab=mm[1].toLowerCase(); last=FIELD_RE.lastIndex; }
+  segs.push({lab,text:src.slice(last)});
+  if(segs.length>1 && segs[0].text.trim()){
+    const pick=re=>segs.filter(s=>s.lab&&re.test(s.lab)).map(s=>s.text).join(" ").trim();
+    const dateTxt=pick(/^dates?$/), timeTxt=pick(/^(times?|when|hours?)$/);
+    let titleTxt=segs[0].text, time=null, endTime=null, due=null, spanEnd=null;
+    if(timeTxt){ const r=grabTime(timeTxt); time=r.time; endTime=r.endTime; }
+    else { const r=grabTime(titleTxt); time=r.time; endTime=r.endTime; titleTxt=r.rest; }
+    if(dateTxt){
+      const d1=grabDate(dateTxt); due=d1.due;
+      if(due){ // "Sept 14 – Sept 17" or "Sept 14–17" → remember the closing day
+        const d2=grabDate(d1.rest,{allowRelative:false});
+        if(d2.due&&d2.due>due) spanEnd=d2.due;
+        else { const dm=d1.rest.match(/^\s*(?:[-–—]|to|through|thru|until)\s*(\d{1,2})(?!\d)/i);
+               if(dm&&d1.mon!=null){ const dd=+dm[1]; if(dd>d1.day&&dd<=31) spanEnd=ymd(new Date(d1.yr,d1.mon,dd)); } }
+      }
+    } else { const r=grabDate(titleTxt); due=r.due; titleTxt=r.rest; }
+    const extra=segs.filter(s=>s.lab&&!/^(dates?|times?|when|hours?)$/.test(s.lab)&&s.text.trim())
+      .map(s=>`${s.lab.charAt(0).toUpperCase()+s.lab.slice(1)}: ${tidyTitle(s.text)}`).join("\n");
+    return {title:tidyTitle(titleTxt)||String(raw).trim(), due, time, endTime, spanEnd, extra};
+  }
+
+  // ── Plain sentence ──
+  let title=src, due=null, time=null, endTime=null, noDate=false;
+  const nd=title.match(/(^|[^a-z0-9])(tbd|tba|t\.b\.[da]\.?|to be decided|to be determined|to be announced|date unknown|unknown date|unknown|no date yet|no date|someday)($|[^a-z0-9])/i);
+  if(nd){ noDate=true; title=title.replace(nd[2],""); }
+  const t=grabTime(title); time=t.time; endTime=t.endTime; title=t.rest;
+  const d=grabDate(title); due=d.due; title=d.rest; if(d.night&&!time) time="20:00";
+  title=tidyTitle(title);
+  if(!title) title=String(raw).trim();
+  if(noDate) due=DUE_TBD;
+  return {title, due, time, endTime, spanEnd:null, extra:""};
 };
 
 // Re-parse an edited task title: a typed date/time reschedules it, a typed list name re-files it.
@@ -528,6 +609,12 @@ export default function Freely() {
   useEffect(()=>{ focusRef.current=focusTask; },[focusTask]);
   const [navOrg, setNavOrg] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_navorg")||"null"); }catch{ return null; } });
   const [hiddenTabs, setHiddenTabs] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_hidden_tabs")||"[]"); }catch{ return []; } });
+  // Sidebar order + hidden tabs + sort choice ride along with the gamification row so every device agrees.
+  // Last write wins, decided by the `at` stamp saved next to them.
+  const [sortMode, setSortMode] = useState(()=>{ const v=localStorage.getItem("fs_sort")||"due"; return v==="smart"?"manual":v; });
+  useEffect(()=>{ try{ localStorage.setItem("fs_sort",sortMode); }catch{} },[sortMode]);
+  const prefsAtRef = useRef(Number(localStorage.getItem("fs_prefs_at")||0));
+  const prefsReadyRef = useRef(false);
   useEffect(()=>{ try{ localStorage.setItem("fs_hidden_tabs",JSON.stringify(hiddenTabs)); }catch{} },[hiddenTabs]);
   const [sGroups,setSGroups]=useState([]);   // teams I'm in (chat + manage): [{id,name,icon,created_by,members:[emails]}]
   const [allGroups,setAllGroups]=useState([]); // every team I can see — used so you can assign to a team you're not on
@@ -693,6 +780,7 @@ export default function Freely() {
         isLoadingData.current=true;
         Promise.all([db.loadTasks(),db.loadCanvas(user.id),db.loadNotes(user.id)])
           .then(([t,c,n])=>{setTasks(t);setCanvasNotes(c);setNotes(n);setTimeout(()=>{isLoadingData.current=false;},200);});
+        db.loadGami(user.id).then(adoptPrefs).catch(()=>{}); // pick up a sidebar re-order made on another device
       }
     };
     document.addEventListener("visibilitychange",onVisible);
@@ -716,15 +804,40 @@ export default function Freely() {
       let st=g.streak||0;
       if(g.last_active && g.last_active!==tod() && g.last_active!==yest) st=0;
       setStreak(st); setXp(g.xp||0);
+      adoptPrefs(g);
     })();
     return ()=>{cancelled=true;};
   },[user]);
+
+  // Take the server's sidebar order / hidden tabs / sort when they were saved more recently than this device's.
+  const adoptPrefs=useCallback(g=>{
+    const p=g&&g.prefs;
+    if(!p||typeof p!=="object") return;
+    if(!((p.at||0)>prefsAtRef.current)) return;
+    prefsAtRef.current=p.at; try{ localStorage.setItem("fs_prefs_at",String(p.at)); }catch{}
+    if(p.navOrg!==undefined) setNavOrg(p.navOrg);
+    if(Array.isArray(p.hiddenTabs)) setHiddenTabs(p.hiddenTabs);
+    if(p.sort) setSortMode(p.sort==="smart"?"manual":p.sort);
+  },[]);
 
   useEffect(()=>{
     if(!user) return;
     const t=setTimeout(()=>{ db.saveGami(user.id,{xp,streak,lastActive:lastActiveRef.current,awarded:[...awardedRef.current]}).catch(()=>{}); },1200);
     return ()=>clearTimeout(t);
   },[xp,streak,user]);
+
+  // Push layout prefs up whenever they change here (skipping the first run, which is just the load).
+  useEffect(()=>{ prefsReadyRef.current=false; },[user]);
+  useEffect(()=>{
+    if(!user) return;
+    if(!prefsReadyRef.current){ prefsReadyRef.current=true; return; }
+    const t=setTimeout(()=>{
+      const at=Date.now(); prefsAtRef.current=at; try{ localStorage.setItem("fs_prefs_at",String(at)); }catch{}
+      db.saveGami(user.id,{xp,streak,lastActive:lastActiveRef.current,awarded:[...awardedRef.current],prefs:{navOrg,hiddenTabs,sort:sortMode,at}}).catch(()=>{});
+    },900);
+    return ()=>clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[navOrg,hiddenTabs,sortMode,user]);
 
   const markActiveDay = useCallback(()=>{
     const today=tod();
@@ -742,7 +855,7 @@ export default function Freely() {
 
   const addTask = useCallback(()=>{
     if (!input.trim()) return;
-    let {title,due:parsed,time,endTime}=parseNL(input);
+    let {title,due:parsed,time,endTime,spanEnd,extra}=parseNL(input);
     let due=parsed||null;
     if(time && !due) due=tod();
     // Upcoming with no date typed → file it as "Date TBD" instead of silently guessing tomorrow.
@@ -756,7 +869,10 @@ export default function Freely() {
       else tagForTask=guessCat(title,cats);
     }
     if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"); ownerId=rest.slice(0,ci); tagForTask=rest.slice(ci+1); }
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="flagged",notes:"",color:null,subtasks:[],recurring:null,quadrant:null,remindAt,endTime:(time&&endTime)?endTime:null,attachments:[],owner:ownerId,position:Date.now(),mydayDate:view==="myday"?todStr:null};
+    // A pasted blurb can carry a multi-day span and extra fields (Location, Cost…) — keep them on the task's notes.
+    const abs=s=>new Date(s+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"});
+    const notes=[spanEnd&&due?`📅 Runs ${abs(due)} → ${abs(spanEnd)}`:"",extra||""].filter(Boolean).join("\n");
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="flagged",notes,color:null,subtasks:[],recurring:null,quadrant:null,remindAt,endTime:(time&&endTime)?endTime:null,attachments:[],owner:ownerId,position:Date.now(),mydayDate:view==="myday"?todStr:null};
     setTasks(ts=>[t,...ts]);
     setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
     if(view==="myday") markActiveDay();
@@ -853,10 +969,19 @@ export default function Freely() {
     if(user) db.updateTask(fromT.id,{position:newPos}).catch(console.error);
   };
 
-  const todStr=tod();
+  // "Today" follows the device clock: re-checked on a timer and whenever the app regains focus, so crossing
+  // midnight — or landing in a new time zone — moves the whole app onto the right day without a reload.
+  const [todStr,setTodStr]=useState(tod);
+  useEffect(()=>{
+    const tick=()=>setTodStr(cur=>{ const d=tod(); return cur===d?cur:d; });
+    const iv=setInterval(tick,20000);
+    document.addEventListener("visibilitychange",tick); window.addEventListener("focus",tick);
+    return ()=>{ clearInterval(iv); document.removeEventListener("visibilitychange",tick); window.removeEventListener("focus",tick); };
+  },[]);
   const myTasks=tasks.filter(t=>t.owner===user?.id);
   const myDay=myTasks.filter(t=>t.mydayDate===todStr);
-  const upcoming=myTasks.filter(t=>t.due&&t.due>todStr);
+  // Upcoming keeps anything still open, however overdue — a past deadline must never make a task vanish.
+  const upcoming=myTasks.filter(t=>t.due&&(!t.done||t.due>todStr));
   const completed=myTasks.filter(t=>t.done);
   const overdueTasks=myTasks.filter(t=>!t.done&&t.mydayDate&&t.mydayDate<todStr);
   const myDayAllDone=myDay.length>0&&myDay.every(t=>t.done);
@@ -1261,6 +1386,7 @@ export default function Freely() {
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar}/>}
           {(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={allGroups} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}
+              sortMode={sortMode} setSortMode={setSortMode} showToast={showToast}
               sharedInfo={sharedViewInfo} onLeaveShare={sharedViewInfo?()=>leaveShare(sharedViewInfo.owner,sharedViewInfo.folder):null}
               listManage={{ownedShares, onShare:shareFolder, onUnshare:unshareFolder, onDelete:deleteCat, setCats, onAssignAll:assignAllInLists, assignGroups:allGroups, onUploadIcon:uploadCatIcon}}/>
           )}
@@ -1414,12 +1540,12 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],sharedInfo=null,onLeaveShare=null,listManage=null}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],sharedInfo=null,onLeaveShare=null,listManage=null,sortMode="due",setSortMode,showToast}) {
   const [manageMode,setManageMode]=useState(null); // "edit" (name/icon/color) | "share" (share/assign)
   const [collabOpen,setCollabOpen]=useState(false);
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
-  const [sort,setSort]=useState("smart");
+  const sort=sortMode==="smart"?"manual":sortMode; // (older devices saved "smart" for the manual order)
   const [showSugg,setShowSugg]=useState(true);
   const [dragId,setDragId]=useState(null);
   const [drop,setDrop]=useState(null); // {id,before} — where the dragged card will land
@@ -1449,6 +1575,8 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const dayPct=dayTotal?Math.round(dayDone/dayTotal*100):0;
 
   const beginReorder=id=>{
+    // Hand-arranging only means something in "My order" — switch there rather than silently ignoring the drag.
+    if(sort!=="manual"){ setSortMode?.("manual"); showToast?.("Switched to “My order” so you can arrange freely ✋"); }
     didDragRef.current=true; dragIdRef.current=id; setDragId(id); navigator.vibrate?.(20);
     const t=tasks.find(x=>String(x.id)===String(id));
     const ghost=makeDragGhost(t?t.title:"Task",T.accent,T);
@@ -1535,11 +1663,11 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
               )}
             </div>
             {view!=="completed"&&(
-              <select value={sort} onChange={e=>setSort(e.target.value)} style={{fontSize:11,color:T.textMuted,background:T.surface2,border:`1px solid ${T.border}`,borderRadius:8,padding:"4px 8px",fontFamily:"'DM Sans',sans-serif",outline:"none",cursor:"pointer"}}>
-                <option value="smart">Smart sort</option>
+              <select value={sort} onChange={e=>setSortMode?.(e.target.value)} title="Your choice is remembered on every device" style={{fontSize:11,color:T.textMuted,background:T.surface2,border:`1px solid ${T.border}`,borderRadius:8,padding:"4px 8px",fontFamily:"'DM Sans',sans-serif",outline:"none",cursor:"pointer"}}>
                 <option value="due">By due date</option>
                 <option value="priority">By priority</option>
                 <option value="az">A → Z</option>
+                <option value="manual">My order (drag)</option>
               </select>
             )}
           </div>
@@ -1662,14 +1790,32 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           </div>
         )}
         <div style={{display:"flex",flexDirection:"column",gap:4}}>
-          {sortList(show.filter(t=>!t.done)).map(task=>(
-            <Fragment key={task.id}>
-              {drop?.id===String(task.id)&&drop.before&&<DropLine T={T}/>}
-              <TCard task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id}
-                onDown={onCardDown} onGrip={sort==="smart"?gripDown:undefined} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true} onToggleMyDay={onToggleMyDay} myEmail={myEmail}/>
-              {drop?.id===String(task.id)&&!drop.before&&<DropLine T={T}/>}
-            </Fragment>
-          ))}
+          {(()=>{
+            const open=sortList(show.filter(t=>!t.done));
+            const isLate=t=>t.due&&!isTbd(t.due)&&t.due<todStr;
+            // A missed deadline floats to the top of Upcoming instead of getting buried (or looking lost).
+            const late=view==="upcoming"?open.filter(isLate):[];
+            const rest=late.length?open.filter(t=>!isLate(t)):open;
+            const card=task=>(
+              <Fragment key={task.id}>
+                {drop?.id===String(task.id)&&drop.before&&<DropLine T={T}/>}
+                <TCard task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id}
+                  onDown={onCardDown} onGrip={gripDown} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true} onToggleMyDay={onToggleMyDay} myEmail={myEmail}/>
+                {drop?.id===String(task.id)&&!drop.before&&<DropLine T={T}/>}
+              </Fragment>
+            );
+            return (<>
+              {late.length>0&&<>
+                <div style={{fontSize:10,color:T.danger,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",padding:"2px 2px 4px",display:"flex",alignItems:"center",gap:5}}>
+                  ⚠ Overdue · {late.length}
+                  <button onClick={()=>{ late.forEach(t=>updateTask(t.id,{due:todStr})); }} style={{marginLeft:"auto",background:"none",border:`1px solid ${T.danger}44`,borderRadius:7,padding:"2px 9px",cursor:"pointer",color:T.danger,fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif",textTransform:"none",letterSpacing:0}}>Move to today</button>
+                </div>
+                {late.map(card)}
+                <div style={{height:1,background:T.border,margin:"8px 2px 4px"}}/>
+              </>}
+              {rest.map(card)}
+            </>);
+          })()}
           {show.filter(t=>t.done).length>0&&<>
             <div style={{fontSize:10,color:T.textMuted,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",padding:"10px 2px 4px",display:"flex",alignItems:"center",gap:5}}>
               <Ico n="check" s={11} c={T.textMuted}/> Completed · {show.filter(t=>t.done).length}
@@ -2058,7 +2204,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
   const onNoteDown=(e,task)=>{
     if(e.target.closest("button")||e.target.tagName==="TEXTAREA") return;
     didDragNote.current=false;
-    const sx=e.clientX,sy=e.clientY,type=e.pointerType; let mode=null,hold=null,ldx=0,ldy=0;
+    const sx=e.clientX,sy=e.clientY,type=e.pointerType; let mode=null,hold=null,moved=0;
     const cleanup=()=>{ clearTimeout(hold); window.removeEventListener("pointermove",mv); window.removeEventListener("pointerup",up); window.removeEventListener("pointercancel",up); };
     const startDrag=()=>{ if(mode)return; mode="drag"; clearTimeout(hold); setDragId(task.id); navigator.vibrate?.(20);
       const ghost=makeDragGhost(task.title,QUAD[task.quadrant]?.color||T.accent,T);
@@ -2092,15 +2238,15 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
       );
     };
     const mv=ev=>{
-      const dx=ev.clientX-sx,dy=ev.clientY-sy; ldx=dx; ldy=dy;
-      if(mode==="swipe"){ didDragNote.current=true;
-        // Far past the swipe's travel AND moving vertically → hand over to drag (a pure fling stays a swipe).
-        if(Math.abs(dx)>180&&Math.abs(dy)>14){ mode=null; setSwipeId(null); setSwipeX(0); startDrag(); return; }
-        setSwipeX(Math.max(-95,Math.min(dx,95))); return; }
+      const dx=ev.clientX-sx,dy=ev.clientY-sy;
+      moved=Math.max(moved,Math.hypot(dx,dy));
+      if(mode==="swipe"){ didDragNote.current=true; setSwipeX(Math.max(-95,Math.min(dx,95))); return; }
       if(mode) return;
-      if(Math.abs(dx)>6&&Math.abs(dx)>Math.abs(dy)){ mode="swipe"; clearTimeout(hold); setSwipeId(task.id); setSwipeX(dx); }
+      // Moving at all cancels the long-press: from here the gesture can only be a swipe (or a scroll).
+      if(moved>8) clearTimeout(hold);
+      if(Math.abs(dx)>8&&Math.abs(dx)>Math.abs(dy)){ mode="swipe"; setSwipeId(task.id); setSwipeX(dx); }
       else if(type==="mouse"&&(Math.abs(dx)>4||Math.abs(dy)>4)){ startDrag(); }
-      // touch vertical: the card is pan-y now, so the quadrant scrolls naturally; drag comes ONLY from a still long-press
+      // touch vertical: the card is pan-y, so the quadrant just scrolls
     };
     const up=ev=>{
       if(mode==="swipe"){ const dx=ev.clientX-sx; cleanup(); setSwipeId(null); setSwipeX(0);
@@ -2110,12 +2256,9 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
       }
       cleanup();
     };
-    // Drag starts ONLY from a truly still long-press (finger within 6px when the timer fires).
-    // Any sideways motion at fire time = swipe; any other motion = the gesture was a scroll, do nothing.
-    if(type!=="mouse") hold=setTimeout(()=>{ if(mode) return;
-      if(Math.abs(ldx)>Math.abs(ldy)&&Math.abs(ldx)>2){ mode="swipe"; setSwipeId(task.id); setSwipeX(ldx); }
-      else if(Math.abs(ldx)<6&&Math.abs(ldy)<6) startDrag();
-    },280);
+    // Hold still (any pointer, finger or mouse) → drag. Once you've moved 8px it can never become a drag,
+    // so a swipe — however long or slanted — always stays a swipe.
+    hold=setTimeout(()=>{ if(!mode&&moved<=8) startDrag(); },300);
     window.addEventListener("pointermove",mv); window.addEventListener("pointerup",up); window.addEventListener("pointercancel",up);
   };
   const openNote=task=>{ if(didDragNote.current){ didDragNote.current=false; return; } onOpenTask?.(task); };
