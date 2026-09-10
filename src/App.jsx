@@ -191,7 +191,10 @@ const isTbd = d => d === DUE_TBD;
 const fmtDate = s => {
   if (!s) return null;
   if (isTbd(s)) return "Date TBD";
-  const d = new Date(s+"T12:00:00"), t = new Date(); t.setHours(0,0,0,0);
+  // Both sides at LOCAL midnight — comparing a noon due-date against midnight today shifted every
+  // label a day ("due yesterday" read as "Today"). Whole-day steps also keep this DST-proof.
+  const [yy,mo,dd] = s.split("-").map(Number);
+  const d = new Date(yy, mo-1, dd), t = new Date(); t.setHours(0,0,0,0);
   const diff = Math.round((d-t)/86400000);
   if (diff<0) return `${Math.abs(diff)}d overdue`;
   if (diff===0) return "Today"; if (diff===1) return "Tomorrow";
@@ -240,11 +243,13 @@ const hhmm=(t,ap)=>{ let h=t.h,m=t.m; ap=(ap||"").toLowerCase().replace(/[.\s]/g
 // A number that may be a time, plus an optional am/pm that must not run into a word ("2 amazing" isn't 2am).
 const TIME_TOK="(\\d{1,2}\\s*:{1,2}\\s*\\d{2}|\\d{3,4}|\\d{1,2})\\s*(a\\.?m\\.?|p\\.?m\\.?)?(?![a-z])";
 const TIME_CUE="(\\bfrom\\s+|\\bat\\s+|\\bby\\s+|@\\s*|\\btimes?\\s*:\\s*|\\bwhen\\s*:\\s*|\\bhours?\\s*:\\s*)?";
+// A zone written right after the clock ("9 PM EDT") is swallowed with it instead of littering the title.
+const TIME_TZ="(?:\\s*\\b(?:E[DS]T|C[DS]T|M[DS]T|P[DS]T|AK[DS]T|HST|GMT|UTC|BST|CES?T|IST|JST|AES?T|AEDT|ET|PT|CT|MT)\\b)?";
 // Pull a time (and an end time) out of `text` → {time,endTime,rest}. Tolerates missing/extra spaces,
 // a meridiem on either end or neither, stray colons, and 24-hour "1840".
 function grabTime(text){
   let rest=text||"", m;
-  const rangeRe=new RegExp(TIME_CUE+"\\b"+TIME_TOK+"\\s*(?:[-–—~]|to|until|til{1,2}|through|thru)\\s*"+TIME_TOK,"gi");
+  const rangeRe=new RegExp(TIME_CUE+"\\b"+TIME_TOK+"\\s*(?:[-~]|to|until|til{1,2}|through|thru)\\s*"+TIME_TOK+TIME_TZ,"gi");
   while((m=rangeRe.exec(rest))!==null){
     const A=timeTok(m[2]), B=timeTok(m[4]); let apA=m[3]||""; const apB=m[5]||"";
     // A bare "14-17" is a date range, not a time — demand some real time signal.
@@ -257,7 +262,7 @@ function grabTime(text){
     if(!s) continue;
     return {time:s,endTime:(e&&e!==s)?e:null,rest:rest.slice(0,m.index)+" "+rest.slice(m.index+m[0].length)};
   }
-  const oneRe=new RegExp(TIME_CUE+"\\b"+TIME_TOK,"gi");
+  const oneRe=new RegExp(TIME_CUE+"\\b"+TIME_TOK+TIME_TZ,"gi");
   while((m=oneRe.exec(rest))!==null){
     const A=timeTok(m[2]), ap=m[3]||"", cue=!!m[1];
     let h=A.h, mn=A.m, ok=false;
@@ -303,14 +308,19 @@ function grabDate(text,{allowRelative=true}={}){
   }
   return {due:null,rest};
 }
-const tidyTitle=s=>s.replace(/[•*]/g," ").replace(/\s{2,}/g," ").replace(/\s+,/g,",").replace(/,\s*,/g,",")
+const tidyTitle=s=>s.replace(/[•*·]/g," ").replace(/\s{2,}/g," ").replace(/\s+,/g,",").replace(/,\s*,/g,",")
   .replace(/\b(on|at|by|from)\s*,/gi,",").replace(/\s{2,}/g," ").replace(/^[\s,;:\-–—]+|[\s,;:\-–—]+$/g,"").trim();
 // Labelled fields in a pasted blurb ("Club Fest · Dates: … · Time: …"). Pasting into an input flattens
 // the newlines, so we split on the labels themselves rather than on line breaks.
 const FIELD_RE=/\s*[•*\-–—]?\s*\b(dates?|time|times|when|hours?|location|where|place|venue|room|cost|price|rsvp|contact|notes?|details?|info)\s*:\s*/gi;
 
 const parseNL = raw => {
-  const src = fuzzDateWords(String(raw||"").replace(/[\r\n]+/g," • ").trim());
+  // Pasted listings carry exotic punctuation: zero-width spaces, and dashes that aren't the plain hyphen
+  // ("4 PM − 5 PM"). Normalise both, or a perfectly good time range parses as a lone start time.
+  const src = fuzzDateWords(String(raw||"")
+    .replace(/[\u200B-\u200D\uFEFF]/g,"")
+    .replace(/[\u2010-\u2015\u2212\u2043\uFE58\uFE63\uFF0D]/g,"-")
+    .replace(/[\r\n]+/g," • ").trim());
 
   // ── Structured paste: title first, then "Dates:" / "Time:" / "Location:" fields ──
   const segs=[]; let last=0, lab=null, mm; FIELD_RE.lastIndex=0;
