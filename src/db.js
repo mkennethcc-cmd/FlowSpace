@@ -59,10 +59,17 @@ export const db = {
     if (p.attachments !== undefined) u.attachments = p.attachments;
     if (p.position !== undefined) u.position = p.position;
     if (p.mydayDate !== undefined) u.myday_date = p.mydayDate || null;
-    if (Object.keys(u).length) await supabase.from("tasks").update(u).eq("id", id);
+    if (!Object.keys(u).length) return { saved: true };
+    // A write the database refuses does NOT throw — it simply matches no rows. Ask for the changed
+    // row back so a silently-dropped edit can be reported instead of lingering on screen as a lie.
+    const { data, error } = await supabase.from("tasks").update(u).eq("id", id).select("id");
+    if (error) throw error;
+    return { saved: !Array.isArray(data) || data.length > 0 };
   },
   async deleteTask(id) {
-    await supabase.from("tasks").delete().eq("id", id);
+    const { data, error } = await supabase.from("tasks").delete().eq("id", id).select("id");
+    if (error) throw error;
+    return { deleted: !Array.isArray(data) || data.length > 0 };
   },
 
   async uploadAttachment(file, uid, taskId) {

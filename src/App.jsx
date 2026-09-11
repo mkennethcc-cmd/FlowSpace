@@ -942,7 +942,9 @@ export default function Freely() {
     const t=tasks.find(x=>x.id===id);
     if(t&&!canDeleteTask(t)){ showToast("You don't have permission to delete this shared task"); return; }
     setTasks(ts=>ts.filter(x=>x.id!==id)); if(selTask?.id===id)setSelTask(null);
-    if(user)db.deleteTask(id).catch(console.error);
+    if(user)db.deleteTask(id)
+      .then(r=>{ if(r&&r.deleted===false) reportDroppedWrite("That task didn't delete — you may not have permission to remove it."); })
+      .catch(console.error);
     if(t) showToast("Task deleted", ()=>{ setTasks(ts=>[t,...ts]); if(user) db.insertTask(t,t.owner||user.id).catch(console.error); setToast(null); });
   };
   const duplicateTask = task=>{ const c={...task,id:crypto.randomUUID(),done:false,title:task.title+" (copy)",attachments:[]}; setTasks(ts=>[c,...ts]); if(user) db.insertTask(c,user.id).catch(console.error); showToast("Task duplicated"); };
@@ -983,7 +985,25 @@ export default function Freely() {
     }catch{ showToast("Import failed — invalid file"); } };
     reader.readAsText(file);
   };
-  const updateTask = (id,patch)=>{setTasks(ts=>ts.map(t=>t.id===id?{...t,...patch}:t));if(selTask?.id===id)setSelTask(s=>({...s,...patch}));if(user)db.updateTask(id,patch).catch(console.error);};
+  // Edits show instantly and reach the server a moment later. If the server refuses one it changes
+  // nothing and raises no error — so the screen would quietly disagree with what is really stored.
+  // Say so, and reload the truth rather than leaving a change that only exists on this device.
+  const lastDropRef=useRef(0);
+  const reportDroppedWrite=useCallback(msg=>{
+    if(Date.now()-lastDropRef.current<4000) return;   // one warning per burst, not one per task
+    lastDropRef.current=Date.now();
+    showToast(msg);
+    if(user) db.loadTasks().then(setTasks).catch(()=>{});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[user]);
+
+  const updateTask = (id,patch)=>{
+    setTasks(ts=>ts.map(t=>t.id===id?{...t,...patch}:t));
+    if(selTask?.id===id)setSelTask(s=>({...s,...patch}));
+    if(user)db.updateTask(id,patch)
+      .then(r=>{ if(r&&r.saved===false) reportDroppedWrite("That change didn't save — you may not have permission to edit this shared task."); })
+      .catch(console.error);
+  };
   // Drop-position aware reorder: `before` says whether the card lands above or below the target
   // (from the pointer's position over the target's midpoint) — so first/last slots work too.
   const reorderTasks = (fromId,toId,before)=>{
