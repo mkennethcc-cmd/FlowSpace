@@ -623,6 +623,9 @@ export default function Freely() {
   // Last write wins, decided by the `at` stamp saved next to them.
   const [sortMode, setSortMode] = useState(()=>{ const v=localStorage.getItem("fs_sort")||"due"; return v==="smart"?"manual":v; });
   useEffect(()=>{ try{ localStorage.setItem("fs_sort",sortMode); }catch{} },[sortMode]);
+  // New tasks join the END of the list, the way a to-do list is normally written. Settings can flip it back.
+  const [newAtBottom, setNewAtBottom] = useState(()=>localStorage.getItem("fs_new_bottom")!=="0");
+  useEffect(()=>{ try{ localStorage.setItem("fs_new_bottom",newAtBottom?"1":"0"); }catch{} },[newAtBottom]);
   const prefsAtRef = useRef(Number(localStorage.getItem("fs_prefs_at")||0));
   const prefsReadyRef = useRef(false);
   useEffect(()=>{ try{ localStorage.setItem("fs_hidden_tabs",JSON.stringify(hiddenTabs)); }catch{} },[hiddenTabs]);
@@ -828,6 +831,7 @@ export default function Freely() {
     if(p.navOrg!==undefined) setNavOrg(p.navOrg);
     if(Array.isArray(p.hiddenTabs)) setHiddenTabs(p.hiddenTabs);
     if(p.sort) setSortMode(p.sort==="smart"?"manual":p.sort);
+    if(typeof p.newAtBottom==="boolean") setNewAtBottom(p.newAtBottom);
   },[]);
 
   useEffect(()=>{
@@ -843,11 +847,11 @@ export default function Freely() {
     if(!prefsReadyRef.current){ prefsReadyRef.current=true; return; }
     const t=setTimeout(()=>{
       const at=Date.now(); prefsAtRef.current=at; try{ localStorage.setItem("fs_prefs_at",String(at)); }catch{}
-      db.saveGami(user.id,{xp,streak,lastActive:lastActiveRef.current,awarded:[...awardedRef.current],prefs:{navOrg,hiddenTabs,sort:sortMode,at}}).catch(()=>{});
+      db.saveGami(user.id,{xp,streak,lastActive:lastActiveRef.current,awarded:[...awardedRef.current],prefs:{navOrg,hiddenTabs,sort:sortMode,newAtBottom,at}}).catch(()=>{});
     },900);
     return ()=>clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[navOrg,hiddenTabs,sortMode,user]);
+  },[navOrg,hiddenTabs,sortMode,newAtBottom,user]);
 
   const markActiveDay = useCallback(()=>{
     const today=tod();
@@ -882,13 +886,17 @@ export default function Freely() {
     // A pasted blurb can carry a multi-day span and extra fields (Location, Cost…) — keep them on the task's notes.
     const abs=s=>new Date(s+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"});
     const notes=[spanEnd&&due?`📅 Runs ${abs(due)} → ${abs(spanEnd)}`:"",extra||""].filter(Boolean).join("\n");
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="flagged",notes,color:null,subtasks:[],recurring:null,quadrant:null,remindAt,endTime:(time&&endTime)?endTime:null,attachments:[],owner:ownerId,position:Date.now(),mydayDate:view==="myday"?todStr:null};
+    // Cards are ordered by `position`, highest first — so "add to the bottom" means going below the current lowest.
+    const openPos=tasks.filter(x=>!x.done).map(x=>x.position||0);
+    const position=(newAtBottom&&openPos.length)?Math.min(...openPos)-1000:Date.now();
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="flagged",notes,color:null,subtasks:[],recurring:null,quadrant:null,remindAt,endTime:(time&&endTime)?endTime:null,attachments:[],owner:ownerId,position,mydayDate:view==="myday"?todStr:null};
     setTasks(ts=>[t,...ts]);
     setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
     if(view==="myday") markActiveDay();
     setTimeout(()=>setNewAnim(null),600);
     if(user) db.insertTask(t,ownerId).catch(e=>{ setTasks(ts=>ts.filter(x=>x.id!==t.id)); showToast("Couldn't save task — database needs the latest SQL. ("+(e.message||e)+")"); });
-  },[input,view,user,cats,awardXp,markActiveDay]);
+  // (todStr is declared further down; it is read inside the callback, never in these deps)
+  },[input,view,user,cats,awardXp,markActiveDay,tasks,newAtBottom]);
 
   const toggleTask = id=>{
     const task=tasks.find(t=>t.id===id);
@@ -1105,7 +1113,7 @@ export default function Freely() {
       const m=await db.sendMessage(user.id,user.email,peer,body.trim());
       setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,m]);
       if(firstContact) showToast(`Friend request sent to ${nickOf(peer).split("@")[0]} 🤝 — they'll see it as a new chat.`);
-    }catch(e){ showToast(setupError(e)?"⚙️ Messaging needs the one-time database setup — run the SQL in Supabase, then reload.":/policy|violates/i.test(e.message||"")?"They haven't accepted your request yet — one message at a time until they do.":"Message failed: "+(e.message||e)); }
+    }catch(e){ showToast(setupError(e)?"⚙️ One-time setup needed: open Supabase → SQL Editor and run supabase/collab-setup.sql, then reload.":/policy|violates/i.test(e.message||"")?"They haven't accepted your request yet — one message at a time until they do.":"Message failed: "+(e.message||e)); }
   };
   const openDM=peer=>{ setDmPeer(peer); setView("messages"); setSideOpen(false);
     if(typeof peer==="string"&&!peer.startsWith("g:")){
@@ -1123,8 +1131,8 @@ export default function Freely() {
   const answerReq=(id,status)=>{ setChatReqs(rs=>rs.map(r=>r.id===id?{...r,status}:r)); db.answerChatReq(id,status).catch(()=>{}); if(status==="accepted") showToast("Request accepted — you're connected 🤝"); };
   const pickAvatar=em=>{ setMyAvatar(em); try{ localStorage.setItem("fs_avatar",em); const a=JSON.parse(localStorage.getItem("fs_avatars")||"{}"); a[meEmail]=em; localStorage.setItem("fs_avatars",JSON.stringify(a)); }catch{} setProfRows(rs=>rs.map(r=>r.email===meEmail?{...r,avatar:em}:r)); if(user) db.upsertProfile(user.id,user.email,em).catch(()=>{}); showToast("Avatar updated "+em); };
   // Teams: create / any member adds members (accounts only) / leave-remove / creator deletes.
-  const setupError=e=>/schema cache|find the table|does not exist|relation .* does not exist/i.test(e?.message||"");
-  const createTeam=async name=>{ if(!user||!name.trim()) return; try{ await db.createGroup(user.id,name.trim(),guessIcon(name,"👥"),user.email); refreshGroups(); showToast(`Team "${name.trim()}" created ✓`); }catch(e){ showToast(setupError(e)?"⚙️ Teams need a one-time database setup — run the SQL in Supabase, then reload. (Ask me for the exact steps.)":"Couldn't create team: "+(e.message||e)); } };
+  const setupError=e=>/schema cache|find the table|does not exist|infinite recursion|violates row-level security/i.test(e?.message||"");
+  const createTeam=async name=>{ if(!user||!name.trim()) return; try{ await db.createGroup(user.id,name.trim(),guessIcon(name,"👥"),user.email); refreshGroups(); showToast(`Team "${name.trim()}" created ✓`); }catch(e){ showToast(setupError(e)?"⚙️ One-time setup needed: open Supabase → SQL Editor and run supabase/collab-setup.sql, then reload.":"Couldn't create team: "+(e.message||e)); } };
   const addTeamMember=async(gid,emRaw)=>{ const em=(emRaw||"").trim().toLowerCase(); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ showToast("Enter a valid email"); return; }
     if(em===meEmail){ showToast("You're already in this team 🙂"); return; }
     try{
@@ -1393,7 +1401,7 @@ export default function Freely() {
           {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} showToast={showToast} onCheckin={key=>{awardXp("habit-"+key+"-"+todStr,15);markActiveDay();navigator.vibrate?.(20);}}/>}
           {view==="calendar"&&<CalendarView T={T} tasks={myTasks} cats={cats} todStr={todStr} onToggle={toggleTask} onToggleStep={toggleStep} onQuickAdd={addCalendarTask} onMoveTask={moveTaskDay} onMoveStep={moveStep} onOpenTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={dayStats} todStr={todStr}/>}
-          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar}/>}
+          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar} newAtBottom={newAtBottom} setNewAtBottom={setNewAtBottom}/>}
           {(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={allGroups} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}
               sortMode={sortMode} setSortMode={setSortMode} showToast={showToast}
@@ -1604,17 +1612,12 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   };
   // Swipe travel is capped short (±95). Pulling far past it AND moving vertically hands over to
   // reorder-drag — a pure horizontal fling (a fast delete/My-Day swipe) always stays a swipe.
-  const beginSwipe=(id,sx,sy)=>{
+  // Sideways is ONLY ever My Day / delete — a swipe never turns into a drag, however far it travels.
+  const beginSwipe=(id,sx)=>{
     didDragRef.current=true; setSwipeId(id); document.body.style.userSelect="none";
-    let switched=false;
     const done=()=>{ window.removeEventListener("pointermove",mv); window.removeEventListener("pointerup",up); window.removeEventListener("pointercancel",up); document.body.style.userSelect=""; };
-    const mv=ev=>{
-      const dx=ev.clientX-sx, dy=ev.clientY-(sy??0);
-      if(sy!=null && Math.abs(dx)>180 && Math.abs(dy)>14){ switched=true; done(); setSwipeId(null); setSwipeX(0); beginReorder(id); return; }
-      setSwipeX(Math.max(-95,Math.min(dx,95)));
-    };
+    const mv=ev=>setSwipeX(Math.max(-95,Math.min(ev.clientX-sx,95)));
     const up=ev=>{
-      if(switched) return;
       done();
       const dx=ev.clientX-sx;
       if(dx>60){ navigator.vibrate?.(20); onToggleMyDay?.(id); }
@@ -1630,23 +1633,23 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
     if(e.target.closest("button,[data-grip]")) return;
     didDragRef.current=false;
     const sx=e.clientX, sy=e.clientY, type=e.pointerType;
-    let decided=false, timer=null, lastDx=0, lastDy=0;
+    let decided=false, timer=null, moved=0;
     const teardown=()=>{ clearTimeout(timer); window.removeEventListener("pointermove",probe); window.removeEventListener("pointerup",end); window.removeEventListener("pointercancel",end); };
+    // Two ways to pick a card up: hold it still, or pull it ALONG the list (vertically). Pulling ACROSS
+    // the list is always My Day / delete, so the two gestures can never be mistaken for each other.
     const probe=ev=>{
       if(decided) return;
-      const dx=ev.clientX-sx, dy=ev.clientY-sy; lastDx=dx; lastDy=dy;
-      if(Math.abs(dx)<6 && Math.abs(dy)<6) return;
+      const dx=ev.clientX-sx, dy=ev.clientY-sy;
+      moved=Math.max(moved,Math.hypot(dx,dy));
+      if(moved>8) clearTimeout(timer);            // it moved, so it is no longer a long-press
+      if(Math.abs(dx)<8 && Math.abs(dy)<8) return;
       decided=true; teardown();
-      if(Math.abs(dx)>Math.abs(dy)) beginSwipe(id,sx,sy); // horizontal → swipe
-      else if(type==="mouse") beginReorder(id);           // desktop vertical drag anywhere → reorder
-      // touch vertical: let the list scroll (reorder comes from the hold timer below)
+      if(Math.abs(dx)>Math.abs(dy)) beginSwipe(id,sx);  // across the list → My Day / delete
+      else if(type==="mouse") beginReorder(id);         // along the list → reorder
+      // touch + vertical belongs to the scroller; hold still to reorder by finger
     };
     const end=()=>teardown();
-    // Touch hold-STILL → reorder. Any sideways pull at fire time means swipe, not drag.
-    if(type!=="mouse") timer=setTimeout(()=>{ if(!decided){ decided=true; teardown();
-      if(Math.abs(lastDx)>Math.abs(lastDy)&&Math.abs(lastDx)>2) beginSwipe(id,sx,sy);
-      else beginReorder(id);
-    } }, 250);
+    timer=setTimeout(()=>{ if(!decided&&moved<=8){ decided=true; teardown(); beginReorder(id); } }, 250);
     window.addEventListener("pointermove",probe); window.addEventListener("pointerup",end); window.addEventListener("pointercancel",end);
   };
   const gripDown=(e,id)=>{ e.stopPropagation(); e.preventDefault(); beginReorder(id); };
@@ -2254,8 +2257,8 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
       if(mode) return;
       // Moving at all cancels the long-press: from here the gesture can only be a swipe (or a scroll).
       if(moved>8) clearTimeout(hold);
-      if(Math.abs(dx)>8&&Math.abs(dx)>Math.abs(dy)){ mode="swipe"; setSwipeId(task.id); setSwipeX(dx); }
-      else if(type==="mouse"&&(Math.abs(dx)>4||Math.abs(dy)>4)){ startDrag(); }
+      if(Math.abs(dx)>8&&Math.abs(dx)>Math.abs(dy)){ mode="swipe"; setSwipeId(task.id); setSwipeX(dx); } // across → My Day / delete
+      else if(type==="mouse"&&Math.abs(dy)>8&&Math.abs(dy)>=Math.abs(dx)){ startDrag(); }               // down/up → pick it up
       // touch vertical: the card is pan-y, so the quadrant just scrolls
     };
     const up=ev=>{
@@ -3487,8 +3490,11 @@ function SidebarCreate({T,mode,onClose,onCreateList,onCreateGroup,onUploadIcon})
 
 // Popup to manage a list or folder right from the sidebar: rename, recolor/re-icon, share (a folder shares all its lists), delete.
 // mode: "full" (sidebar ⋯) · "edit" (name/icon/color/delete only) · "share" (share + assign only).
-function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename,onShare,onUnshare,onDelete,onSetIcon,onSetColor,onAssignAll,assignGroups=[],onUploadIcon,autoFocusName=false,mode="full"}) {
-  const showEdit=mode!=="share", showShare=mode!=="edit";
+// One panel, two tabs — never both at once, so it fits a phone screen exactly like it fits a laptop.
+// `mode` only picks which tab opens first ("edit" from the ✎, "share" from the 🤝 button).
+function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename,onShare,onUnshare,onDelete,onSetIcon,onSetColor,onAssignAll,assignGroups=[],onUploadIcon,autoFocusName=false,mode="edit"}) {
+  const [tab,setTab]=useState(mode==="share"?"share":"edit");
+  const showEdit=tab==="edit", showShare=tab==="share";
   const [name,setName]=useState(target.name);
   const [email,setEmail]=useState("");
   const [perm,setPerm]=useState("edit");
@@ -3528,6 +3534,12 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
             <div style={{fontSize:10,color:T.textMuted}}>{isGroup?`Folder · ${childLists.length} list${childLists.length===1?"":"s"} inside`:"List"}</div>
           </div>
           <button onClick={onClose} style={{width:26,height:26,borderRadius:7,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={13}/></button>
+        </div>
+
+        <div style={{display:"flex",gap:6,marginBottom:14}}>
+          {[["edit","✎ Edit"],["share","🤝 Share & assign"]].map(([id,label])=>(
+            <button key={id} onClick={()=>setTab(id)} style={{flex:1,padding:"7px 0",borderRadius:9,border:`1px solid ${tab===id?T.accent:T.border}`,background:tab===id?T.accentGlow:"transparent",color:tab===id?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{label}</button>
+          ))}
         </div>
 
         {showEdit&&<>
@@ -3796,7 +3808,7 @@ function TeamsSettings({T,teams=[],myEmail,myId,knownPeople=[],onCreate,onAddMem
   );
 }
 
-function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSound,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon,onDeleteCat,deletedCats,onRestoreCat,onPurgeCat,navTabs=[],hiddenTabs=[],setHiddenTabs,knownPeople=[],teams=[],myEmail,myId,onTeamCreate,onTeamAddMember,onTeamRemoveMember,onTeamDelete,myAvatar,onPickAvatar}) {
+function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSound,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon,onDeleteCat,deletedCats,onRestoreCat,onPurgeCat,navTabs=[],hiddenTabs=[],setHiddenTabs,knownPeople=[],teams=[],myEmail,myId,onTeamCreate,onTeamAddMember,onTeamRemoveMember,onTeamDelete,myAvatar,onPickAvatar,newAtBottom,setNewAtBottom}) {
   const importRef=useRef(null);
   const iconFileRef=useRef(null);
   const soundFileRef=useRef(null);
@@ -3865,6 +3877,13 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
             <button key={t.id} onClick={()=>setHiddenTabs?.(h=>hidden?h.filter(x=>x!==t.id):[...h,t.id])} style={{padding:"5px 12px",borderRadius:20,border:`1px solid ${hidden?T.border:T.accent}`,background:hidden?"transparent":T.accentGlow,color:hidden?T.textMuted:T.accent,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif",textDecoration:hidden?"line-through":"none",opacity:hidden?.6:1}}>{hidden?"":"✓ "}{t.label}</button>
           );})}
         </div>
+      </div>
+
+      {/* Where a newly typed task lands */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"4px 16px 6px",marginBottom:14}}>
+        <Row label="Add new tasks to the bottom" desc={newAtBottom?"New tasks join the end of the list.":"New tasks appear at the top of the list."}>
+          <Toggle val={newAtBottom} onChange={setNewAtBottom}/>
+        </Row>
       </div>
 
       {/* My avatar — shown to teammates on chats and assigned tasks */}
