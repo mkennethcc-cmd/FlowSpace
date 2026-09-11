@@ -6,7 +6,7 @@ export const fromDbTask = r => ({
   tag: r.tag, due: r.due ? String(r.due).slice(0, 10) : null, starred: r.starred, notes: r.notes || "",
   color: r.color, subtasks: r.subtasks || [], recurring: r.recurring,
   quadrant: r.quadrant || null, remindAt: r.remind_at || null, endTime: r.time_end || null,
-  assignedTo: r.assigned_to || null,
+  assignedTo: r.assigned_to || null, assignPrivate: !!r.assign_private,
   attachments: r.attachments || [], owner: r.user_id,
   position: r.position != null ? r.position : (r.created_at ? new Date(r.created_at).getTime() : Date.now()),
   mydayDate: r.myday_date ? String(r.myday_date).slice(0, 10) : null,
@@ -42,6 +42,7 @@ export const db = {
       // Only send time_end / assigned_to when set — keeps inserts working on databases that haven't run those migrations yet.
       ...(t.endTime ? { time_end: t.endTime } : {}),
       ...(t.assignedTo ? { assigned_to: t.assignedTo } : {}),
+      ...(t.assignPrivate ? { assign_private: true } : {}),
     });
     if (error) throw error;
   },
@@ -54,6 +55,7 @@ export const db = {
     if (p.remindAt !== undefined) u.remind_at = p.remindAt || null;
     if (p.endTime !== undefined) u.time_end = p.endTime || null;
     if (p.assignedTo !== undefined) u.assigned_to = p.assignedTo || null;
+    if (p.assignPrivate !== undefined) u.assign_private = !!p.assignPrivate;
     if (p.attachments !== undefined) u.attachments = p.attachments;
     if (p.position !== undefined) u.position = p.position;
     if (p.mydayDate !== undefined) u.myday_date = p.mydayDate || null;
@@ -209,8 +211,9 @@ export const db = {
     if (e2) throw e2;
     return data;
   },
-  async addGroupMember(gid, email, by) {
-    const { error } = await supabase.from("group_members").insert({ group_id: gid, email: email.toLowerCase(), added_by: (by || "").toLowerCase() });
+  // role: "member" (full, reads team chat) or "assigner" (guest who may only assign work to the team)
+  async addGroupMember(gid, email, by, role) {
+    const { error } = await supabase.from("group_members").insert({ group_id: gid, email: email.toLowerCase(), added_by: (by || "").toLowerCase(), ...(role === "assigner" ? { role } : {}) });
     if (error && !/duplicate/i.test(error.message || "")) throw error;
   },
   async removeGroupMember(gid, email) {
