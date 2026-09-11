@@ -1393,8 +1393,10 @@ export default function Freely() {
             <span style={{fontSize:9,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:130}}>{user?.email}</span>
             <button onClick={()=>supabase.auth.signOut()} style={{fontSize:9,color:T.danger,background:"none",border:"none",cursor:"pointer",padding:"1px 4px",borderRadius:3,whiteSpace:"nowrap",fontFamily:"'DM Sans',sans-serif"}}>Sign out</button>
           </div>}
-          <div style={{display:"flex",gap:4}}>
+          <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"center"}}>
             {syncing&&<div style={{width:30,height:30,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{width:6,height:6,borderRadius:"50%",background:T.accent,animation:"pulse 1s infinite"}}/></div>}
+            {!sideOpen&&<SB T={T} onClick={()=>goView("settings")}><Ico n="cog" s={14} c={view==="settings"?T.accent:undefined}/></SB>}
+            {!sideOpen&&<SB T={T} onClick={()=>goView("analytics")}><Ico n="bar" s={14} c={view==="analytics"?T.accent:undefined}/></SB>}
             <SB T={T} onClick={()=>setShowSearch(s=>!s)}><Ico n="search" s={14}/></SB>
             <SB T={T} onClick={()=>setDark(d=>!d)}><Ico n={dark?"sun":"moon"} s={14}/></SB>
             <SB T={T} onClick={()=>setSideOpen(s=>!s)}><Ico n="menu" s={14}/></SB>
@@ -1432,7 +1434,7 @@ export default function Freely() {
               sharedInfo={sharedViewInfo} onLeaveShare={sharedViewInfo?()=>leaveShare(sharedViewInfo.owner,sharedViewInfo.folder):null}
               listManage={{ownedShares, onShare:shareFolder, onUnshare:unshareFolder, onDelete:deleteCat, setCats, onAssignAll:assignAllInLists, assignGroups:allGroups, onUploadIcon:uploadCatIcon}}/>
           )}
-          {view==="messages"&&<MessagesView T={T} myEmail={meEmail} messages={messages} people={knownPeople} groups={sGroups} reqs={chatReqs} trusted={trusted} peer={dmPeer} onOpenPeer={openDM} onSend={sendDM} onAnswerReq={answerReq} onStartChat={startChat}/>}
+          {view==="messages"&&<MessagesView T={T} myEmail={meEmail} messages={messages} people={knownPeople} groups={sGroups} reqs={chatReqs} trusted={trusted} peer={dmPeer} onOpenPeer={openDM} onSend={sendDM} onAnswerReq={answerReq} onStartChat={startChat} onOpenTeams={()=>goView("settings")}/>}
         </div>
       </main>
       {!selTask&&(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
@@ -3669,7 +3671,7 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
 }
 
 // Messages: 1:1 DMs (message anyone with an account — one intro message until they accept/reply) + team chats.
-function MessagesView({T,myEmail,messages,people=[],groups=[],reqs=[],trusted=[],peer,onOpenPeer,onSend,onAnswerReq,onStartChat}) {
+function MessagesView({T,myEmail,messages,people=[],groups=[],reqs=[],trusted=[],peer,onOpenPeer,onSend,onAnswerReq,onStartChat,onOpenTeams}) {
   const [text,setText]=useState("");
   const [newChat,setNewChat]=useState("");
   const endRef=useRef(null);
@@ -3738,7 +3740,10 @@ function MessagesView({T,myEmail,messages,people=[],groups=[],reqs=[],trusted=[]
   );
   return (
     <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
-      <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px",marginBottom:6}}>Messages</h1>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+        <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px"}}>Messages</h1>
+        {onOpenTeams&&<button onClick={onOpenTeams} style={{marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:5,padding:"5px 12px",borderRadius:20,border:`1px solid ${T.accent}55`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}><Ico n="users" s={12} c={T.accent}/> Teams</button>}
+      </div>
       <p style={{fontSize:12,color:T.textMuted,marginBottom:12}}>Chat with teammates and collaborators — or message any Freely user by email (they get a request; you can send one message until they accept or reply).</p>
       <div style={{display:"flex",gap:6,marginBottom:16}}>
         <input value={newChat} onChange={e=>setNewChat(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&newChat.trim()){onStartChat(newChat);setNewChat("");}}} placeholder="Start a chat — type any Freely user's email…" style={{flex:1,minWidth:0,padding:"9px 12px",borderRadius:10,border:`1px dashed ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
@@ -3928,6 +3933,10 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
     <div style={{flex:1,overflowY:"auto",padding:"22px 26px",maxWidth:580}}>
       <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px",marginBottom:18}}>Settings</h1>
 
+      {/* Teams (shared groups) */}
+      <TeamsSettings T={T} teams={teams} myEmail={myEmail} myId={myId} knownPeople={knownPeople} onCreate={onTeamCreate} onAddMember={onTeamAddMember} onRemoveMember={onTeamRemoveMember} onDelete={onTeamDelete}/>
+
+
       {/* Show/hide sidebar tabs */}
       <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 16px 14px",marginBottom:14}}>
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>Sidebar tabs</div>
@@ -3954,9 +3963,6 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
           {AVATAR_EMOJI.map(em=><button key={em} onClick={()=>onPickAvatar?.(em)} style={{width:34,height:34,borderRadius:"50%",border:`2px solid ${myAvatar===em?T.accent:T.border}`,background:myAvatar===em?T.accentGlow:"transparent",cursor:"pointer",fontSize:17,padding:0}}>{em}</button>)}
         </div>
       </div>
-
-      {/* Teams (shared groups) */}
-      <TeamsSettings T={T} teams={teams} myEmail={myEmail} myId={myId} knownPeople={knownPeople} onCreate={onTeamCreate} onAddMember={onTeamAddMember} onRemoveMember={onTeamRemoveMember} onDelete={onTeamDelete}/>
 
       <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"0 16px",marginBottom:14}}>
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,padding:"12px 0 6px"}}>Categories</div>
