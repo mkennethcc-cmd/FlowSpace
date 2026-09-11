@@ -22,6 +22,7 @@ declare
   gid      bigint;
   cnt      int;
   made_req boolean := false;
+  tid      uuid := gen_random_uuid();
   res      text[] := '{}';
 begin
   select id into a_id from auth.users where lower(email) = a_mail;
@@ -172,12 +173,53 @@ begin
       select count(*) into cnt from public.tasks where title like mark || '%' and assign_private = true;
       res := res || ('21. B sees the PRIVATE task assigned to them | '
                      || case when cnt > 0 then '✓ PASS' else '✗ FAIL: invisible' end);
+
+      ------------------------- A shares a list with B; B hands work to a third person
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', a_id::text, 'email', a_mail)::text, true);
+      execute 'set local role authenticated';
+
+      begin
+        insert into public.folder_shares(owner_id, folder, shared_with_email, can_delete)
+        values (a_id, mark, b_mail, false);
+        res := res || ('22. A shares a list with B (no re-share rights) | ✓ PASS')::text;
+      exception when others then res := res || ('22. A shares a list with B (no re-share rights) | ✗ FAIL: ' || sqlerrm); end;
+
+      begin
+        insert into public.tasks(id, user_id, title, tag)
+        values (tid, a_id, mark || ' shared job', mark);
+        res := res || ('23. A puts a task in that shared list | ✓ PASS')::text;
+      exception when others then res := res || ('23. A puts a task in that shared list | ✗ FAIL: ' || sqlerrm); end;
+
+      -- B now assigns a third person, C, who has NO share on the list
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', b_id::text, 'email', b_mail)::text, true);
+      execute 'set local role authenticated';
+
+      begin
+        update public.tasks set assigned_to = 'stranger@example.com' where id = tid;
+        get diagnostics cnt = row_count;
+        res := res || ('24. B assigns C on A''s task | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: update touched 0 rows' end);
+      exception when others then res := res || ('24. B assigns C on A''s task | ✗ FAIL: ' || sqlerrm); end;
+
+      -- did it actually persist, or did it only look saved on B's screen?
+      execute 'set local role ' || quote_ident(orig);
+      select count(*) into cnt from public.tasks where id = tid and assigned_to = 'stranger@example.com';
+      res := res || ('25. ...and it really saved to the database | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: not stored' end);
+
+      perform set_config('request.jwt.claims',
+        json_build_object('sub', '00000000-0000-0000-0000-0000000000ff', 'email', 'stranger@example.com')::text, true);
+      execute 'set local role authenticated';
+
+      select count(*) into cnt from public.tasks where id = tid;
+      res := res || ('26. C can see the task assigned to them | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: invisible to C' end);
     end if;
   end if;
 
   ------------------------------------------------------------------- clean up
   execute 'set local role ' || quote_ident(orig);
   delete from public.tasks    where title like mark || '%';
+  delete from public.folder_shares where folder = mark;
   delete from public.messages where body like mark || '%';
   if made_req then
     delete from public.chat_requests where from_email = a_mail and to_email = b_mail;

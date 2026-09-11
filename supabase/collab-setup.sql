@@ -206,6 +206,33 @@ drop policy if exists "assignees update" on public.tasks;
 create policy "assignees update" on public.tasks for update to authenticated
   using (public.is_assigned_to_me(assigned_to));
 
+-- Someone you shared a list with can edit the work in it — including handing a task
+-- to someone else. (The share UI only ever offers "Edit & add" or "+ delete", so every
+-- share is an editing share.) Without this, an assignment made by a collaborator looks
+-- saved on their screen but is silently dropped, and the new assignee sees nothing.
+drop policy if exists "collaborators edit shared tasks" on public.tasks;
+create policy "collaborators edit shared tasks" on public.tasks for update to authenticated
+  using (
+    exists (select 1 from public.folder_shares fs
+            where fs.owner_id = tasks.user_id and fs.folder = tasks.tag
+              and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email'))
+  )
+  with check (
+    exists (select 1 from public.folder_shares fs
+            where fs.owner_id = tasks.user_id and fs.folder = tasks.tag
+              and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email'))
+  );
+
+-- ...and add new work to that shared list (the app files it under the list's owner)
+drop policy if exists "collaborators add to shared lists" on public.tasks;
+create policy "collaborators add to shared lists" on public.tasks for insert to authenticated
+  with check (
+    user_id = auth.uid()
+    or exists (select 1 from public.folder_shares fs
+               where fs.owner_id = tasks.user_id and fs.folder = tasks.tag
+                 and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email'))
+  );
+
 -- RESTRICTIVE: applies on top of every other rule. A private assignment is
 -- visible only to the task's owner and the people it is assigned to.
 drop policy if exists "private assignments stay private" on public.tasks;
