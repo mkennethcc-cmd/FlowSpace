@@ -398,6 +398,14 @@ function makeDragGhost(label, color, T) {
     remove: () => g.remove(),
   };
 }
+// True on a phone-sized screen. Side-by-side panels don't fit there, so they take the screen instead.
+const useNarrow = (bp=640) => {
+  const [n,setN] = useState(()=>typeof window!=="undefined" && window.innerWidth<bp);
+  useEffect(()=>{ const f=()=>setN(window.innerWidth<bp); window.addEventListener("resize",f); window.addEventListener("orientationchange",f);
+    return ()=>{ window.removeEventListener("resize",f); window.removeEventListener("orientationchange",f); }; },[bp]);
+  return n;
+};
+
 // Accent insertion line showing exactly where a dragged item will land.
 const DropLine = ({T, vertical}) => vertical
   ? <div style={{width:3,alignSelf:"stretch",minHeight:30,borderRadius:2,background:T.accent,boxShadow:`0 0 8px ${T.accent}`,flexShrink:0,animation:"fadeIn .12s"}}/>
@@ -1575,6 +1583,7 @@ const CR=({icon,label,sub,T,onClick})=>(
 );
 
 function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],listPeople=null,sharedInfo=null,onLeaveShare=null,listManage=null,sortMode="due",setSortMode,showToast}) {
+  const narrow=useNarrow();
   const [manageMode,setManageMode]=useState(null); // "edit" (name/icon/color) | "share" (share/assign)
   const [collabOpen,setCollabOpen]=useState(false);
   const [filter,setFilter]=useState("all");
@@ -1672,7 +1681,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const selectCard=task=>{ if(didDragRef.current){ didDragRef.current=false; return; } setSelTask(task); };
   return (
     <div style={{flex:1,display:"flex",overflow:"hidden"}}>
-      <div onClick={e=>{ if(selTask && !e.target.closest("[data-task-id],button,input,select,textarea,a")) setSelTask(null); }} style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
+      <div onClick={e=>{ if(selTask && !e.target.closest("[data-task-id],button,input,select,textarea,a")) setSelTask(null); }} style={{flex:1,minWidth:0,overflowY:"auto",padding:"22px 26px",display:(narrow&&selTask)?"none":"block"}}>
         <div style={{marginBottom:18}}>
           {view==="myday"&&<div style={{fontSize:12,color:T.textMuted,fontWeight:500,marginBottom:3}}>{new Date().getHours()<12?"Good morning 🌤":new Date().getHours()<17?"Keep it up 💪":"Good evening 🌙"}</div>}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -1984,6 +1993,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
   };
   const COLS=[null,"#ef4444","#f97316","#f59e0b","#22c55e","#3b82f6","#a855f7"];
   const [closeX,setCloseX]=useState(0);
+  const narrow=useNarrow();   // phone: the panel takes the screen instead of squeezing the list into a sliver
   const panelDown=e=>{
     if(e.target.closest("input,textarea,select,button,a")) return;
     const sx=e.clientX,sy=e.clientY; let decided=false;
@@ -2001,7 +2011,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
     window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up);window.addEventListener("pointercancel",up);
   };
   return (
-    <div onPointerDown={panelDown} style={{width:280,borderLeft:`1px solid ${T.border}`,background:T.surface,overflowY:"auto",padding:"6px 14px 12px",display:"flex",flexDirection:"column",gap:9,animation:closeX?"none":"slideIn .2s ease",flexShrink:0,transform:closeX?`translateX(${closeX}px)`:"none",transition:closeX?"none":"transform .2s ease"}}>
+    <div onPointerDown={panelDown} style={{width:narrow?"100%":280,flexGrow:narrow?1:0,minWidth:0,borderLeft:narrow?"none":`1px solid ${T.border}`,background:T.surface,overflowY:"auto",padding:"6px 14px 12px",display:"flex",flexDirection:"column",gap:9,animation:closeX?"none":"slideIn .2s ease",flexShrink:0,transform:closeX?`translateX(${closeX}px)`:"none",transition:closeX?"none":"transform .2s ease"}}>
       <div onPointerDown={closeHandleDown} title="Drag right to close" style={{display:"flex",justifyContent:"center",padding:"3px 0 1px",cursor:"grab",touchAction:"none"}}>
         <div style={{width:42,height:4,borderRadius:2,background:T.surface3}}/>
       </div>
