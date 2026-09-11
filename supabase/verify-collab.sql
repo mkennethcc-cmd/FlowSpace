@@ -39,39 +39,39 @@ begin
 
     begin
       insert into public.groups(name, icon, created_by) values (mark, '🧪', a_id) returning id into gid;
-      res := res || '1. A creates a team | ✓ PASS';
+      res := res || ('1. A creates a team | ✓ PASS')::text;
     exception when others then res := res || ('1. A creates a team | ✗ FAIL: ' || sqlerrm); end;
 
     if gid is not null then
       begin
         insert into public.group_members(group_id, email, added_by) values (gid, a_mail, a_mail);
-        res := res || '2. A joins the team they made | ✓ PASS';
+        res := res || ('2. A joins the team they made | ✓ PASS')::text;
       exception when others then res := res || ('2. A joins the team they made | ✗ FAIL: ' || sqlerrm); end;
 
       begin
         insert into public.group_members(group_id, email, added_by) values (gid, b_mail, a_mail);
-        res := res || '3. A pulls B into the team | ✓ PASS';
+        res := res || ('3. A pulls B into the team | ✓ PASS')::text;
       exception when others then res := res || ('3. A pulls B into the team | ✗ FAIL: ' || sqlerrm); end;
 
       begin
         insert into public.messages(sender_id, sender_email, recipient_email, group_id, body)
         values (a_id, a_mail, null, gid, mark || ' team hello');
-        res := res || '4. A posts in the team chat | ✓ PASS';
+        res := res || ('4. A posts in the team chat | ✓ PASS')::text;
       exception when others then res := res || ('4. A posts in the team chat | ✗ FAIL: ' || sqlerrm); end;
 
       begin
         insert into public.messages(sender_id, sender_email, recipient_email, body)
         values (a_id, a_mail, b_mail, mark || ' direct hello');
-        res := res || '5. A sends B a direct message | ✓ PASS';
+        res := res || ('5. A sends B a direct message | ✓ PASS')::text;
       exception when others then res := res || ('5. A sends B a direct message | ✗ FAIL: ' || sqlerrm); end;
 
       -- only file a request if there is no real one already, so nothing of yours is disturbed
       begin
         insert into public.chat_requests(from_email, to_email, status) values (a_mail, b_mail, 'pending');
         made_req := true;
-        res := res || '6. A files a friend request | ✓ PASS';
+        res := res || ('6. A files a friend request | ✓ PASS')::text;
       exception
-        when unique_violation then res := res || '6. A files a friend request | — skipped (a real request already exists)';
+        when unique_violation then res := res || ('6. A files a friend request | — skipped (a real request already exists)')::text;
         when others then res := res || ('6. A files a friend request | ✗ FAIL: ' || sqlerrm);
       end;
 
@@ -86,7 +86,7 @@ begin
       begin
         insert into public.messages(sender_id, sender_email, recipient_email, group_id, body)
         values (b_id, b_mail, null, gid, mark || ' team reply');
-        res := res || '8. B replies in the team chat | ✓ PASS';
+        res := res || ('8. B replies in the team chat | ✓ PASS')::text;
       exception when others then res := res || ('8. B replies in the team chat | ✗ FAIL: ' || sqlerrm); end;
 
       select count(*) into cnt from public.messages
@@ -104,7 +104,7 @@ begin
       begin
         insert into public.messages(sender_id, sender_email, recipient_email, body)
         values (b_id, b_mail, a_mail, mark || ' direct reply');
-        res := res || '11. B replies directly to A | ✓ PASS';
+        res := res || ('11. B replies directly to A | ✓ PASS')::text;
       exception when others then res := res || ('11. B replies directly to A | ✗ FAIL: ' || sqlerrm); end;
 
       ------------------------------------------------- a stranger must see none
@@ -132,7 +132,7 @@ begin
       begin
         insert into public.group_members(group_id, email, added_by, role)
         values (gid, 'stranger@example.com', a_mail, 'assigner');
-        res := res || '15. A invites a guest (assign-only) | ✓ PASS';
+        res := res || ('15. A invites a guest (assign-only) | ✓ PASS')::text;
       exception when others then res := res || ('15. A invites a guest (assign-only) | ✗ FAIL: ' || sqlerrm); end;
 
       -- a task in a list that was never shared, handed to B
@@ -141,7 +141,7 @@ begin
         values (gen_random_uuid(), a_id, mark || ' open job', mark, b_mail);
         insert into public.tasks(id, user_id, title, tag, assigned_to, assign_private)
         values (gen_random_uuid(), a_id, mark || ' private job', mark, b_mail, true);
-        res := res || '16. A assigns B work in an unshared list | ✓ PASS';
+        res := res || ('16. A assigns B work in an unshared list | ✓ PASS')::text;
       exception when others then res := res || ('16. A assigns B work in an unshared list | ✗ FAIL: ' || sqlerrm); end;
 
       execute 'set local role ' || quote_ident(orig);
