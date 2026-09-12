@@ -101,10 +101,42 @@ const editDist=(a,b,max=2)=>{
   }
   return prev[b.length];
 };
-const DATE_WORDS=["january","february","march","april","june","july","august","september","october","november","december","monday","tuesday","wednesday","thursday","friday","saturday","sunday","tomorrow","today","tonight"];
-const fuzzDateWords=raw=>raw.replace(/[A-Za-z]{5,}/g,w=>{
+const DATE_WORDS=["january","february","march","april","june","july","august","september","october","november","december",
+  "monday","tuesday","wednesday","thursday","friday","saturday","sunday",
+  "tomorrow","today","tonight","yesterday","weekend","morning","afternoon","evening","midnight","unknown"];
+// Typos edit-distance can't safely reach: too short to risk fuzzing, or two letters wrong in a
+// seven-letter word ("wensday"). Written out so they cost nothing and can never misfire.
+const WORD_FIX={
+  tmr:"tomorrow",tmrw:"tomorrow",tomoro:"tomorrow",tomorow:"tomorrow",tommorow:"tomorrow",tommorrow:"tomorrow",
+  tomarrow:"tomorrow",tomorro:"tomorrow","2morrow":"tomorrow","2mrw":"tomorrow",
+  "2day":"today",todya:"today",tdy:"today",tonite:"tonight",tnite:"tonight",tnght:"tonight",
+  yesteday:"yesterday",yestarday:"yesterday",ystrday:"yesterday",yesterdy:"yesterday",
+  mondey:"monday",munday:"monday",mnday:"monday",tuseday:"tuesday",teusday:"tuesday",tusday:"tuesday",
+  wensday:"wednesday",wendsday:"wednesday",wednsday:"wednesday",wedensday:"wednesday",wenesday:"wednesday",wedneday:"wednesday",
+  thurdsay:"thursday",thusday:"thursday",thrusday:"thursday",thursdy:"thursday",thursady:"thursday",
+  fryday:"friday",firday:"friday",fridy:"friday",saterday:"saturday",saturaday:"saturday",satrday:"saturday",
+  sundy:"sunday",sundey:"sunday",sunay:"sunday",
+  janurary:"january",januaray:"january",janaury:"january",jaunary:"january",
+  febuary:"february",febraury:"february",febrary:"february",
+  marhc:"march",mrach:"march",appril:"april",arpil:"april",aprl:"april",
+  jne:"june",jly:"july",juley:"july",juyl:"july",
+  augsut:"august",agust:"august",augest:"august",
+  septmber:"september",setember:"september",septembr:"september",spetember:"september",
+  octobor:"october",ocotber:"october",octber:"october",
+  novemebr:"november",novmber:"november",novermber:"november",
+  decmber:"december",decemeber:"december",desember:"december",decemebr:"december",
+  nxt:"next",wkend:"weekend",wknd:"weekend",weeknd:"weekend",
+  mornin:"morning",aftrnoon:"afternoon",evning:"evening",evenin:"evening",
+  tbc:"tbd",unkown:"unknown",unkonwn:"unknown",
+};
+// Real words that sit one typo away from a date word. Without this "the marsh report" would
+// silently become a March deadline.
+const NOT_A_TYPO=new Set(["marsh","marshes","sundae","sundaes","mayday","monkey","juneau","julia","julian","augusta","augustus","maybe","money","today","tonight","toned","toning","weekends","mornings","evenings","aprons"]);
+const fuzzDateWords=raw=>raw.replace(/[A-Za-z0-9]{3,}/g,w=>{
   const lw=w.toLowerCase();
-  if(DATE_WORDS.includes(lw)) return w;
+  if(WORD_FIX[lw]) return WORD_FIX[lw];              // a known misspelling, whatever its length
+  if(DATE_WORDS.includes(lw)||NOT_A_TYPO.has(lw)) return w;
+  if(lw.length<5||/[^a-z]/.test(lw)) return w;       // too short, or a number/time token — leave it alone
   const max=lw.length>=8?2:1; // long words tolerate 2 typos, short ones just 1 (keeps "money" ≠ "monday")
   for(const d of DATE_WORDS){ if(editDist(lw,d,max)<=max) return d; }
   return w;
@@ -405,6 +437,35 @@ const useNarrow = (bp=640) => {
     return ()=>{ window.removeEventListener("resize",f); window.removeEventListener("orientationchange",f); }; },[bp]);
   return n;
 };
+// A finger can't "pull to reorder" — pulling along the list is the page scrolling — so the
+// on-screen hints have to describe the gesture that actually works on THIS device.
+const COARSE = typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)")?.matches;
+const dragHint = (axis="list") => axis==="matrix"
+  ? (COARSE ? "hold a note, then drag it to another box" : "hold a note — or pull it — to move it between boxes")
+  : (COARSE ? "hold a task, then drag to reorder" : "hold a task — or pull it up/down — to reorder");
+
+// The sidebar's own reading order, flattened (groups open in place; lists shared with you sit
+// in their own section and never count). Freely opens on whichever tab is first here.
+const firstTreeView = (items, org) => {
+  const tree = items.filter(i => !i.id.startsWith("s:"));
+  const groups = (org?.groups) || [];
+  const gmap = Object.fromEntries(groups.map(g => [g.id, g]));
+  const byId = Object.fromEntries(tree.map(i => [i.id, i]));
+  const allIds = [...tree.map(i => i.id), ...groups.map(g => g.id)];
+  const stored = ((org?.order) || []).filter(id => allIds.includes(id));
+  const order = [...stored, ...allIds.filter(id => !stored.includes(id))];
+  const parentOf = id => { const p = (org?.parent || {})[id]; return (p && gmap[p]) ? p : null; };
+  const walk = (pid, depth) => {
+    if (depth > 40) return null;
+    for (const id of order) {
+      if (parentOf(id) !== pid) continue;
+      if (gmap[id]) { const hit = walk(id, depth+1); if (hit) return hit; }  // a group is a container, not a tab
+      else if (byId[id]) return byId[id].view;
+    }
+    return null;
+  };
+  return walk(null, 0);
+};
 
 // Accent insertion line showing exactly where a dragged item will land.
 const DropLine = ({T, vertical}) => vertical
@@ -428,20 +489,26 @@ const sampleTasks = (uid) => {
     notes:"", color:null, subtasks:[], recurring:null, quadrant:null, remindAt:null, endTime:null,
     attachments:[], owner:uid, position:0, mydayDate:null, ...extra,
   });
+  // Each one teaches exactly one thing and says so in its own notes, so the tutorial is the app
+  // itself rather than a slideshow you skip. Delete them whenever you like — Settings → 📖 brings them back.
   return [
-    mk("👋 Welcome to Freely — tap me!", { position:base+6, mydayDate:today,
-      notes:"This card is a task. Tap it to open details — add steps, dates, photos, colors, priorities and more.\nSwipe me → for My Day, ← to delete. Hold & drag to reorder.",
-      subtasks:[{id:1,title:"Tap the circle on a step to finish it ✓",done:false,due:null,time:null},{id:2,title:"Add your own step below",done:false,due:null,time:null}] }),
-    mk("Type naturally — \"Call the dentist tomorrow 3pm\" ✨", { position:base+5, tag:"health", due:tmrw, remindAt:`${tmrw}T15:00`,
-      notes:"Freely read the date AND the time straight out of that sentence. Try it in any add-box — it works everywhere." }),
-    mk("Hold & drag me to reorder · swipe ← or → 👆", { position:base+4,
-      notes:"Hold for a moment, then drag — a line shows exactly where I'll land." }),
-    mk("Open me and set a priority 🔥", { position:base+3, tag:"work", quadrant:"q1",
-      notes:"I'm already marked Urgent & Important — find me on the Priority Matrix tab! Change my priority anytime in here." }),
-    mk("Plan ahead — I live in Upcoming 📅", { position:base+2, tag:"work", due:addDays(3),
-      notes:"Anything with a future date shows in Upcoming and on the Calendar." }),
-    mk("Date not decided? Type \"tbd\" — like me 🤷", { position:base+1, due:DUE_TBD,
-      notes:"Typing tbd or unknown next to a task means the date is still open — it shows as Date TBD instead of guessing." }),
+    mk("👋 Start here — tap me open", { position:base+8, mydayDate:today,
+      notes:"You're looking at a task. Tap it and the details panel opens: steps, a date, a time, notes, photos, a colour, a priority, and who it belongs to.\n\nTap the circle on the left to finish a task. Tap the title in here to rename it.",
+      subtasks:[{id:1,title:"Tap this circle to finish a step ✓",done:false,due:null,time:null},{id:2,title:"Add a step of your own below",done:false,due:null,time:null}] }),
+    mk("Type it like you'd say it ✨", { position:base+7, tag:"health", due:tmrw, remindAt:`${tmrw}T15:00`,
+      notes:"This task was typed as “Call the dentist tomorrow 3pm”. Freely took the date and the time out of the sentence and left the title clean.\n\nTry it in any add box:\n• “Essay draft friday”\n• “Team sync sept 30 4:00 pm - 5:30 pm”\n\nSpelling is forgiven — “tommorow” and “julky” both land." }),
+    mk("👆 Swipe me, or pick me up", { position:base+6,
+      notes:"Two gestures, everywhere:\n• Swipe ← to delete · swipe → to add to My Day ☀️\n• To reorder, hold a task for a moment and drag. With a mouse you can just pull it up or down.\n\nA glowing line shows exactly where it will land before you let go." }),
+    mk("🎯 I'm urgent AND important", { position:base+5, tag:"work", quadrant:"q1",
+      notes:"Open the Priority Matrix tab and you'll find me in the top-left box.\n\nFour boxes: do it now · schedule it · hand it off · drop it. Drag a note between boxes to change its priority — the matrix and your lists are the same tasks." }),
+    mk("📅 I'm waiting in Upcoming", { position:base+4, tag:"work", due:addDays(3),
+      notes:"Anything with a date shows up in Upcoming and on the Calendar, soonest first. Miss a date and it gets pinned to the top in red with a one-tap “Move to today”.\n\nOn the Calendar you can drag me onto a different day." }),
+    mk("🤷 No date decided yet? Type “tbd”", { position:base+3, due:DUE_TBD,
+      notes:"“tbd”, “tba” or “unknown” files a task as Date TBD instead of guessing a day for it. It waits at the bottom of Upcoming and never counts as overdue." }),
+    mk("🤝 Share this list with someone", { position:base+2, tag:"work",
+      notes:"Open any of your own lists and tap 🤝 Share at the top. Invite by email and they see it the moment they sign in.\n\nThen assign a task to one person or to everyone at once. Mark an assignment 🔒 private and only that person can see it. Work handed to you shows under “Assigned to me”." }),
+    mk("📖 Stuck? The whole guide is in Settings", { position:base+1, tag:"personal",
+      notes:"Settings → “How Freely works” explains every part of the app in plain language, and it's searchable.\n\nWhile you're there: habits with streaks, a 🍅 focus timer, notes, a freeform canvas, and analytics of what you actually finished." }),
   ];
 };
 const isImgIcon = ic => typeof ic === "string" && (ic.startsWith("http") || ic.startsWith("data:"));
@@ -595,6 +662,7 @@ export default function Freely() {
   useEffect(()=>{ try{localStorage.setItem("fs_sound2",sound);}catch{} },[sound]);
   const T = mkT(dark, PALETTES[scheme]||PALETTES.lavender);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);   // the "How Freely works" guide
   const [imgView, setImgView] = useState(null);
   const [linkPick, setLinkPick] = useState(null);
   const [toast, setToast] = useState(null);
@@ -644,7 +712,11 @@ export default function Freely() {
   const [myAvatar,setMyAvatar]=useState(()=>{ try{ return localStorage.getItem("fs_avatar")||""; }catch{ return ""; } });
   useEffect(()=>{ if(navOrg) try{ localStorage.setItem("fs_navorg",JSON.stringify(navOrg)); }catch{} },[navOrg]);
   const [cats, setCats] = useState(DEFAULT_CATS);
-  const [sideOpen, setSideOpen] = useState(true);
+  // A phone has no room for a permanent sidebar: it starts closed there and opens OVER the
+  // content as a drawer, the way every mobile app does it.
+  const narrow = useNarrow();
+  const [sideOpen, setSideOpen] = useState(()=> typeof window==="undefined" || window.innerWidth>=640);
+  useEffect(()=>{ if(narrow) setSideOpen(false); },[narrow]);
   const [defOpen, setDefOpen] = useState(true);
   const [customOpen, setCustomOpen] = useState(true);
   const [selTask, setSelTask] = useState(null);
@@ -736,8 +808,10 @@ export default function Freely() {
 
   useEffect(()=>{ if(keepSelRef.current){ keepSelRef.current=false; return; } setSelTask(null); },[view]);
   // If the user hides the tab they're currently on, fall back to My Day.
-  useEffect(()=>{ if(hiddenTabs.includes(view)) setView("myday"); },[hiddenTabs,view]);
-  const goView=v=>{ setView(v); setSideOpen(false); };
+  // Opening tab: the first one in your own sidebar order (see the effect further down, which needs
+  // the sidebar list to exist first). Once you pick a tab yourself, Freely stops moving under you.
+  const viewPickedRef = useRef(false);
+  const goView=v=>{ viewPickedRef.current=true; setView(v); setSideOpen(false); };
 
   // Swipe anywhere on the sidebar itself: drag right = open, drag left = collapse.
   // The rail is always visible (60px), so it's always grabbable — no fiddly screen-edge needed.
@@ -948,6 +1022,18 @@ export default function Freely() {
     if(t) showToast("Task deleted", ()=>{ setTasks(ts=>[t,...ts]); if(user) db.insertTask(t,t.owner||user.id).catch(console.error); setToast(null); });
   };
   const duplicateTask = task=>{ const c={...task,id:crypto.randomUUID(),done:false,title:task.title+" (copy)",attachments:[]}; setTasks(ts=>[c,...ts]); if(user) db.insertTask(c,user.id).catch(console.error); showToast("Task duplicated"); };
+  // Bring the starter tour tasks back from the guide. Skips any you still have, so tapping it
+  // twice doesn't leave you with two of everything.
+  const addSamplesAgain = ()=>{
+    if(!user) return;
+    const have=new Set(tasks.map(t=>t.title));
+    const seeds=sampleTasks(user.id).filter(s=>!have.has(s.title));
+    if(!seeds.length){ showToast("The starter tasks are already in your list ✓"); return; }
+    setTasks(ts=>[...seeds,...ts]);
+    seeds.forEach(s=>db.insertTask(s,user.id).catch(()=>{}));
+    viewPickedRef.current=true; setView("myday");
+    showToast(`Added ${seeds.length} starter task${seeds.length===1?"":"s"} — delete them whenever you're done 👋`);
+  };
   const attachFile = async (task,file)=>{ if(!user) return; const meta=await db.uploadAttachment(file,user.id,task.id); updateTask(task.id,{attachments:[...(task.attachments||[]),meta]}); };
   const removeAttach = async (task,att)=>{ await db.deleteAttachment(att.path).catch(()=>{}); updateTask(task.id,{attachments:(task.attachments||[]).filter(a=>a.path!==att.path)}); };
   const setReminder = (id,val)=>{ remindedRef.current?.delete(id); updateTask(id,{remindAt:val||null}); if(val&&"Notification"in window&&Notification.permission==="default") Notification.requestPermission(); };
@@ -1259,6 +1345,14 @@ export default function Freely() {
     ...Object.entries(cats).map(([name,meta])=>({id:"c:"+name, view:"cat:"+name, label:name, icon:meta.icon, iconType:"cat", cap:true, badge:myTasks.filter(t=>t.tag===name&&!t.done).length})),
     ...sharedWithMe.map(s=>({id:"s:"+s.owner_id+":"+s.folder, view:"shared:"+s.owner_id+":"+s.folder, label:s.folder, icon:"🤝", iconType:"cat", cap:true, badge:tasks.filter(t=>t.owner===s.owner_id&&t.tag===s.folder&&!t.done).length, owner:s.owner_id, folder:s.folder, sub:idEmail[s.owner_id]?`from ${nickOf(idEmail[s.owner_id]).split("@")[0]}`:null})),
   ];
+  // Whatever sits at the top of your sidebar is your home screen. Drag "Upcoming" above "My Day"
+  // and Freely opens on Upcoming — on this device and, once prefs sync, on every other one.
+  const homeView = firstTreeView(sidebarItems, navOrg);
+  useEffect(()=>{
+    if(hiddenTabs.includes(view)){ setView(homeView||"myday"); return; }   // you hid the tab you were on
+    if(!viewPickedRef.current && homeView && homeView!==view) setView(homeView);
+  },[homeView,hiddenTabs,view]);
+
   const addSidebarList=(name,icon,color)=>{ const n=(name||"").trim(); // typed capitalization is kept ("GoDo" stays "GoDo")
     if(!n||Object.keys(cats).some(k=>k.toLowerCase()===n.toLowerCase())) return false;
     setCats(c=>({...c,[n]:{color:color||CAT_COLORS[Object.keys(c).length%CAT_COLORS.length],icon:icon||guessIcon(n)}}));
@@ -1287,7 +1381,7 @@ export default function Freely() {
     // Keep the sidebar-org id in sync ("c:old" → "c:new") so the list keeps its position/group.
     const oid="c:"+old,nid="c:"+nu;
     setNavOrg(o=>{ if(!o)return o; const order=(o.order||[]).map(x=>x===oid?nid:x); const parent={}; Object.entries(o.parent||{}).forEach(([k,v])=>{ parent[k===oid?nid:k]=v; }); return {...o,order,parent}; });
-    if(view==="cat:"+old) setView("cat:"+nu);
+    if(view==="cat:"+old){ viewPickedRef.current=true; setView("cat:"+nu); }
     showToast(`Renamed "${old}" → "${nu}" ✓`);
     return true;
   };
@@ -1319,21 +1413,25 @@ export default function Freely() {
         </div>
       )}
       {tourStep>=0&&(()=>{ const TOUR=[
-          ["⚡","Welcome to Freely","Tasks, habits, notes and focus — one calm place. Here's the 20-second tour."],
-          ["✨","Just type naturally","Type “Dentist Friday 3pm” anywhere you add a task — the date, time and category set themselves. Steps inside a task parse dates too."],
-          ["👆","Gestures everywhere","Swipe a task → for My Day, ← to delete. Hold & drag to reorder lists, nest folders, or drop steps onto calendar days."],
-          ["🎯","Build your rhythm","Give habits weekdays & a 1-2-3 priority, focus with the 🍅 Pomodoro for +25 XP, and share your week from Analytics."],
+          ["⚡","Welcome to Freely","Tasks, habits, notes and focus — one calm place. Six cards and you'll know your way around."],
+          ["✨","Just type it","“Call the dentist tomorrow 3pm” — the date, the time and the list all set themselves, and the title stays clean. Typos are forgiven. No date yet? Type “tbd”."],
+          ["👆","Two gestures","Swipe a task → for My Day, ← to delete. To reorder, "+(COARSE?"hold it for a moment and drag":"hold it — or just pull it up and down")+". A line shows where it lands."],
+          ["☀️","Today vs. everything","My Day is your shortlist for today and carries unfinished work forward. Upcoming, the Calendar and the Priority Matrix are the same tasks, seen differently."],
+          ["🤝","Work with people","Share any list by email, then assign a task to one person or the whole list — or mark it 🔒 private so only they see it. Teams live in Settings."],
+          ["🎯","Build your rhythm","Habits with weekdays and streaks, a 🍅 focus timer worth +25 XP, notes and a freeform canvas. Everything syncs to every device you sign in on."],
         ]; const [em,ti,tx]=TOUR[tourStep]; const last=tourStep===TOUR.length-1;
         const endTour=()=>{ try{localStorage.setItem("fs_tour","1");}catch{} setTourStep(-1); };
         return (
         <div style={{position:"fixed",inset:0,zIndex:2500,background:"rgba(5,6,12,.72)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-          <div style={{width:400,maxWidth:"94vw",background:T.surface,border:`1px solid ${T.border}`,borderRadius:20,padding:"30px 26px 22px",textAlign:"center",boxShadow:"0 24px 80px rgba(0,0,0,.5)"}}>
-            <div style={{fontSize:52,marginBottom:12}}>{em}</div>
+          <div style={{width:400,maxWidth:"94vw",maxHeight:"90vh",overflowY:"auto",background:T.surface,border:`1px solid ${T.border}`,borderRadius:20,padding:"26px 22px 20px",textAlign:"center",boxShadow:"0 24px 80px rgba(0,0,0,.5)"}}>
+            <div style={{fontSize:46,marginBottom:10}}>{em}</div>
             <div style={{fontFamily:"'Sora',sans-serif",fontSize:19,fontWeight:800,marginBottom:8}}>{ti}</div>
             <div style={{fontSize:13,color:T.textMuted,lineHeight:1.6,minHeight:62}}>{tx}</div>
             <div style={{display:"flex",justifyContent:"center",gap:6,margin:"16px 0"}}>
               {TOUR.map((_,i)=><span key={i} style={{width:i===tourStep?18:7,height:7,borderRadius:4,background:i===tourStep?T.accent:T.surface3,transition:"all .25s"}}/>)}
             </div>
+            {/* The tour is short on purpose — this is the way back to the long version, any time. */}
+            <button onClick={()=>{ endTour(); setHelpOpen(true); }} style={{width:"100%",marginBottom:10,padding:"8px",borderRadius:10,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>📖 Open the full guide instead</button>
             <div style={{display:"flex",gap:10}}>
               <button onClick={endTour} style={{flex:1,padding:"10px",borderRadius:10,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:13,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Skip</button>
               <button onClick={()=>last?endTour():setTourStep(s=>s+1)} style={{flex:2,padding:"10px",borderRadius:10,border:"none",background:T.grad,color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{last?"Let's go ⚡":"Next"}</button>
@@ -1348,12 +1446,18 @@ export default function Freely() {
           <button onClick={()=>setToast(null)} style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex"}}><Ico n="x" s={13}/></button>
         </div>
       )}
-      {aboutOpen&&<AboutModal T={T} onClose={()=>setAboutOpen(false)}/>}
+      {aboutOpen&&<AboutModal T={T} onClose={()=>setAboutOpen(false)} onHelp={()=>{setAboutOpen(false);setHelpOpen(true);}}/>}
+      {helpOpen&&<HelpGuide T={T} onClose={()=>setHelpOpen(false)}
+        onReplayTour={()=>{ setHelpOpen(false); setTourStep(0); }}
+        onSamples={()=>{ setHelpOpen(false); addSamplesAgain(); }}/>}
       {imgView&&<ImgViewer T={T} url={imgView} onClose={()=>setImgView(null)}/>}
       {delCatModal&&<DelCatModal T={T} name={delCatModal} count={tasks.filter(t=>t.owner===user?.id&&t.tag===delCatModal).length} onConfirm={a=>confirmDeleteCat(delCatModal,a)} onClose={()=>setDelCatModal(null)}/>}
       {linkPick&&<LinkPicker T={T} tasks={myTasks.filter(t=>!t.done)} onPick={t=>{linkPick.onPick(t);setLinkPick(null);}} onClose={()=>setLinkPick(null)}/>}
       {cmdOpen&&<CmdPalette T={T} tasks={tasks} notes={notes} onClose={()=>setCmdOpen(false)} onGo={v=>{setView(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}} onPickTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);setCmdOpen(false);}}/>}
-      <aside onPointerDown={sideSwipe} style={{width:sideOpen?224:60,transition:"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:30,touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}>
+      {/* Drawer backdrop — phone only. Tap anywhere off the sidebar to put it away. */}
+      {narrow&&sideOpen&&<div onClick={()=>setSideOpen(false)} style={{position:"fixed",inset:0,zIndex:55,background:"rgba(5,6,12,.55)",animation:"fadeIn .15s ease"}}/>}
+      <aside onPointerDown={sideSwipe} style={{width:sideOpen?(narrow?272:224):60,transition:narrow?"none":"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:narrow&&sideOpen?60:30,touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none",
+        ...(narrow&&sideOpen?{position:"fixed",top:0,bottom:0,left:0,maxWidth:"84vw",boxShadow:"0 0 48px rgba(0,0,0,.6)",animation:"slideIn .18s ease"}:null)}}>
         <div style={{padding:"18px 14px",display:"flex",alignItems:"center",gap:9}}>
           <button onClick={()=>setAboutOpen(true)} title="About Freely" style={{display:"flex",alignItems:"center",gap:9,background:"none",border:"none",cursor:"pointer",padding:0,flex:1,minWidth:0}}>
             {/* App logo: /public/logo.png when present; falls back to the ⚡ gradient if the file is missing. */}
@@ -1423,7 +1527,7 @@ export default function Freely() {
           </div>
         </div>
       </aside>
-      <main style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      <main style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",overflow:"hidden"}}>
         <div style={{background:T.surface2,borderBottom:`1px solid ${T.border}`,padding:"5px 20px",display:"flex",alignItems:"center",gap:16,flexShrink:0}}>
           <button onClick={()=>setCmdOpen(true)} style={{display:"flex",alignItems:"center",gap:5,background:"none",border:"none",cursor:"pointer",color:T.textMuted,fontSize:11,fontFamily:"'DM Sans',sans-serif"}}>
             <span style={{background:T.surface3,border:`1px solid ${T.border}`,padding:"1px 6px",borderRadius:4,fontSize:10,fontWeight:600}}>⌘K</span>
@@ -1447,10 +1551,10 @@ export default function Freely() {
           {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} showToast={showToast} onCheckin={key=>{awardXp("habit-"+key+"-"+todStr,15);markActiveDay();navigator.vibrate?.(20);}}/>}
           {view==="calendar"&&<CalendarView T={T} tasks={myTasks} cats={cats} todStr={todStr} onToggle={toggleTask} onToggleStep={toggleStep} onQuickAdd={addCalendarTask} onMoveTask={moveTaskDay} onMoveStep={moveStep} onOpenTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={dayStats} todStr={todStr}/>}
-          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar} newAtBottom={newAtBottom} setNewAtBottom={setNewAtBottom}/>}
+          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar} newAtBottom={newAtBottom} setNewAtBottom={setNewAtBottom} onHelp={()=>setHelpOpen(true)}/>}
           {(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={allGroups} listPeople={collaboratorsOf} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}
-              sortMode={sortMode} setSortMode={setSortMode} showToast={showToast}
+              sortMode={sortMode} setSortMode={setSortMode} showToast={showToast} onHelp={()=>setHelpOpen(true)}
               sharedInfo={sharedViewInfo} onLeaveShare={sharedViewInfo?()=>leaveShare(sharedViewInfo.owner,sharedViewInfo.folder):null}
               listManage={{ownedShares, onShare:shareFolder, onUnshare:unshareFolder, onDelete:deleteCat, setCats, onAssignAll:assignAllInLists, assignGroups:allGroups, onUploadIcon:uploadCatIcon}}/>
           )}
@@ -1476,7 +1580,7 @@ const SB = ({onClick,T,children})=>(
   </button>
 );
 
-function AboutModal({T,onClose}) {
+function AboutModal({T,onClose,onHelp}) {
   const socials=[
     {label:"Instagram", handle:"@freelytodo", href:"https://instagram.com/freelytodo", emoji:"📷"},
   ];
@@ -1496,7 +1600,14 @@ function AboutModal({T,onClose}) {
           </div>
           <button onClick={onClose} style={{width:26,height:26,borderRadius:7,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={13}/></button>
         </div>
-        <p style={{fontSize:12,color:T.textMuted,lineHeight:1.6,marginBottom:16}}>Your all-in-one space for tasks, priorities, notes and focus. Thanks for being here 💜</p>
+        <p style={{fontSize:12,color:T.textMuted,lineHeight:1.6,marginBottom:14}}>Your all-in-one space for tasks, priorities, notes and focus. Thanks for being here 💜</p>
+        {onHelp&&(
+          <button onClick={onHelp} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"10px 12px",marginBottom:10,borderRadius:10,border:`1px solid ${T.accent}55`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",textAlign:"left"}}>
+            <span style={{fontSize:16}}>📖</span>
+            <span style={{fontSize:13,fontWeight:700,flex:1}}>How Freely works</span>
+            <span style={{fontSize:12,opacity:.7}}>›</span>
+          </button>
+        )}
         <div style={{display:"flex",flexDirection:"column",gap:7}}>
           {socials.map(s=>(
             <a key={s.label} href={s.href} target="_blank" rel="noreferrer" style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderRadius:10,border:`1px solid ${T.border}`,background:T.surface2,textDecoration:"none",color:T.text}}>
@@ -1604,14 +1715,14 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],listPeople=null,sharedInfo=null,onLeaveShare=null,listManage=null,sortMode="due",setSortMode,showToast}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],listPeople=null,sharedInfo=null,onLeaveShare=null,listManage=null,sortMode="due",setSortMode,showToast,onHelp}) {
   const narrow=useNarrow();
   const [manageMode,setManageMode]=useState(null); // "edit" (name/icon/color) | "share" (share/assign)
   const [collabOpen,setCollabOpen]=useState(false);
   const [filter,setFilter]=useState("all");
   const [catFilter,setCatFilter]=useState(null);
   const sort=sortMode==="smart"?"manual":sortMode; // (older devices saved "smart" for the manual order)
-  const [showSugg,setShowSugg]=useState(true);
+  const [showSugg,setShowSugg]=useState(false); // folded by default — your own tasks come first
   const [dragId,setDragId]=useState(null);
   const [drop,setDrop]=useState(null); // {id,before} — where the dragged card will land
   const [swipeId,setSwipeId]=useState(null);
@@ -1703,12 +1814,12 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const selectCard=task=>{ if(didDragRef.current){ didDragRef.current=false; return; } setSelTask(task); };
   return (
     <div style={{flex:1,display:"flex",overflow:"hidden"}}>
-      <div onClick={e=>{ if(selTask && !e.target.closest("[data-task-id],button,input,select,textarea,a")) setSelTask(null); }} style={{flex:1,minWidth:0,overflowY:"auto",padding:"22px 26px",display:(narrow&&selTask)?"none":"block"}}>
+      <div onClick={e=>{ if(selTask && !e.target.closest("[data-task-id],button,input,select,textarea,a")) setSelTask(null); }} style={{flex:1,minWidth:0,overflowY:"auto",padding:narrow?"16px 13px":"22px 26px",paddingBottom:86,display:(narrow&&selTask)?"none":"block"}}>
         <div style={{marginBottom:18}}>
           {view==="myday"&&<div style={{fontSize:12,color:T.textMuted,fontWeight:500,marginBottom:3}}>{new Date().getHours()<12?"Good morning 🌤":new Date().getHours()<17?"Keep it up 💪":"Good evening 🌙"}</div>}
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div style={{display:"flex",alignItems:"center",gap:12}}>
-              <h1 onClick={()=>{ if(catKey&&listManage) setManageMode("edit"); }} title={catKey&&listManage?"Tap to edit this list — name, icon, color":undefined} style={{fontFamily:"'Sora',sans-serif",fontSize:22,fontWeight:700,letterSpacing:"-.5px",display:"flex",alignItems:"center",gap:8,cursor:catKey&&listManage?"pointer":"default"}}>{titleIcon&&<CatIcon icon={titleIcon} size={20}/>}{titleText}{catKey&&listManage&&<Ico n="edit" s={13} c={T.textMuted} st={{opacity:.5}}/>}</h1>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0,flexGrow:1}}>
+              <h1 onClick={()=>{ if(catKey&&listManage) setManageMode("edit"); }} title={catKey&&listManage?"Tap to edit this list — name, icon, color":undefined} style={{fontFamily:"'Sora',sans-serif",fontSize:narrow?19:22,fontWeight:700,letterSpacing:"-.5px",display:"flex",alignItems:"center",gap:8,minWidth:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",cursor:catKey&&listManage?"pointer":"default"}}>{titleIcon&&<CatIcon icon={titleIcon} size={20}/>}{titleText}{catKey&&listManage&&<Ico n="edit" s={13} c={T.textMuted} st={{opacity:.5}}/>}</h1>
               {catKey&&listManage&&(
                 <button onClick={()=>setManageMode("share")} title="Share this list & assign people" style={{display:"inline-flex",alignItems:"center",gap:5,padding:"4px 12px",borderRadius:20,border:`1px solid ${T.accent}55`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}>🤝 Share</button>
               )}
@@ -1797,28 +1908,6 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             </div>
           </div>
         );})()}
-        {view==="myday"&&suggestions&&suggestions.length>0&&(
-          <div style={{marginBottom:14,border:`1px solid ${T.border}`,borderRadius:11,background:T.surface,overflow:"hidden"}}>
-            <button onClick={()=>setShowSugg(s=>!s)} style={{width:"100%",display:"flex",alignItems:"center",gap:7,padding:"9px 12px",background:"none",border:"none",cursor:"pointer",color:T.text,fontFamily:"'DM Sans',sans-serif"}}>
-              <Ico n="sparkles" s={14} c={T.accent}/>
-              <span style={{fontSize:12,fontWeight:700,flex:1,textAlign:"left"}}>Suggestions for My Day</span>
-              <span style={{fontSize:10,color:T.textMuted}}>{showSugg?"Hide":`Show ${suggestions.length}`}</span>
-            </button>
-            {showSugg&&(
-              <div style={{padding:"0 8px 8px",display:"flex",flexDirection:"column",gap:3}}>
-                {suggestions.map(t=>{const ov=t.due&&t.due<tod();return(
-                  <div key={t.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 8px",borderRadius:8,background:T.surface2}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:12,color:T.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{t.title}</div>
-                      {t.due&&<div style={{fontSize:10,color:ov?T.danger:T.textMuted,fontWeight:ov?700:400}}>{ov?"Overdue · ":""}{fmtDate(t.due)}</div>}
-                    </div>
-                    <button onClick={()=>onAddToMyDay(t.id)} style={{display:"flex",alignItems:"center",gap:4,padding:"4px 10px",borderRadius:7,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}><Ico n="plus" s={11} c={T.accent}/>Add</button>
-                  </div>
-                );})}
-              </div>
-            )}
-          </div>
-        )}
         {view!=="completed"&&(
           <div style={{display:"flex",gap:8,marginBottom:14}}>
             <div style={{flex:1,display:"flex",alignItems:"center",gap:9,background:T.surface,border:`1px solid ${T.border}`,borderRadius:11,padding:"0 12px"}}>
@@ -1828,11 +1917,20 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             <button onClick={addTask} style={{padding:"0 18px",borderRadius:11,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontWeight:700,fontSize:13,fontFamily:"'DM Sans',sans-serif",boxShadow:"0 3px 12px rgba(192,132,252,.35)"}}>Add</button>
           </div>
         )}
-        {view!=="myday"&&(
-          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:view==="upcoming"?4:10,marginTop:-4}}>💡 Swipe a task ← left to delete · → right to add to My Day ☀️ · hold & drag to reorder</div>
+        {view!=="completed"&&(
+          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:view==="upcoming"?4:10,marginTop:-4,lineHeight:1.5}}>💡 Swipe ← to delete · → to add to My Day ☀️ · {dragHint()} {onHelp&&<button onClick={onHelp} style={{background:"none",border:"none",padding:0,margin:0,color:T.accent,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif",textDecoration:"underline"}}>How it all works</button>}</div>
         )}
         {view==="upcoming"&&(
-          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10}}>📅 Type a date ("friday", "july 30") to schedule — no date means it's filed as <b>Date TBD</b> until you decide. "tbd" / "tba" / "unknown" work too.</div>
+          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>📅 Type a date ("friday", "july 30", "next tue") to schedule — no date means it's filed as <b>Date TBD</b> until you decide. "tbd" / "tba" / "unknown" work too.</div>
+        )}
+        {view==="assigned"&&(
+          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>🤝 Work other people handed to you. Open a task to see who assigned it — ticking it off updates their copy too.</div>
+        )}
+        {view==="flagged"&&(
+          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>🚩 Your shortlist. Open any task and tap the flag to add or remove it here.</div>
+        )}
+        {view==="myday"&&(
+          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>☀️ Today only. Anything left unfinished is carried over tomorrow — and suggestions for what to pull in are at the bottom.</div>
         )}
         {view!=="completed"&&(
           <div style={{display:"flex",gap:5,marginBottom:12}}>
@@ -1893,6 +1991,30 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             </div>
           )}
         </div>
+        {/* Suggestions live BELOW the day's tasks and start folded away. Opened at the top of the
+            screen they filled a phone entirely, hiding the very list they're meant to feed. */}
+        {view==="myday"&&suggestions&&suggestions.length>0&&(
+          <div style={{marginTop:16,border:`1px solid ${T.border}`,borderRadius:11,background:T.surface,overflow:"hidden"}}>
+            <button onClick={()=>setShowSugg(s=>!s)} style={{width:"100%",display:"flex",alignItems:"center",gap:7,padding:"9px 12px",background:"none",border:"none",cursor:"pointer",color:T.text,fontFamily:"'DM Sans',sans-serif"}}>
+              <Ico n="sparkles" s={14} c={T.accent}/>
+              <span style={{fontSize:12,fontWeight:700,flex:1,textAlign:"left",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>Suggestions for My Day</span>
+              <span style={{fontSize:10,color:T.textMuted,flexShrink:0}}>{showSugg?"Hide":`Show ${suggestions.length}`}</span>
+            </button>
+            {showSugg&&(
+              <div style={{padding:"0 8px 8px",display:"flex",flexDirection:"column",gap:3,maxHeight:220,overflowY:"auto"}}>
+                {suggestions.map(t=>{const ov=t.due&&t.due<tod();return(
+                  <div key={t.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 8px",borderRadius:8,background:T.surface2}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:12,color:T.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{t.title}</div>
+                      {t.due&&<div style={{fontSize:10,color:ov?T.danger:T.textMuted,fontWeight:ov?700:400}}>{ov?"Overdue · ":""}{fmtDate(t.due)}</div>}
+                    </div>
+                    <button onClick={()=>onAddToMyDay(t.id)} style={{display:"flex",alignItems:"center",gap:4,padding:"4px 10px",borderRadius:7,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}><Ico n="plus" s={11} c={T.accent}/>Add</button>
+                  </div>
+                );})}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} onClose={()=>setSelTask(null)} onFocus={onFocusTask} myEmail={myEmail} people={people} onAssign={onAssign} peopleGroups={peopleGroups} listPeople={listPeople}/>}
       {manageMode&&catKey&&listManage&&(
@@ -2236,13 +2358,14 @@ const DL=({label,T,children})=><div><span style={{fontSize:10,fontWeight:700,let
 
 function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,canvasNotes,setCanvasNotes,onCanvasToTask,requestLink,onCanvasToNote,onOpenTask,selId}) {
   const [tab,setTab]=useState("matrix");
+  const narrow=useNarrow();   // 157px-wide quadrants are unreadable — a phone stacks them instead
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div style={{padding:"14px 22px 0",borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
-          <div>
+      <div style={{padding:narrow?"12px 13px 0":"14px 22px 0",borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",gap:8,flexWrap:"wrap"}}>
+          <div style={{minWidth:0,flexGrow:1}}>
             <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:19,fontWeight:700,letterSpacing:"-.4px"}}>{tab==="matrix"?"Priority Matrix":"Freeform Canvas"}</h1>
-            <p style={{fontSize:11,color:T.textMuted,marginTop:1}}>{tab==="matrix"?"Tap a card for details · hold & drag between quadrants · swipe ← delete, → My Day":"Tap empty space to jot an idea · drag to move it · 🔗 link it to a task · ➔ turn it into a task"}</p>
+            <p style={{fontSize:11,color:T.textMuted,marginTop:1}}>{tab==="matrix"?("Tap a card for details · "+dragHint("matrix")+" · swipe ← delete, → My Day"):"Tap empty space to jot an idea · drag to move it · 🔗 link it to a task · ➔ turn it into a task"}</p>
           </div>
           <div style={{display:"flex",gap:4,paddingBottom:2}}>
             {["matrix","canvas"].map(t=>(
@@ -2261,6 +2384,7 @@ function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDa
 }
 
 function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,onOpenTask,selId}) {
+  const narrow=useNarrow();   // four 157px columns are unreadable on a phone — stack them instead
   const [addingIn,setAddingIn]=useState(null);
   const [newText,setNewText]=useState("");
   const [dragOver,setDragOver]=useState(null);
@@ -2342,16 +2466,16 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
   };
   const openNote=task=>{ if(didDragNote.current){ didDragNote.current=false; return; } onOpenTask?.(task); };
   return (
-    <div style={{flex:1,display:"grid",gridTemplateColumns:bigQ?"1fr":"1fr 1fr",gridTemplateRows:bigQ?"1fr":"1fr 1fr",gap:1,background:T.border,overflow:"hidden"}}>
+    <div style={{flex:1,display:"grid",gridTemplateColumns:(bigQ||narrow)?"1fr":"1fr 1fr",gridTemplateRows:bigQ?"1fr":(narrow?"repeat(4, minmax(190px, auto))":"1fr 1fr"),gap:1,background:T.border,overflow:narrow&&!bigQ?"auto":"hidden"}}>
       {QUAD_ORDER.filter(qid=>!bigQ||bigQ===qid).map(qid=>{const q=QUAD[qid];return(
         <div key={qid} data-quadrant={qid}
           style={{background:dragOver===qid?q.color+"12":T.bg,transition:"background .15s",display:"flex",flexDirection:"column",overflow:"hidden",outline:dragOver===qid?`2px dashed ${q.color}66`:"none",outlineOffset:"-2px"}}>
-          <div style={{padding:"9px 14px 7px",borderBottom:`1px solid ${T.border}`,background:q.color+"12",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
-            <div style={{display:"flex",alignItems:"center",gap:6}}>
-              <span style={{fontSize:11,fontWeight:700,color:q.color}}>{q.icon} {q.label}</span>
+          <div style={{padding:narrow?"8px 10px 7px":"9px 14px 7px",borderBottom:`1px solid ${T.border}`,background:q.color+"12",display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,flexShrink:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0,flexGrow:1}}>
+              <span style={{fontSize:11,fontWeight:700,color:q.color,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{q.icon} {q.label}</span>
               <span style={{fontSize:9,color:T.textMuted,background:T.surface2,padding:"1px 6px",borderRadius:20,border:`1px solid ${T.border}`}}>{q.short}</span>
             </div>
-            <div style={{display:"flex",gap:4}}>
+            <div style={{display:"flex",gap:4,flexShrink:0}}>
               <button onClick={()=>setBigQ(bigQ===qid?null:qid)} title={bigQ===qid?"Back to all four quadrants":"Enlarge this quadrant"} style={{width:22,height:22,borderRadius:5,border:"none",cursor:"pointer",background:bigQ===qid?q.color:q.color+"22",color:bigQ===qid?"#fff":q.color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,lineHeight:1}}>{bigQ===qid?"🗗":"⛶"}</button>
               <button onClick={()=>{setAddingIn(qid);setNewText("");}} style={{width:22,height:22,borderRadius:5,border:"none",cursor:"pointer",background:q.color+"22",color:q.color,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="plus" s={12} c={q.color}/></button>
             </div>
@@ -2612,6 +2736,9 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,onLinkNote,onC
   const [sel,setSel]=useState(null);
   const [nt,setNt]=useState("");
   const [mode,setMode]=useState("text");
+  // On a phone the list and the editor cannot share the screen — you see one at a time,
+  // exactly like the task list and its details panel.
+  const narrow=useNarrow();
   const [listOpen,setListOpen]=useState(true);
   const linkedNotes=(notes||[]).map(n=>({note:n,task:n.taskId!=null?(tasks||[]).find(t=>t.id===n.taskId):null})).filter(x=>x.task);
   const linkedTaskIds=new Set(linkedNotes.map(x=>x.task.id));
@@ -2628,12 +2755,12 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,onLinkNote,onC
     window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up);window.addEventListener("pointercancel",up);
   };
   const ACC=["#3b82f6","#22c55e","#f59e0b","#ef4444","#a855f7","#ec4899","#14b8a6"];
-  const addNote=()=>{if(!nt.trim())return;const n={id:Date.now(),title:nt.trim(),body:"",pinned:false,color:ACC[notes.length%ACC.length],created:tod()};setNotes(ns=>[n,...ns]);setSel(n);setNt("");};
+  const addNote=()=>{if(!nt.trim())return;const n={id:Date.now(),title:nt.trim(),body:"",pinned:false,color:ACC[notes.length%ACC.length],created:tod()};setNotes(ns=>[n,...ns]);setSel(n);if(narrow)setListOpen(false);setNt("");};
   const upNote=(id,patch)=>{setNotes(ns=>ns.map(n=>n.id===id?{...n,...patch}:n));if(sel?.id===id)setSel(s=>({...s,...patch}));};
   const delNote=id=>{setNotes(ns=>ns.filter(n=>n.id!==id));if(sel?.id===id)setSel(null);};
   return (
     <div style={{flex:1,display:"flex",overflow:"hidden"}}>
-      <div style={{width:listOpen?248:0,minWidth:0,opacity:listOpen?1:0,borderRight:listOpen?`1px solid ${T.border}`:"none",display:"flex",flexDirection:"column",overflowY:"auto",overflowX:"hidden",background:T.sidebar,transition:"width .2s ease,opacity .15s ease",flexShrink:0}}>
+      <div style={{width:listOpen?(narrow?"100%":248):0,flexGrow:(narrow&&listOpen)?1:0,minWidth:0,opacity:listOpen?1:0,borderRight:listOpen?`1px solid ${T.border}`:"none",display:"flex",flexDirection:"column",overflowY:"auto",overflowX:"hidden",background:T.sidebar,transition:"width .2s ease,opacity .15s ease",flexShrink:0}}>
         <div style={{padding:"16px 12px 10px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
             <h2 style={{fontFamily:"'Sora',sans-serif",fontSize:16,fontWeight:700}}>Notes</h2>
@@ -2659,7 +2786,7 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,onLinkNote,onC
           <div style={{padding:"4px 8px 16px",borderTop:`1px solid ${T.border}`}}>
             <div style={{padding:"10px 4px 4px",fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted}}>📋 Notes on tasks</div>
             {linkedNotes.map(({note,task})=>(
-              <SwipeRow key={"ln"+note.id} T={T} onDelete={()=>delNote(note.id)} onTap={()=>setSel(note)}>
+              <SwipeRow key={"ln"+note.id} T={T} onDelete={()=>delNote(note.id)} onTap={()=>{setSel(note); if(narrow) setListOpen(false);}}>
                 <div title="Tap to edit · swipe ← to delete" style={{display:"flex",alignItems:"center",gap:5,padding:"6px 8px"}}>
                   <span style={{fontSize:11}}>🔗</span>
                   <span style={{fontSize:12,fontWeight:600,color:T.text,flex:1,minWidth:0,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{note.title||"Untitled"}</span>
@@ -2682,16 +2809,16 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,onLinkNote,onC
           </div>
         )}
       </div>
-      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}} onPointerDown={onEditorDown}>
+      <div style={{flex:1,minWidth:0,display:(narrow&&listOpen)?"none":"flex",flexDirection:"column",overflow:"hidden"}} onPointerDown={onEditorDown}>
       <div style={{padding:"8px 14px",borderBottom:`1px solid ${T.border}`,flexShrink:0,display:"flex",alignItems:"center",gap:8}}>
         <button onClick={()=>setListOpen(o=>!o)} title={listOpen?"Hide list for more room":"Show list"} style={{width:28,height:28,borderRadius:7,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ico n="menu" s={15}/></button>
-        <span style={{fontSize:11,color:T.textMuted}}>{listOpen?"Swipe left (or tap) to hide the list":"Swipe right (or tap) to show the list"}</span>
+        <span style={{fontSize:11,color:T.textMuted,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{narrow?(listOpen?"Tap to open the editor":"← Back to your notes"):(listOpen?"Swipe left (or tap) to hide the list":"Swipe right (or tap) to show the list")}</span>
       </div>
       {sel?(
-        <div style={{flex:1,display:"flex",flexDirection:"column",padding:"18px 26px 22px",overflowY:"auto"}}>
+        <div style={{flex:1,display:"flex",flexDirection:"column",padding:narrow?"14px 13px 20px":"18px 26px 22px",overflowY:"auto"}}>
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
-            <input value={sel.title} onChange={e=>upNote(sel.id,{title:e.target.value})} onBlur={()=>{ if(sel.taskId!=null){ const t=(tasks||[]).find(x=>x.id===sel.taskId); if(t) onLinkNote?.(sel,t); } }} style={{flex:1,fontFamily:"'Sora',sans-serif",fontSize:20,fontWeight:700,background:"transparent",border:"none",outline:"none",color:T.text,letterSpacing:"-.3px"}}/>
-            <div style={{display:"flex",gap:5}}>
+            <input value={sel.title} onChange={e=>upNote(sel.id,{title:e.target.value})} onBlur={()=>{ if(sel.taskId!=null){ const t=(tasks||[]).find(x=>x.id===sel.taskId); if(t) onLinkNote?.(sel,t); } }} style={{flex:1,minWidth:0,fontFamily:"'Sora',sans-serif",fontSize:20,fontWeight:700,background:"transparent",border:"none",outline:"none",color:T.text,letterSpacing:"-.3px"}}/>
+            <div style={{display:"flex",gap:5,flexShrink:0}}>
               {ACC.slice(0,5).map(c=><div key={c} onClick={()=>upNote(sel.id,{color:c})} style={{width:14,height:14,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${sel.color===c?T.text:"transparent"}`,transition:"border-color .15s"}}/>)}
             </div>
           </div>
@@ -3190,6 +3317,7 @@ const ACHIEVEMENTS=[
   {emoji:"🏆",name:"Champion",desc:"Reach Level 5 — the top tier. Productivity master!"},
 ];
 function AnalyticsView({T,tasks,xp,level,streak,habits=[],dayStats={},todStr}) {
+  const narrow=useNarrow();   // four stat cards and two side-by-side panels do not fit a phone
   const [aiLoad,setAiLoad]=useState(false);
   const [aiMsg,setAiMsg]=useState("");
   const [achSel,setAchSel]=useState(null);
@@ -3241,12 +3369,12 @@ function AnalyticsView({T,tasks,xp,level,streak,habits=[],dayStats={},todStr}) {
   };
   const runAI=()=>{setAiLoad(true);setAiMsg("");setTimeout(()=>{setAiLoad(false);setAiMsg(`🧠 You completed ${weekTotal} task${weekTotal===1?"":"s"} this week${weekTotal>0?" — nice momentum":""}. Overall completion rate: ${rate}%. ${topTag?`Most of your work lives in "${topTag[0]}" (${topTag[1]} tasks). `:""}${ov>0?`${ov} overdue — pull one into My Day and knock it out first. `:"No overdue tasks — inbox zero energy! "}${habits.length?`Habits: ${habitsDoneToday}/${habits.length} done today, best streak ${bestHabitStreak} day${bestHabitStreak===1?"":"s"} 🔥`:`Try adding a daily habit to build momentum.`}`);},1400);};
   return (
-    <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
+    <div style={{flex:1,overflowY:"auto",padding:narrow?"16px 13px":"22px 26px"}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:18,flexWrap:"wrap"}}>
         <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px"}}>Analytics</h1>
         <button onClick={shareCard} title="Creates a picture of your week — share it or save it" style={{padding:"8px 16px",borderRadius:10,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif",boxShadow:"0 3px 12px rgba(192,132,252,.3)"}}>📸 Share my week</button>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
+      <div style={{display:"grid",gridTemplateColumns:narrow?"repeat(2,1fr)":"repeat(4,1fr)",gap:10,marginBottom:14}}>
         {[{l:"Total",v:total,i:"layers",c:T.accent},{l:"Done",v:done,i:"check",c:T.success},{l:"Rate",v:`${rate}%`,i:"target",c:T.info},{l:"Overdue",v:ov,i:"clock",c:T.danger}].map(s=>(
           <div key={s.l} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"13px 15px"}}>
             <div style={{width:27,height:27,borderRadius:7,background:s.c+"22",display:"flex",alignItems:"center",justifyContent:"center",marginBottom:8}}><Ico n={s.i} s={13} c={s.c}/></div>
@@ -3265,7 +3393,7 @@ function AnalyticsView({T,tasks,xp,level,streak,habits=[],dayStats={},todStr}) {
           <span style={{fontSize:12,color:"#f59e0b",fontWeight:700}}>🔥 best streak: {bestHabitStreak}d</span>
         </div>
       )}
-      <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:12,marginBottom:12}}>
+      <div style={{display:"grid",gridTemplateColumns:narrow?"1fr":"1.4fr 1fr",gap:12,marginBottom:12}}>
         <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:16}}>
           <div style={{fontSize:12,fontWeight:600,marginBottom:12,display:"flex",alignItems:"center",gap:5}}><Ico n="bar" s={13} c={T.accent}/>Weekly Completions</div>
           <div style={{display:"flex",alignItems:"flex-end",gap:6,height:80}}>
@@ -3297,7 +3425,7 @@ function AnalyticsView({T,tasks,xp,level,streak,habits=[],dayStats={},todStr}) {
           )}
         </div>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1.3fr",gap:12,marginBottom:12}}>
+      <div style={{display:"grid",gridTemplateColumns:narrow?"1fr":"1fr 1.3fr",gap:12,marginBottom:12}}>
         <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:16}}>
           <div style={{fontSize:12,fontWeight:600,marginBottom:10}}>By Category</div>
           {Object.entries(byTag).map(([tag,cnt])=>(
@@ -3893,7 +4021,70 @@ function TeamsSettings({T,teams=[],myEmail,myId,knownPeople=[],onCreate,onAddMem
   );
 }
 
-function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSound,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon,onDeleteCat,deletedCats,onRestoreCat,onPurgeCat,navTabs=[],hiddenTabs=[],setHiddenTabs,knownPeople=[],teams=[],myEmail,myId,onTeamCreate,onTeamAddMember,onTeamRemoveMember,onTeamDelete,myAvatar,onPickAvatar,newAtBottom,setNewAtBottom}) {
+// ── The guide ────────────────────────────────────────────────────────────────
+// One place that explains every part of the app, reachable forever from Settings,
+// the ⓘ button and the hint under any task list. Written as short answers to
+// "how do I…", not as a feature list, and sized for a phone first: full screen
+// under 640px, a centred sheet above it.
+const GUIDE = [
+  ["✅","The basics","A task is a card. Tap it to open the details panel, where you can add steps, a date, a time, notes, photos, a colour, a priority and who it belongs to.\n• Tap the circle to finish it.\n• Tap the title in the panel to rename it — Freely re-reads any date or list name you type in.\n• Everything saves by itself, on every device you sign in on."],
+  ["✨","Type it the way you'd say it","You never need a date picker. Type the whole thing into any add box:\n• “Call the dentist tomorrow 3pm”\n• “Essay draft friday”\n• “Team sync sept 30 4:00 pm - 5:30 pm”\n• “Rent 1st of every month”\nFreely pulls out the date, the start and end time, and the list — and leaves the title clean. Spelling is forgiven: “julky”, “tommorow” and “wenesday” all land correctly.\nNo date in mind? Type “tbd”, “tba” or “unknown” and it is filed as Date TBD instead of guessing."],
+  ["👆","Gestures","Two things a card does:\n• Swipe it ← to delete, → to add it to My Day.\n• Pick it up to reorder: hold it for a moment, or (with a mouse) just pull it along the list. On the Priority Matrix, picking a note up lets you drop it in any box.\nA line shows exactly where it will land before you let go. Reordering by hand switches the sort to “My order” so your arrangement sticks."],
+  ["☀️","My Day","Your shortlist for today, wiped clean each morning. Anything you did not finish is carried forward automatically — the banner at the top undoes that in one tap.\nSuggestions sit at the bottom of the list: overdue and near-due work you might want to pull in."],
+  ["📅","Upcoming & Calendar","Upcoming is everything with a date, soonest first, with anything overdue pinned to the top under a red header (“Move to today” fixes them all at once). Undated work waits under Date TBD.\nCalendar is the same tasks laid on a month. Drag a task — or a single step inside a task — onto a day to move it."],
+  ["🎯","Priority Matrix","Four boxes, by urgency and importance:\n• Top-left — urgent AND important: do it now.\n• Top-right — important, not urgent: schedule it.\n• Bottom-left — urgent, not important: hand it off.\n• Bottom-right — neither: drop it.\nTap the ⤢ on a box to blow it up full screen. Drag a note between boxes to change its priority — matrix and list are the same tasks, always."],
+  ["📁","Lists, folders & your home screen","Make a list for anything (Work, ACA, GoDo — your capitals are kept). Drag one list onto another to nest them into a folder.\n• Tap a list's name at the top of the screen to rename it, change its icon or colour.\n• Typing a list's name into a task files it there: “writing essay” becomes “essay” in your Writing list.\n• Whatever sits at the very top of your sidebar is the screen Freely opens on. Drag Upcoming above My Day and Upcoming becomes your home."],
+  ["🤝","Sharing & assigning","The 🤝 Share button next to a list's name opens sharing. Invite by email; they see the list the moment they sign in.\n• Assign a task to one person, or to everyone on the list at once.\n• Everyone on the list sees who a task belongs to — unless you mark the assignment 🔒 private, and then only that person sees it.\n• A task assigned to you appears under “Assigned to me”, even if the list was never shared with you.\n• Leave a list you were invited to any time with the Leave ✕ button."],
+  ["👥","Teams & messages","Settings → Teams makes a team. Everyone in it can message each other directly — no friend request between teammates.\n• Outside a team, the first message to a stranger is a request; they accept before you can chat freely.\n• A team is private: nobody sees it unless they were invited to join it, or invited purely to hand work to it.\n• You can assign a whole list to a team in one go."],
+  ["🔁","Habits","Habits are things you want to do repeatedly, not once. Pick which weekdays each one is due, give it a 1-2-3 priority, and check in with a tap. The streak counts consecutive days you kept it.\nToday's habits also appear as chips at the top of My Day."],
+  ["🍅","Focus","Open a task and hit Focus to start a Pomodoro on it. The full-screen timer breathes with the ring; finishing one earns +25 XP. Minimise it and it keeps running while you work elsewhere."],
+  ["📝","Notes & Canvas","Notes are for writing that is not a task. The Canvas is a freeform board — drop coloured sticky notes anywhere, drag them around, and link one to a task so its date and time follow along. An empty note removes itself rather than leaving clutter behind."],
+  ["📊","Progress","Analytics shows what you actually finished: a weekly bar chart, a heatmap of your year, your streak and your XP. XP comes from finishing tasks, keeping habits and completing focus sessions."],
+  ["⚙️","Settings worth knowing","• Sort order (due date, priority, A→Z, or your own) — remembered on every device.\n• New tasks to the bottom or the top of the list.\n• Hide any tab you do not use; reorder the rest by dragging in the sidebar.\n• Light or dark, and five colour schemes.\n• Export a backup of everything, or import one back."],
+];
+function HelpGuide({T,onClose,onReplayTour,onSamples}) {
+  const narrow = useNarrow();
+  const [open,setOpen] = useState(0);
+  const [q,setQ] = useState("");
+  const ql = q.trim().toLowerCase();
+  const rows = ql ? GUIDE.filter(([,t,b])=>(t+" "+b).toLowerCase().includes(ql)) : GUIDE;
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:2700,background:"rgba(5,6,12,.7)",display:"flex",alignItems:narrow?"stretch":"center",justifyContent:"center",padding:narrow?0:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:narrow?"100%":480,maxWidth:"100%",height:narrow?"100%":"auto",maxHeight:narrow?"100%":"88vh",display:"flex",flexDirection:"column",background:T.surface,border:narrow?"none":`1px solid ${T.border}`,borderRadius:narrow?0:18,boxShadow:"0 24px 80px rgba(0,0,0,.5)",fontFamily:"'DM Sans',sans-serif",overflow:"hidden"}}>
+        <div style={{display:"flex",alignItems:"center",gap:9,padding:"14px 16px",borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
+          <span style={{fontSize:19}}>📖</span>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontFamily:"'Sora',sans-serif",fontSize:15,fontWeight:800}}>How Freely works</div>
+            <div style={{fontSize:10,color:T.textMuted}}>Every part of the app, in plain language</div>
+          </div>
+          <button onClick={onClose} style={{width:30,height:30,borderRadius:9,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ico n="x" s={14}/></button>
+        </div>
+        <div style={{padding:"10px 14px 0",flexShrink:0}}>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search the guide…  try “assign”, “streak”, “tbd”" style={{width:"100%",boxSizing:"border-box",padding:"9px 11px",borderRadius:10,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:"10px 14px 16px",display:"flex",flexDirection:"column",gap:6,WebkitOverflowScrolling:"touch"}}>
+          {rows.length===0&&<div style={{textAlign:"center",padding:"36px 10px",color:T.textMuted,fontSize:12}}>Nothing in the guide matches “{q}”.</div>}
+          {rows.map(([em,title,body])=>{ const i=GUIDE.findIndex(g=>g[1]===title); const isOpen=ql?true:open===i; return (
+            <div key={title} style={{border:`1px solid ${T.border}`,borderRadius:12,background:isOpen?T.surface2:"transparent",overflow:"hidden"}}>
+              <button onClick={()=>setOpen(o=>o===i?-1:i)} style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:"11px 12px",background:"none",border:"none",cursor:"pointer",color:T.text,fontFamily:"'DM Sans',sans-serif",textAlign:"left"}}>
+                <span style={{fontSize:16,flexShrink:0}}>{em}</span>
+                <span style={{flex:1,minWidth:0,fontSize:13,fontWeight:700}}>{title}</span>
+                <span style={{fontSize:11,color:T.textMuted,flexShrink:0,transform:isOpen?"rotate(90deg)":"none",transition:"transform .15s"}}>›</span>
+              </button>
+              {isOpen&&<div style={{padding:"0 12px 12px",fontSize:12,color:T.textMuted,lineHeight:1.65,whiteSpace:"pre-line"}}>{body}</div>}
+            </div>
+          );})}
+          <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
+            {onReplayTour&&<button onClick={onReplayTour} style={{flexGrow:1,flexBasis:140,padding:"10px",borderRadius:10,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>▶ Replay the tour</button>}
+            {onSamples&&<button onClick={onSamples} style={{flexGrow:1,flexBasis:140,padding:"10px",borderRadius:10,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>↺ Starter tasks again</button>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSound,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon,onDeleteCat,deletedCats,onRestoreCat,onPurgeCat,navTabs=[],hiddenTabs=[],setHiddenTabs,knownPeople=[],teams=[],myEmail,myId,onTeamCreate,onTeamAddMember,onTeamRemoveMember,onTeamDelete,myAvatar,onPickAvatar,newAtBottom,setNewAtBottom,onHelp}) {
   const importRef=useRef(null);
   const iconFileRef=useRef(null);
   const soundFileRef=useRef(null);
@@ -3953,6 +4144,18 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
     <div style={{flex:1,overflowY:"auto",padding:"22px 26px",maxWidth:580}}>
       <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px",marginBottom:18}}>Settings</h1>
 
+      {/* The guide, first thing on the page — it is what a stuck user comes here looking for. */}
+      {onHelp&&(
+        <button onClick={onHelp} style={{width:"100%",display:"flex",alignItems:"center",gap:11,padding:"13px 15px",marginBottom:14,borderRadius:12,border:`1px solid ${T.accent}55`,background:T.accentGlow,color:T.text,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",textAlign:"left"}}>
+          <span style={{fontSize:20,flexShrink:0}}>📖</span>
+          <span style={{flex:1,minWidth:0}}>
+            <span style={{display:"block",fontSize:13,fontWeight:800,color:T.accent}}>How Freely works</span>
+            <span style={{display:"block",fontSize:11,color:T.textMuted,marginTop:1}}>Every feature explained · replay the tour · starter tasks</span>
+          </span>
+          <span style={{fontSize:14,color:T.accent,flexShrink:0}}>›</span>
+        </button>
+      )}
+
       {/* Teams (shared groups) */}
       <TeamsSettings T={T} teams={teams} myEmail={myEmail} myId={myId} knownPeople={knownPeople} onCreate={onTeamCreate} onAddMember={onTeamAddMember} onRemoveMember={onTeamRemoveMember} onDelete={onTeamDelete}/>
 
@@ -4007,13 +4210,13 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
             </div>
           </div>
         )}
-        <div style={{display:"flex",gap:6,paddingBottom:12,alignItems:"center"}}>
+        <div style={{display:"flex",gap:6,paddingBottom:12,alignItems:"center",flexWrap:"wrap"}}>
           <button onClick={()=>setIconMenuFor(iconMenuFor==="__new__"?null:"__new__")} title="Pick icon" style={{width:32,height:32,borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><CatIcon icon={newCatIcon} size={16}/></button>
           <div style={{display:"flex",gap:4,flexWrap:"wrap",marginRight:4}}>
             {CAT_COLORS.map(c=><div key={c} onClick={()=>setNewCatColor(c)} style={{width:16,height:16,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${newCatColor===c?T.text:"transparent"}`,flexShrink:0}}/>)}
           </div>
-          <input value={newCat} onChange={e=>onNameChange(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCat()} placeholder="New list name…" style={{flex:1,padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
-          <button onClick={addCat} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Add</button>
+          <input value={newCat} onChange={e=>onNameChange(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCat()} placeholder="New list name…" style={{flexGrow:1,flexBasis:110,minWidth:0,padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+          <button onClick={addCat} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700,flexShrink:0}}>Add</button>
         </div>
         <div style={{fontSize:10,color:T.textMuted,paddingBottom:12,marginTop:-4}}>An icon is auto-picked from the name — tap it above to change.</div>
         {deletedCats&&deletedCats.length>0&&(
