@@ -19,6 +19,9 @@
 --     assigner marks it private, and then only the assignee can see it.
 --   · Habits keep the order you drag them into, on every device.
 --   · Each list name exists once per person (the app saves lists by name).
+--   · You can see the email/avatar only of people you're connected to (a shared list, a team, a chat).
+--   · Sent messages can't be rewritten; tasks can't change owner; only a list's owner creates or
+--     changes its shares.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -134,6 +137,38 @@ returns boolean language sql stable set search_path = public as $$
 $$;
 
 
+-- are we connected? — sharing a list either way, in a team together, or in a conversation.
+-- Decides whose profile (email + avatar) you may see. Before this, every signed-in account could read
+-- every other account's email.
+create or replace function public.is_connected_to(other_id uuid, other_email text)
+returns boolean language sql security definer stable set search_path = public as $$
+  select
+    other_id = auth.uid()
+    or exists (select 1 from public.folder_shares fs
+               where (fs.owner_id = auth.uid() and lower(fs.shared_with_email) = lower(other_email))
+                  or (fs.owner_id = other_id and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email')))
+    or exists (select 1 from public.group_members a
+               join public.group_members b on a.group_id = b.group_id
+               where lower(a.email) = lower(auth.jwt() ->> 'email') and lower(b.email) = lower(other_email))
+    or exists (select 1 from public.messages m
+               where (lower(m.sender_email) = lower(auth.jwt() ->> 'email') and lower(coalesce(m.recipient_email, '')) = lower(other_email))
+                  or (lower(coalesce(m.recipient_email, '')) = lower(auth.jwt() ->> 'email') and lower(m.sender_email) = lower(other_email)))
+    or exists (select 1 from public.chat_requests r
+               where (lower(r.from_email) = lower(auth.jwt() ->> 'email') and lower(r.to_email) = lower(other_email))
+                  or (lower(r.to_email) = lower(auth.jwt() ->> 'email') and lower(r.from_email) = lower(other_email)));
+$$;
+
+-- a task's owner never changes (nothing in the app does it) — so nobody can take someone else's task
+create or replace function public.keep_task_owner()
+returns trigger language plpgsql as $$
+begin
+  if new.user_id is distinct from old.user_id then
+    raise exception 'A task''s owner can''t be changed';
+  end if;
+  return new;
+end $$;
+
+
 -- ╔═══════════════════════════════════════════════════════════════════════╗
 -- ║  STEP 3 · Security rules                                              ║
 -- ╚═══════════════════════════════════════════════════════════════════════╝
@@ -156,7 +191,8 @@ end $$;
 alter table public.profiles enable row level security;
 drop policy if exists "profiles read"  on public.profiles;
 drop policy if exists "profiles write" on public.profiles;
-create policy "profiles read"  on public.profiles for select to authenticated using (true);
+-- only people you are connected to (see is_connected_to) — not every account on Freely
+create policy "profiles read"  on public.profiles for select to authenticated using (public.is_connected_to(id, email));
 create policy "profiles write" on public.profiles for all    to authenticated
   using (id = auth.uid()) with check (id = auth.uid());
 
@@ -277,6 +313,36 @@ create policy "private assignments stay private" on public.tasks
     or user_id = auth.uid()
     or public.is_assigned_to_me(assigned_to)
   );
+
+
+-- Hardening ────────────────────────────────────────────────────────────────
+-- Messages: the only thing anyone may change on a message after it's sent is whether it's been read.
+-- (The recipient's "mark read" rule used to allow rewriting the text — or who it was from.)
+revoke update on public.messages from authenticated;
+grant update (read) on public.messages to authenticated;
+
+-- Friend requests: only the answer (status) can change, never who it's from or to.
+revoke update on public.chat_requests from authenticated;
+grant update (status) on public.chat_requests to authenticated;
+
+-- Tasks keep their owner. Someone a task is assigned to can tick it off and edit it, not take it.
+drop trigger if exists keep_task_owner on public.tasks;
+create trigger keep_task_owner before update on public.tasks
+  for each row execute function public.keep_task_owner();
+
+-- Shares: only the list's OWNER creates or changes a share, so a view-only person can't upgrade
+-- themselves and a collaborator can't pass your list on. The invited person may still remove their own
+-- share (leaving the list). RESTRICTIVE, so this holds whatever other share rules exist.
+drop policy if exists "shares: only the owner creates" on public.folder_shares;
+create policy "shares: only the owner creates" on public.folder_shares
+  as restrictive for insert to authenticated with check (owner_id = auth.uid());
+drop policy if exists "shares: only the owner changes" on public.folder_shares;
+create policy "shares: only the owner changes" on public.folder_shares
+  as restrictive for update to authenticated using (owner_id = auth.uid()) with check (owner_id = auth.uid());
+drop policy if exists "shares: owner or invitee removes" on public.folder_shares;
+create policy "shares: owner or invitee removes" on public.folder_shares
+  as restrictive for delete to authenticated
+  using (owner_id = auth.uid() or lower(shared_with_email) = lower(auth.jwt() ->> 'email'));
 
 
 -- ╔═══════════════════════════════════════════════════════════════════════╗

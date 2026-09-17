@@ -218,7 +218,8 @@ export const db = {
     if (ids && ids.length) await supabase.from("messages").update({ read: true }).in("id", ids);
   },
 
-  // Profiles: lets the app check that an email belongs to a real account + stores the chosen avatar.
+  // Profiles (email + chosen avatar). The database only returns people you're connected to — a shared
+  // list, a team, or a conversation — never the whole user list (see is_connected_to in setup.sql).
   async upsertProfile(uid, email, avatar) {
     await supabase.from("profiles").upsert({ id: uid, email: email.toLowerCase(), ...(avatar !== undefined ? { avatar } : {}) });
   },

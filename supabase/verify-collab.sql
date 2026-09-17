@@ -274,6 +274,52 @@ begin
       execute 'set local role authenticated';
       select count(*) into cnt from public.notes where id = nid;
       res := res || ('33. A stranger CANNOT read A''s notes | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: leaked' end);
+
+      ------------------------------------------------------ attacks that must fail
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', b_id::text, 'email', b_mail)::text, true);
+      execute 'set local role authenticated';
+
+      begin
+        update public.folder_shares set can_edit = true, can_delete = true
+          where owner_id = a_id and folder = mark || ' ro' and lower(shared_with_email) = b_mail;
+        get diagnostics cnt = row_count;
+        res := res || ('34. B CANNOT upgrade their own view-only share | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: B made it editable' end);
+      exception when others then res := res || ('34. B CANNOT upgrade their own view-only share | ✓ PASS')::text; end;
+
+      begin
+        insert into public.folder_shares(owner_id, folder, shared_with_email, can_delete)
+        values (a_id, mark, 'nobody@example.com', true);
+        res := res || ('35. B CANNOT pass A''s list on to someone else | ✗ FAIL: B shared it')::text;
+      exception when others then res := res || ('35. B CANNOT pass A''s list on to someone else | ✓ PASS')::text; end;
+
+      begin
+        update public.messages set body = 'rewritten by B' where body = mark || ' direct hello' and recipient_email = b_mail;
+        get diagnostics cnt = row_count;
+        res := res || ('36. B CANNOT rewrite a message A sent them | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: the text was changed' end);
+      exception when others then res := res || ('36. B CANNOT rewrite a message A sent them | ✓ PASS')::text; end;
+
+      begin
+        update public.messages set read = true where body = mark || ' direct hello' and recipient_email = b_mail;
+        get diagnostics cnt = row_count;
+        res := res || ('37. B CAN still mark that message read | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: blocked' end);
+      exception when others then res := res || ('37. B CAN still mark that message read | ✗ FAIL: ' || sqlerrm); end;
+
+      begin
+        update public.tasks set user_id = b_id where title = mark || ' open job';
+        get diagnostics cnt = row_count;
+        res := res || ('38. B CANNOT take ownership of a task assigned to them | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: B owns it now' end);
+      exception when others then res := res || ('38. B CANNOT take ownership of a task assigned to them | ✓ PASS')::text; end;
+
+      select count(*) into cnt from public.profiles where id = a_id;
+      res := res || ('39. B CAN see A''s profile (they share a list) | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: hidden' end);
+
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims',
+        json_build_object('sub', '00000000-0000-0000-0000-0000000000ee', 'email', 'nobody@example.com')::text, true);
+      execute 'set local role authenticated';
+      select count(*) into cnt from public.profiles where id in (a_id, b_id);
+      res := res || ('40. A stranger CANNOT look up A''s or B''s email | ' || case when cnt = 0 then '✓ PASS' else ('✗ FAIL: ' || cnt || ' visible') end);
     end if;
   end if;
 
@@ -281,7 +327,7 @@ begin
   execute 'set local role ' || quote_ident(orig);
   delete from public.tasks    where title like mark || '%';
   delete from public.folder_shares where folder like mark || '%';
-  delete from public.messages where body like mark || '%';
+  delete from public.messages where body like mark || '%' or body = 'rewritten by B';
   delete from public.notes where title like mark || '%';
   delete from public.categories where name like mark || '%';
   if made_req then
