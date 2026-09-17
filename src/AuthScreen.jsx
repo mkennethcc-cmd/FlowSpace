@@ -27,10 +27,11 @@ export default function AuthScreen() {
     setLoading(false);
   };
 
-  const googleLogin = () => supabase.auth.signInWithOAuth({
-    provider: "google",
-    options: { redirectTo: window.location.origin }
-  });
+  const googleLogin = async () => {
+    setError(""); setMsg("");
+    const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin } });
+    if (error) setError(error.message);
+  };
 
   const inp = {
     padding: "11px 14px", borderRadius: 10, border: "1px solid rgba(255,255,255,.1)",
@@ -41,7 +42,7 @@ export default function AuthScreen() {
   return (
     <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#0c0e16", fontFamily: "'DM Sans',sans-serif" }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Sora:wght@700&family=DM+Sans:wght@400;600&display=swap')`}</style>
-      <div style={{ width: 360, padding: 32, background: "#141828", borderRadius: 20, border: "1px solid rgba(255,255,255,.07)", boxShadow: "0 24px 60px rgba(0,0,0,.5)" }}>
+      <div style={{ width: 360, maxWidth: "calc(100vw - 24px)", boxSizing: "border-box", padding: 32, background: "#141828", borderRadius: 20, border: "1px solid rgba(255,255,255,.07)", boxShadow: "0 24px 60px rgba(0,0,0,.5)" }}>
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ width: 44, height: 44, borderRadius: 13, background: "linear-gradient(135deg,#c084fc,#818cf8)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", boxShadow: "0 4px 20px rgba(192,132,252,.4)", fontSize: 20 }}>⚡</div>
           <h1 style={{ fontFamily: "'Sora',sans-serif", fontSize: 22, fontWeight: 700, color: "#eef0fa", letterSpacing: "-.5px", margin: 0 }}>Freely</h1>
@@ -49,8 +50,8 @@ export default function AuthScreen() {
         </div>
         {mode === "reset" && <p style={{ color: "#7a85a3", fontSize: 12, textAlign: "center", marginBottom: 12, lineHeight: 1.5 }}>Enter your email and we'll send you a link to set a new password.</p>}
         <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <input style={inp} type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required />
-          {mode !== "reset" && <input style={inp} type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} required />}
+          <input style={inp} type="email" placeholder="Email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} required />
+          {mode !== "reset" && <input style={inp} type="password" placeholder="Password" autoComplete={mode === "signup" ? "new-password" : "current-password"} minLength={mode === "signup" ? 6 : undefined} value={password} onChange={e => setPassword(e.target.value)} required />}
           {error && <p style={{ color: "#ef4444", fontSize: 12, textAlign: "center", margin: 0 }}>{error}</p>}
           {msg && <p style={{ color: "#22c55e", fontSize: 12, textAlign: "center", margin: 0 }}>{msg}</p>}
           <button type="submit" disabled={loading} style={{ padding: 11, borderRadius: 10, border: "none", cursor: "pointer", background: "linear-gradient(135deg,#c084fc,#818cf8)", color: "#fff", fontWeight: 700, fontSize: 14, fontFamily: "'DM Sans',sans-serif", opacity: loading ? .7 : 1 }}>
@@ -95,7 +96,7 @@ const shellCard = {
   background: "#0c0e16", fontFamily: "'DM Sans',sans-serif"
 };
 const innerCard = {
-  width: 360, padding: 32, background: "#141828", borderRadius: 20,
+  width: 360, maxWidth: "calc(100vw - 24px)", boxSizing: "border-box", padding: 32, background: "#141828", borderRadius: 20,
   border: "1px solid rgba(255,255,255,.07)", boxShadow: "0 24px 60px rgba(0,0,0,.5)", textAlign: "center"
 };
 
@@ -155,7 +156,7 @@ export function ResetPassword({ onDone }) {
           <>
             <h1 style={{ fontFamily: "'Sora',sans-serif", fontSize: 22, fontWeight: 700, color: "#eef0fa", margin: 0 }}>Set a new password</h1>
             <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 20 }}>
-              <input style={inp} type="password" placeholder="New password" value={password} onChange={e => setPassword(e.target.value)} required minLength={6} />
+              <input style={inp} type="password" placeholder="New password" autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} required minLength={6} />
               {error && <p style={{ color: "#ef4444", fontSize: 12, margin: 0 }}>{error}</p>}
               <button type="submit" disabled={loading} style={{ padding: 11, borderRadius: 10, border: "none", cursor: "pointer", background: "linear-gradient(135deg,#c084fc,#818cf8)", color: "#fff", fontWeight: 700, fontSize: 14, fontFamily: "'DM Sans',sans-serif", opacity: loading ? .7 : 1 }}>
                 {loading ? "…" : "Update Password"}

@@ -268,11 +268,16 @@ export const db = {
     const { error } = await supabase.from("group_members").insert({ group_id: gid, email: email.toLowerCase(), added_by: (by || "").toLowerCase(), ...(role === "assigner" ? { role } : {}) });
     if (error && !/duplicate/i.test(error.message || "")) throw error;
   },
+  // Both return whether anything was actually removed — a refused delete is not an error, just zero rows.
   async removeGroupMember(gid, email) {
-    await supabase.from("group_members").delete().eq("group_id", gid).eq("email", email.toLowerCase());
+    const { data, error } = await supabase.from("group_members").delete().eq("group_id", gid).eq("email", email.toLowerCase()).select("email");
+    if (error) throw error;
+    return (data || []).length > 0;
   },
   async deleteGroup(id) {
-    await supabase.from("groups").delete().eq("id", id);
+    const { data, error } = await supabase.from("groups").delete().eq("id", id).select("id");
+    if (error) throw error;
+    return (data || []).length > 0;
   },
 
   // Lists are keyed by name (unique per user), so a rename is a delete of the old name plus an insert.

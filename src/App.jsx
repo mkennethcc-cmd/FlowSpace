@@ -13,7 +13,6 @@ const FontLink = () => (
     @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600&display=swap');
     *{box-sizing:border-box;margin:0;padding:0;}
     ::-webkit-scrollbar{width:4px;} ::-webkit-scrollbar-thumb{background:#fff2;border-radius:2px;}
-    [draggable]{-webkit-user-drag:element;touch-action:none;user-select:none;}
     @keyframes slideIn{from{opacity:0;transform:translateY(-6px) scale(.97);}to{opacity:1;transform:none;}}
     @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
     @keyframes checkB{0%{transform:scale(0)rotate(-20deg);}60%{transform:scale(1.2);}100%{transform:scale(1);}}
@@ -22,7 +21,6 @@ const FontLink = () => (
     #root{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;}
     input,textarea{user-select:text;-webkit-user-select:text;}
     .te{animation:slideIn .3s cubic-bezier(.34,1.56,.64,1);}
-    .dp{animation:pulse 1s infinite;} .dp:nth-child(2){animation-delay:.15s;} .dp:nth-child(3){animation-delay:.3s;}
   `}</style>
 );
 
@@ -459,10 +457,13 @@ export default function Freely() {
 
   useEffect(()=>{
     supabase.auth.getSession()
-      .then(({data:{session}})=>setUser(session?.user??null))
+      .then(({data:{session}})=>{ const u=session?.user??null; setUser(prev=>prev&&u&&prev.id===u.id?prev:u); })
       .catch(()=>{})                          // offline start: show sign-in rather than "Loading…" forever
       .finally(()=>setAuthLoading(false));
-    const {data:{subscription}}=supabase.auth.onAuthStateChange((_,session)=>setUser(session?.user??null));
+    // Supabase re-announces the session on startup and on every hourly token refresh, each time with a new
+    // user object for the same person. Keep the one we have unless the ACCOUNT changed — otherwise every
+    // refresh re-ran all sign-in work: a full reload, re-subscribing, and dropping an edit mid-save.
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((_,session)=>{ const u=session?.user??null; setUser(prev=>prev&&u&&prev.id===u.id?prev:u); });
     return ()=>subscription.unsubscribe();
   },[]);
 
@@ -560,7 +561,13 @@ export default function Freely() {
   // Leaving the app saves anything pending at once; coming back picks up what other devices changed.
   useEffect(()=>{
     if(!user) return;
-    const onVis=()=>{ syncGami(); if(document.hidden) flushSaves(); else loadAll(false); };
+    // Phones drop the live connection while the app is in the background, so on return everything that
+    // arrives live — messages, friend requests, teams — is fetched again too, not just tasks and notes.
+    const onVis=()=>{ syncGami(); if(document.hidden){ flushSaves(); return; }
+      loadAll(false);
+      db.loadMessages().then(setMessages).catch(()=>{});
+      db.loadChatReqs(userRef.current.email).then(setChatReqs).catch(()=>{});
+      refreshGroups(); };
     const onHide=()=>{ flushSaves(); syncGami(); };
     document.addEventListener("visibilitychange",onVis); window.addEventListener("pagehide",onHide);
     return ()=>{ document.removeEventListener("visibilitychange",onVis); window.removeEventListener("pagehide",onHide); };
@@ -1063,12 +1070,17 @@ export default function Freely() {
       if(firstContact) showToast(`Friend request sent to ${nickOf(peer).split("@")[0]} 🤝 — they'll see it as a new chat.`);
     }catch(e){ showToast(setupError(e)?"⚙️ One-time setup needed: open Supabase → SQL Editor and run supabase/setup.sql, then reload.":/policy|violates/i.test(e.message||"")?"They haven't accepted your request yet — one message at a time until they do.":"Message failed: "+(e.message||e)); }
   };
-  const openDM=peer=>{ setDmPeer(peer); navTo("messages"); setSideOpen(false);
-    if(typeof peer==="string"&&!peer.startsWith("g:")){
-      const unread=messages.filter(m=>m.recipient_email===meEmail&&m.sender_email===peer&&!m.read).map(m=>m.id);
-      if(unread.length){ setMessages(ms=>ms.map(m=>unread.includes(m.id)?{...m,read:true}:m)); db.markMessagesRead(unread).catch(()=>{}); }
-    }
-  };
+  const openDM=peer=>{ setDmPeer(peer); navTo("messages"); setSideOpen(false); };
+  // Whatever is in the conversation on screen counts as read — including messages that arrive while you're
+  // looking at it (those used to stay "unread" and keep the red badge up).
+  useEffect(()=>{
+    if(view!=="messages"||typeof dmPeer!=="string"||dmPeer.startsWith("g:")) return;
+    const unread=messages.filter(m=>m.recipient_email===meEmail&&m.sender_email===dmPeer&&!m.read).map(m=>m.id);
+    if(!unread.length) return;
+    setMessages(ms=>ms.map(m=>unread.includes(m.id)?{...m,read:true}:m));
+    db.markMessagesRead(unread).catch(()=>{});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[messages,view,dmPeer]);
   // Message anyone with a Freely account: look the email up in profiles first.
   const startChat=async raw=>{ const em=(raw||"").trim().toLowerCase();
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ showToast("Enter a valid email like name@example.com"); return; }
@@ -1093,10 +1105,15 @@ export default function Freely() {
       showToast(known?`Added ${nickOf(em)} ✓`:`Added ${nickOf(em)} — they'll see the team once they sign in`);
     }catch(e){ showToast("Couldn't add: "+(e.message||e)); }
   };
-  const removeTeamMember=async(gid,em)=>{ await db.removeGroupMember(gid,em).catch(()=>{});
+  const removeTeamMember=async(gid,em)=>{
+    const gone=await db.removeGroupMember(gid,em).catch(()=>false);
+    if(!gone){ showToast(em===meEmail?"Couldn't leave the team — try again in a moment.":"Couldn't remove them — only the team's creator or a full member can."); return; }
     if(em!==meEmail) db.sendMessage(user.id,user.email,null,`${SYS_MARK}👋 ${nickOf(em).split("@")[0]} left the team`,gid).catch(()=>{});
     refreshGroups(); };
-  const deleteTeam=async gid=>{ await db.deleteGroup(gid).catch(()=>{}); refreshGroups(); };
+  const deleteTeam=async gid=>{
+    const gone=await db.deleteGroup(gid).catch(()=>false);
+    if(!gone) showToast("Couldn't delete the team — only the person who created it can.");
+    refreshGroups(); };
   // Bulk assign: add these people to every not-done task in the given lists.
   const assignAllInLists=(names,emails)=>{ const add=emails.map(e=>e.toLowerCase()).filter(Boolean); if(!add.length) return; let n=0;
     tasks.filter(t=>names.includes(t.tag)&&t.owner===user?.id&&!t.done).forEach(t=>{ const merged=[...new Set([...assigneesOf(t),...add])]; updateTask(t.id,{assignedTo:merged.join(",")}); n++; });
@@ -1385,7 +1402,7 @@ export default function Freely() {
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onLinkNote={foldNoteIntoTask} onClearTaskNotes={id=>updateTask(id,{notes:""})} onGoToTask={t=>{keepSelRef.current=true;navTo("all");setSelTask(t);}}/>}
           {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} showToast={showToast} onCheckin={key=>{awardXp("habit-"+key+"-"+todStr,15);markActiveDay();navigator.vibrate?.(20);}}/>}
           {view==="calendar"&&<CalendarView T={T} tasks={myTasks} cats={cats} todStr={todStr} onToggle={toggleTask} onToggleStep={toggleStep} onQuickAdd={addCalendarTask} onMoveTask={moveTaskDay} onMoveStep={moveStep} onOpenTask={t=>{keepSelRef.current=true;navTo("all");setSelTask(t);}}/>}
-          {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={allStats} todStr={todStr}/>}
+          {view==="analytics"&&<AnalyticsView T={T} tasks={myTasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={allStats} todStr={todStr}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onUnshare={unshareFolder} deletedCats={deletedCats} pomLen={pomLen} onPomLen={m=>{ setPomLen(m); if(!pomRun) setPomSecs(m*60); }} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar} newAtBottom={newAtBottom} setNewAtBottom={setNewAtBottom} onHelp={()=>setHelpOpen(true)}/>}
           {(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFiles} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} isInMyDay={inMyDay} todStr={todStr} canDeleteFn={canDeleteTask} canEditFn={canEditTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={allGroups} listPeople={collaboratorsOf} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}
@@ -2535,7 +2552,7 @@ function FreeformCanvas({T,notes,setNotes,onCanvasToTask,requestLink,onCanvasToN
   const undoClear=()=>{ if(cleared){ setNotes(cleared); setCleared(null); clearTimeout(clearTimer.current); } };
   return (
     <div ref={canvasRef} style={{flex:1,position:"relative",background:T.canvas,overflow:"hidden",cursor:"crosshair"}}
-      onPointerMove={onPointerMove} onPointerUp={onPointerUp} onClick={onCanvasClick}>
+      onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={()=>{ dragRef.current=null; }} onClick={onCanvasClick}>
       {notes.length>0&&(
         <button onClick={e=>{e.stopPropagation();clearAll();}} title="Clear all freeform notes" style={{position:"absolute",top:12,right:16,zIndex:20,display:"flex",alignItems:"center",gap:6,padding:"7px 12px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface,color:T.danger,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif",boxShadow:"0 2px 8px rgba(0,0,0,.15)"}}><Ico n="trash" s={12} c={T.danger}/> Clear all</button>
       )}
@@ -2908,9 +2925,11 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
   };
   const gripDown=(e,id)=>{ e.stopPropagation(); e.preventDefault(); beginHabitDrag(id); };
   const [swipe,setSwipe]=useState(null); // {id,x} while a card is being swiped left toward delete
-  const runSwipe=(id,sx)=>{ runDrag(
-    ev=>{ const dx=Math.min(0,ev.clientX-sx); setSwipe({id,x:Math.max(dx,-150)}); },
-    ev=>{ const dx=ev.clientX-sx; setSwipe(null); if(dx<-90) del(id); }
+  // Judged by where the finger was last seen: a cancelled touch reports x=0, which read as a long swipe left
+  // and deleted the habit.
+  const runSwipe=(id,sx)=>{ let lastDx=0; runDrag(
+    ev=>{ lastDx=ev.clientX-sx; setSwipe({id,x:Math.max(Math.min(0,lastDx),-150)}); },
+    ev=>{ setSwipe(null); if(ev.type!=="pointercancel"&&lastDx<-90) del(id); }
   ); };
   // Card body gestures: swipe ← to delete; hold (the same short 120ms as everywhere else) or mouse-drag vertically to reorder.
   const bodyDown=(e,id)=>{
@@ -3112,18 +3131,19 @@ function CalendarView({T,tasks,cats,todStr,onToggle,onToggleStep,onQuickAdd,onOp
   // the day under it lights up, and elementFromPoint→[data-calday] resolves the drop target.
   const dragEntry=(e,label,color,onDropDay,fromCell)=>{
     if(!fromCell&&e.target.closest("button,input,a")) return;
+    let overDay=null;   // the day last seen under the finger — a cancelled touch reports no usable position
     const move=ev=>{
       setDrag({label,color,x:ev.clientX,y:ev.clientY});
       const el=document.elementFromPoint(ev.clientX,ev.clientY);
-      setHoverDay(el?.closest?.("[data-calday]")?.getAttribute("data-calday")||null);
+      overDay=el?.closest?.("[data-calday]")?.getAttribute("data-calday")||null;
+      setHoverDay(overDay);
     };
     startPressDrag(e,()=>{
       didDragRef.current=true;
       navigator.vibrate?.(10);
       setDrag({label,color,x:e.clientX,y:e.clientY});
       runDrag(move,ev=>{
-        const el=document.elementFromPoint(ev.clientX,ev.clientY);
-        const day=el?.closest?.("[data-calday]")?.getAttribute("data-calday")||null;
+        const day=ev.type==="pointercancel"?null:overDay;
         setDrag(null); setHoverDay(null);
         if(day) onDropDay(day);
         setTimeout(()=>{didDragRef.current=false;},0);
@@ -3261,8 +3281,6 @@ const ACHIEVEMENTS=[
 ];
 function AnalyticsView({T,tasks,xp,level,streak,habits=[],dayStats={},todStr}) {
   const narrow=useNarrow();   // four stat cards and two side-by-side panels do not fit a phone
-  const [aiLoad,setAiLoad]=useState(false);
-  const [aiMsg,setAiMsg]=useState("");
   const [achSel,setAchSel]=useState(null);
   // Real data: completions per day come from dayStats (tracked every time a task is checked off).
   const monOffset=(new Date().getDay()+6)%7; // days since Monday
@@ -3310,7 +3328,9 @@ function AnalyticsView({T,tasks,xp,level,streak,habits=[],dayStats={},todStr}) {
     if(navigator.canShare?.({files:[file]})){ try{ await navigator.share({files:[file],title:"My week in Freely"}); return; }catch{} }
     const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="freely-week.png"; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
   };
-  const runAI=()=>{setAiLoad(true);setAiMsg("");setTimeout(()=>{setAiLoad(false);setAiMsg(`🧠 You completed ${weekTotal} task${weekTotal===1?"":"s"} this week${weekTotal>0?" — nice momentum":""}. Overall completion rate: ${rate}%. ${topTag?`Most of your work lives in "${topTag[0]}" (${topTag[1]} tasks). `:""}${ov>0?`${ov} overdue — pull one into My Day and knock it out first. `:"No overdue tasks — inbox zero energy! "}${habits.length?`Habits: ${habitsDoneToday}/${habits.length} done today, best streak ${bestHabitStreak} day${bestHabitStreak===1?"":"s"} 🔥`:`Try adding a daily habit to build momentum.`}`);},1400);};
+  // A plain-language summary of the numbers above. (It used to sit behind a fake "Analyzing…" delay under
+  // an "AI coach" label — there is no AI in it, so it says what it is and shows immediately.)
+  const weekSummary=`You completed ${weekTotal} task${weekTotal===1?"":"s"} this week${weekTotal>0?" — nice momentum":""}. Overall completion rate: ${rate}%. ${topTag?`Most of your work lives in "${topTag[0]}" (${topTag[1]} tasks). `:""}${ov>0?`${ov} overdue — pull one into My Day and knock it out first. `:"No overdue tasks — inbox zero energy! "}${habits.length?`Habits: ${habitsDoneToday}/${habits.length} done today, best streak ${bestHabitStreak} day${bestHabitStreak===1?"":"s"} 🔥`:`Try adding a daily habit to build momentum.`}`;
   return (
     <div style={{flex:1,overflowY:"auto",padding:narrow?"16px 13px":"22px 26px"}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:18,flexWrap:"wrap"}}>
@@ -3391,13 +3411,8 @@ function AnalyticsView({T,tasks,xp,level,streak,habits=[],dayStats={},todStr}) {
         </div>
       </div>
       <div style={{background:T.accentGlow,border:`1px solid ${T.accent}33`,borderRadius:12,padding:16}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-          <div style={{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:5}}><Ico n="sparkles" s={13} c={T.accent}/>AI Productivity Coach</div>
-          <button onClick={runAI} disabled={aiLoad} style={{padding:"5px 13px",borderRadius:7,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:11,fontWeight:700,opacity:aiLoad?.7:1}}>{aiLoad?"Analyzing…":"Get Insights"}</button>
-        </div>
-        {aiLoad&&<div style={{display:"flex",gap:4}}>{[0,1,2].map(i=><div key={i} className="dp" style={{width:6,height:6,borderRadius:"50%",background:T.accent}}/>)}</div>}
-        {aiMsg&&<p style={{fontSize:12,lineHeight:1.7,animation:"fadeIn .5s"}}>{aiMsg}</p>}
-        {!aiMsg&&!aiLoad&&<p style={{fontSize:12,color:T.textMuted}}>Click "Get Insights" for personalized productivity analysis.</p>}
+        <div style={{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:5,marginBottom:8}}><Ico n="sparkles" s={13} c={T.accent}/>Your week in review</div>
+        <p style={{fontSize:12,lineHeight:1.7}}>{weekSummary}</p>
       </div>
     </div>
   );
