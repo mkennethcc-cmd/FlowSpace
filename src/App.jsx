@@ -79,6 +79,9 @@ const QUAD = {
 };
 // Grid reads left→right, top→bottom: Do First · Schedule / Delegate · Whenever (classic Eisenhower layout).
 const QUAD_ORDER = ["q1","q2","q3","q4"];
+// This device's id. Completion counts are kept PER DEVICE and summed for display, so two phones
+// used on the same day never overwrite each other and nothing is ever counted twice.
+const DEVICE_ID=(()=>{ try{ let id=localStorage.getItem("fs_device"); if(!id){ id=Math.random().toString(36).slice(2,10); localStorage.setItem("fs_device",id); } return id; }catch{ return "local"; } })();
 const MONTHS = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
 const WEEKDAYS = {sun:0,mon:1,tue:2,wed:3,thu:4,fri:5,sat:6};
 
@@ -92,12 +95,16 @@ const CAT_KEYWORDS = {
 // Tiny capped edit-distance so date typos still parse ("julky" → "july", "tommorow" → "tomorrow").
 const editDist=(a,b,max=2)=>{
   if(Math.abs(a.length-b.length)>max) return max+1;
-  let prev=[...Array(b.length+1)].map((_,i)=>i);
+  let prev2=null, prev=[...Array(b.length+1)].map((_,i)=>i);
   for(let i=1;i<=a.length;i++){
     const cur=[i]; let best=cur[0];
-    for(let j=1;j<=b.length;j++){ cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1)); if(cur[j]<best)best=cur[j]; }
+    for(let j=1;j<=b.length;j++){
+      cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));
+      if(i>1&&j>1&&a[i-1]===b[j-2]&&a[i-2]===b[j-1]) cur[j]=Math.min(cur[j],prev2[j-2]+1); // transposition
+      if(cur[j]<best)best=cur[j];
+    }
     if(best>max) return max+1;
-    prev=cur;
+    prev2=prev; prev=cur;
   }
   return prev[b.length];
 };
@@ -268,35 +275,54 @@ const fmtClock = s => {
 };
 
 const MO_RE="jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
-const WD_RE="sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?";
+const WD_RE="sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:s|nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?";
+// "sat", "sun" and "mon" are ordinary words too ("sat on the bench", "sun cream", "mon ami"). On their
+// own they only count as a weekday when something around them says so — a cue in front, or nothing
+// but punctuation after (the time has already been lifted out by then, so "gym sat 10am" qualifies).
+const WD_AMBIG=/^(sat|sun|mon)$/i;
 const pad2=x=>String(x).padStart(2,"0");
-// One time token → {h,m}. Handles "4:30", "4 : 30", "4::30" (stray colon), "1840" (24h compact) and a bare "4".
+// One time token → {h,m}. Handles "4:30", "4 : 30", "4::30" (stray colon), "9.30" (dot, only trusted
+// next to am/pm), "1840" (24h compact) and a bare "4".
 const timeTok=tok=>{
   const c=(tok||"").replace(/\s+/g,"");
   let m=c.match(/^(\d{1,2}):{1,2}(\d{2})$/); if(m) return {h:+m[1],m:+m[2],colon:true};
+  m=c.match(/^(\d{1,2})\.(\d{2})$/);         if(m) return {h:+m[1],m:+m[2],dot:true};
   m=c.match(/^(\d{3,4})$/);                  if(m) return {h:+m[1].slice(0,-2),m:+m[1].slice(-2),compact:true};
   return {h:+c,m:0,bare:true};
 };
 const hhmm=(t,ap)=>{ let h=t.h,m=t.m; ap=(ap||"").toLowerCase().replace(/[.\s]/g,"");
   if(ap[0]==="p"&&h<12)h+=12; if(ap[0]==="a"&&h===12)h=0;
   return (h>=0&&h<24&&m>=0&&m<60)?`${pad2(h)}:${pad2(m)}`:null; };
-// A number that may be a time, plus an optional am/pm that must not run into a word ("2 amazing" isn't 2am).
-const TIME_TOK="(\\d{1,2}\\s*:{1,2}\\s*\\d{2}|\\d{3,4}|\\d{1,2})\\s*(a\\.?m\\.?|p\\.?m\\.?)?(?![a-z])";
+// A number that may be a time, plus an optional meridiem: "am"/"p.m." with or without a space, or a
+// single letter glued on ("3p", "10a"). None of it may run into a word ("2 amazing" isn't 2am).
+const TIME_TOK="(\\d{1,2}\\s*[:.]{1,2}\\s*\\d{2}|\\d{3,4}|\\d{1,2})(\\s*a\\.?m\\.?|\\s*p\\.?m\\.?|[ap])?(?![a-z])";
 const TIME_CUE="(\\bfrom\\s+|\\bat\\s+|\\bby\\s+|@\\s*|\\btimes?\\s*:\\s*|\\bwhen\\s*:\\s*|\\bhours?\\s*:\\s*)?";
 // A zone written right after the clock ("9 PM EDT") is swallowed with it instead of littering the title.
 const TIME_TZ="(?:\\s*\\b(?:E[DS]T|C[DS]T|M[DS]T|P[DS]T|AK[DS]T|HST|GMT|UTC|BST|CES?T|IST|JST|AES?T|AEDT|ET|PT|CT|MT)\\b)?";
+// A bare small hour is an afternoon/evening hour: "dinner at 7" is 7pm, "from 4 to 5" is 4–5pm.
+const pmGuess=h=>(h>=1&&h<=7)?h+12:h;
+// Times written as words. "night" on its own is left alone — "movie night" is a title, not a clock.
+const WORD_TIMES=[
+  [/\b(?:at\s+)?(?:noon|midday|12\s*noon)\b/i,"12:00"],
+  [/\b(?:in\s+the\s+|this\s+)?morning\b/i,"09:00"],       // "tomorrow" is left for the date pass
+  [/\b(?:in\s+the\s+|this\s+)?afternoon\b/i,"14:00"],
+  [/\b(?:in\s+the\s+|this\s+)?evening\b/i,"18:00"],
+  [/\bat\s+night\b/i,"20:00"],
+];
 // Pull a time (and an end time) out of `text` → {time,endTime,rest}. Tolerates missing/extra spaces,
-// a meridiem on either end or neither, stray colons, and 24-hour "1840".
+// a meridiem on either end or neither, stray colons, dots next to am/pm, and 24-hour "1840".
 function grabTime(text){
   let rest=text||"", m;
   const rangeRe=new RegExp(TIME_CUE+"\\b"+TIME_TOK+"\\s*(?:[-~]|to|until|til{1,2}|through|thru)\\s*"+TIME_TOK+TIME_TZ,"gi");
   while((m=rangeRe.exec(rest))!==null){
-    const A=timeTok(m[2]), B=timeTok(m[4]); let apA=m[3]||""; const apB=m[5]||"";
+    const A=timeTok(m[2]), B=timeTok(m[4]); let apA=(m[3]||"").trim(); const apB=(m[5]||"").trim();
     // A bare "14-17" is a date range, not a time — demand some real time signal.
     if(!(apA||apB||m[1]||A.colon||B.colon||A.compact||B.compact)) continue;
+    if((A.dot&&!apA&&!apB)||(B.dot&&!apB&&!apA)) continue;       // "2.10-2.30" with no am/pm is not a clock
     if(A.h>23||B.h>23) continue;
     const inherited=!apA&&!!apB;
     if(inherited) apA=apB;                                        // "4:00 - 5:30 pm" → both pm
+    if(!apA&&!apB&&A.bare&&B.bare){ A.h=pmGuess(A.h); B.h=pmGuess(B.h); }   // "from 4 to 5" → 16:00–17:00
     let s=hhmm(A,apA), e=hhmm(B,apB);
     if(s&&e&&s>=e&&inherited){ const alt=hhmm({h:A.h,m:A.m},"am"); if(alt&&alt<e) s=alt; } // "11 - 1 pm"
     if(!s) continue;
@@ -304,52 +330,105 @@ function grabTime(text){
   }
   const oneRe=new RegExp(TIME_CUE+"\\b"+TIME_TOK+TIME_TZ,"gi");
   while((m=oneRe.exec(rest))!==null){
-    const A=timeTok(m[2]), ap=m[3]||"", cue=!!m[1];
+    const A=timeTok(m[2]), ap=(m[3]||"").trim(), cue=!!m[1];
     let h=A.h, mn=A.m, ok=false;
     if(ap||A.colon) ok=true;                                      // "3pm", "15:30", "4:30"
+    else if(A.dot) ok=false;                                      // "v2.10" is a version, not ten past two
     else if(cue&&A.compact) ok=true;                              // "at 1840"
-    else if(cue&&A.bare){ if(h>=1&&h<=7)h+=12; ok=true; }         // "dinner at 7" → 7pm
+    else if(cue&&A.bare){ h=pmGuess(h); ok=true; }                // "dinner at 7" → 7pm
     if(!ok||h>23) continue;                                       // a bare year like "2026" is left alone
     const v=hhmm({h,m:mn},ap); if(!v) continue;
     return {time:v,endTime:null,rest:rest.slice(0,m.index)+" "+rest.slice(m.index+m[0].length)};
   }
+  for(const [re,t] of WORD_TIMES){ const w=rest.match(re); if(w) return {time:t,endTime:null,rest:rest.slice(0,w.index)+" "+rest.slice(w.index+w[0].length)}; }
   return {time:null,endTime:null,rest};
+}
+const lastOfMonth=(y,mo)=>new Date(y,mo+1,0);
+// Dates written in digits — lifted out FIRST, before the clock, so "2026-09-30" is never read as
+// "20:26 to 09:30". US order for slashes (9/17 = September 17), because that is how the app's
+// users write them; a four-digit year may lead (ISO) or trail.
+function grabNumericDate(text){
+  const rest=text||"";
+  let m=rest.match(/(^|[^\d\/])(\d{4})-(\d{1,2})-(\d{1,2})(?![\d\/])/);
+  if(m){ const y=+m[2],mo=+m[3]-1,d=+m[4]; if(mo>=0&&mo<12&&d>=1&&d<=31) return {due:ymd(new Date(y,mo,d)),rest:rest.slice(0,m.index+m[1].length)+" "+rest.slice(m.index+m[0].length)}; }
+  m=rest.match(/(^|[^\d\/.])(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?(?![\d\/])/);
+  if(m){ const mo=+m[2]-1,d=+m[3]; let y=m[4]?(+m[4]<100?2000+ +m[4]:+m[4]):new Date().getFullYear();
+    if(mo>=0&&mo<12&&d>=1&&d<=31){
+      if(!m[4]&&new Date(y,mo,d)<new Date(new Date().toDateString())) y++;
+      return {due:ymd(new Date(y,mo,d)),rest:rest.slice(0,m.index+m[1].length)+" "+rest.slice(m.index+m[0].length)}; } }
+  return {due:null,rest};
 }
 // Pull one date out of `text` → {due,rest,mon,day,yr}. `allowRelative` off = only explicit calendar dates.
 function grabDate(text,{allowRelative=true}={}){
   let rest=text||"";
   const cut=(s,i,len)=>s.slice(0,i)+" "+s.slice(i+len);
+  const now=new Date(), Y=now.getFullYear(), M=now.getMonth();
   if(allowRelative){
     let r=rest.match(/\btomorrow\b/i);    if(r) return {due:addDays(1),rest:cut(rest,r.index,r[0].length)};
     r=rest.match(/\btonight\b/i);         if(r) return {due:tod(),rest:cut(rest,r.index,r[0].length),night:true};
-    r=rest.match(/\btoday\b/i);           if(r) return {due:tod(),rest:cut(rest,r.index,r[0].length)};
+    r=rest.match(/\btoday\b|\beod\b|\bend\s+of\s+(?:the\s+)?day\b/i); if(r) return {due:tod(),rest:cut(rest,r.index,r[0].length)};
     r=rest.match(/\bnext\s+week\b/i);     if(r) return {due:addDays(7),rest:cut(rest,r.index,r[0].length)};
+    // "in 2 days", "in a week", "in 3 weeks", "in a month"
+    r=rest.match(/\bin\s+(a|an|one|two|three|four|five|six|\d{1,2})\s+(day|week|month)s?\b/i);
+    if(r){ const words={a:1,an:1,one:1,two:2,three:3,four:4,five:5,six:6}; const n=words[r[1].toLowerCase()]??+r[1];
+      const d=new Date(); if(r[2].toLowerCase()==="day") d.setDate(d.getDate()+n); else if(r[2].toLowerCase()==="week") d.setDate(d.getDate()+7*n); else d.setMonth(d.getMonth()+n);
+      return {due:ymd(d),rest:cut(rest,r.index,r[0].length)}; }
+    // "this weekend" = the coming Saturday, "next weekend" = the one after
+    r=rest.match(/\b(this|next|the)?\s*weekend\b/i);
+    if(r){ let delta=(6-now.getDay()+7)%7; if(delta===0&&now.getDay()!==6) delta=7; if((r[1]||"").toLowerCase()==="next") delta+=7;
+      const d=new Date(); d.setDate(d.getDate()+delta); return {due:ymd(d),rest:cut(rest,r.index,r[0].length)}; }
+    r=rest.match(/\bend\s+of\s+(?:the\s+)?month\b|\beom\b/i);
+    if(r) return {due:ymd(lastOfMonth(Y,M)),rest:cut(rest,r.index,r[0].length)};
+    r=rest.match(/\bend\s+of\s+(?:the\s+)?week\b|\beow\b/i);
+    if(r){ let delta=(5-now.getDay()+7)%7; const d=new Date(); d.setDate(d.getDate()+delta); return {due:ymd(d),rest:cut(rest,r.index,r[0].length)}; }
   }
-  // Explicit month-date wins over a bare weekday ("Friday July 24" means July 24). A trailing 4-digit year is used as-is.
+  // Explicit month-date wins over a bare weekday ("Friday July 24" means July 24). A trailing 4-digit year is
+  // used as-is. The space is optional, so "sep17" and "17sep" work.
   let mon=null,day=null;
-  let m=rest.match(new RegExp("\\b(?:(?:on|at)\\s+)?("+MO_RE+")\\.?\\s+(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?\\s*,?\\s*(\\d{4})?","i"));
+  let m=rest.match(new RegExp("\\b(?:(?:on|at)\\s+)?("+MO_RE+")\\.?\\s*(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?\\s*,?\\s*(\\d{4})?","i"));
   if(m){ mon=MONTHS[m[1].toLowerCase().substring(0,3)]; day=+m[2]; }
-  else { m=rest.match(new RegExp("\\b(?:(?:on|at)\\s+)?(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?\\s+(?:of\\s+)?("+MO_RE+")\\.?\\s*,?\\s*(\\d{4})?","i"));
+  else { m=rest.match(new RegExp("\\b(?:(?:on|at)\\s+)?(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?\\s*(?:of\\s+)?("+MO_RE+")\\.?\\s*,?\\s*(\\d{4})?","i"));
          if(m){ mon=MONTHS[m[2].toLowerCase().substring(0,3)]; day=+m[1]; } }
   if(m&&mon!=null&&day>=1&&day<=31){
-    let yr=m[3]?+m[3]:new Date().getFullYear();
-    if(!m[3]&&new Date(yr,mon,day)<new Date(new Date().toDateString())) yr++;
+    let yr=m[3]?+m[3]:Y;
+    if(!m[3]&&new Date(yr,mon,day)<new Date(now.toDateString())) yr++;
     let out=cut(rest,m.index,m[0].length);
     out=out.replace(new RegExp("\\b(?:this\\s+)?(?:next\\s+)?(?:(?:on|at)\\s+)?(?:"+WD_RE+")\\b,?","i")," "); // drop a redundant weekday
     return {due:ymd(new Date(yr,mon,day)),rest:out,mon,day,yr};
   }
   if(allowRelative){
-    const wd=rest.match(new RegExp("\\b(?:this\\s+)?(next\\s+)?(?:(?:on|at)\\s+)?("+WD_RE+")\\b","i"));
-    if(wd){ const key=wd[2].toLowerCase().substring(0,3),target=WEEKDAYS[key],cur=new Date().getDay();
-      let delta=(target-cur+7)%7; if(delta===0)delta=7; if(wd[1])delta+=7;
+    // A day of the month on its own: "the 17th", "by the 3rd", "due 30th" — this month if it hasn't passed, else next.
+    const od=rest.match(/\b(?:on\s+|by\s+|due\s+)?(?:the\s+)?(\d{1,2})(st|nd|rd|th)\b/i);
+    if(od){ const d=+od[1]; if(d>=1&&d<=31){ let y=Y,mo=M; if(d<now.getDate()){ mo++; if(mo>11){mo=0;y++;} }
+      const dd=Math.min(d,lastOfMonth(y,mo).getDate()); return {due:ymd(new Date(y,mo,dd)),rest:cut(rest,od.index,od[0].length)}; } }
+    const wd=rest.match(new RegExp("\\b(this\\s+|next\\s+|on\\s+|at\\s+|by\\s+|every\\s+)?("+WD_RE+")\\b\\.?","i"));
+    if(wd){
+      const bare=wd[2].toLowerCase();
+      if(WD_AMBIG.test(bare)&&!wd[1]){ const after=rest.slice(wd.index+wd[0].length); if(!/^\s*(?:[,.;:!?)\]]|$)/.test(after)) return {due:null,rest}; }
+      const key=bare.substring(0,3),target=WEEKDAYS[key],cur=now.getDay();
+      let delta=(target-cur+7)%7; if(delta===0)delta=7; if(/^next/i.test(wd[1]||""))delta+=7;
       const d=new Date(); d.setDate(d.getDate()+delta);
       return {due:ymd(d),rest:cut(rest,wd.index,wd[0].length)};
     }
   }
   return {due:null,rest};
 }
-const tidyTitle=s=>s.replace(/[•*·]/g," ").replace(/\s{2,}/g," ").replace(/\s+,/g,",").replace(/,\s*,/g,",")
-  .replace(/\b(on|at|by|from)\s*,/gi,",").replace(/\s{2,}/g," ").replace(/^[\s,;:\-–—]+|[\s,;:\-–—]+$/g,"").trim();
+// Repeat words → the app's recurrence codes. Returns {recurring, rest}. "every monday" leaves the weekday
+// in place for grabDate, so the first occurrence lands on the right day.
+function grabRecurring(text){
+  let rest=text||"", m;
+  const take=(re,val)=>{ m=rest.match(re); if(!m) return null; rest=rest.slice(0,m.index)+" "+rest.slice(m.index+m[0].length); return val; };
+  let rec=take(/\b(?:every\s+day|daily|each\s+day|everyday)\b/i,"daily")
+    || take(/\b(?:every\s+(?:other|second|2)\s+weeks?|biweekly|fortnightly)\b/i,"custom:2:weeks")
+    || take(/\b(?:every\s+week|weekly|each\s+week)\b/i,"weekly")
+    || take(/\b(?:every\s+month|monthly|each\s+month)\b/i,"monthly")
+    || take(/\b(?:every\s+year|yearly|annually|each\s+year)\b/i,"yearly");
+  if(!rec){ m=rest.match(/\bevery\s+(\d{1,2})\s+(day|week|month)s?\b/i); if(m){ rec=`custom:${+m[1]}:${m[2].toLowerCase()}s`; rest=rest.slice(0,m.index)+" "+rest.slice(m.index+m[0].length); } }
+  if(!rec){ m=rest.match(new RegExp("\\bevery\\s+(?="+WD_RE+"\\b)","i")); if(m){ rec="weekly"; rest=rest.slice(0,m.index)+" "+rest.slice(m.index+m[0].length); } }
+  return {recurring:rec,rest};
+}
+const tidyTitle=s=>s.replace(/[•*·]/g," ").replace(/\(\s*\)|\[\s*\]|\{\s*\}/g," ").replace(/\s{2,}/g," ").replace(/\s+([,.;:!?])/g,"$1").replace(/,\s*,/g,",")
+  .replace(/\b(on|at|by|from|in|due)\s*([,.]|$)/gi,"$2").replace(/\s{2,}/g," ").replace(/^[\s,;:.\-–—]+|[\s,;:.\-–—]+$/g,"").trim();
 // Labelled fields in a pasted blurb ("Club Fest · Dates: … · Time: …"). Pasting into an input flattens
 // the newlines, so we split on the labels themselves rather than on line breaks.
 const FIELD_RE=/\s*[•*\-–—]?\s*\b(dates?|time|times|when|hours?|location|where|place|venue|room|cost|price|rsvp|contact|notes?|details?|info)\s*:\s*/gi;
@@ -358,8 +437,8 @@ const parseNL = raw => {
   // Pasted listings carry exotic punctuation: zero-width spaces, and dashes that aren't the plain hyphen
   // ("4 PM − 5 PM"). Normalise both, or a perfectly good time range parses as a lone start time.
   const src = fuzzDateWords(String(raw||"")
-    .replace(/[\u200B-\u200D\uFEFF]/g,"")
-    .replace(/[\u2010-\u2015\u2212\u2043\uFE58\uFE63\uFF0D]/g,"-")
+    .replace(/[​-‍﻿]/g,"")
+    .replace(/[‐-―−⁃﹘﹣－]/g,"-")
     .replace(/[\r\n]+/g," • ").trim());
 
   // ── Structured paste: title first, then "Dates:" / "Time:" / "Location:" fields ──
@@ -373,29 +452,33 @@ const parseNL = raw => {
     if(timeTxt){ const r=grabTime(timeTxt); time=r.time; endTime=r.endTime; }
     else { const r=grabTime(titleTxt); time=r.time; endTime=r.endTime; titleTxt=r.rest; }
     if(dateTxt){
-      const d1=grabDate(dateTxt); due=d1.due;
+      const n1=grabNumericDate(dateTxt); const d1=n1.due?n1:grabDate(dateTxt); due=d1.due;
       if(due){ // "Sept 14 – Sept 17" or "Sept 14–17" → remember the closing day
         const d2=grabDate(d1.rest,{allowRelative:false});
         if(d2.due&&d2.due>due) spanEnd=d2.due;
         else { const dm=d1.rest.match(/^\s*(?:[-–—]|to|through|thru|until)\s*(\d{1,2})(?!\d)/i);
                if(dm&&d1.mon!=null){ const dd=+dm[1]; if(dd>d1.day&&dd<=31) spanEnd=ymd(new Date(d1.yr,d1.mon,dd)); } }
       }
-    } else { const r=grabDate(titleTxt); due=r.due; titleTxt=r.rest; }
+    } else { const n=grabNumericDate(titleTxt); if(n.due){ due=n.due; titleTxt=n.rest; } else { const r=grabDate(titleTxt); due=r.due; titleTxt=r.rest; } }
     const extra=segs.filter(s=>s.lab&&!/^(dates?|times?|when|hours?)$/.test(s.lab)&&s.text.trim())
       .map(s=>`${s.lab.charAt(0).toUpperCase()+s.lab.slice(1)}: ${tidyTitle(s.text)}`).join("\n");
-    return {title:tidyTitle(titleTxt)||String(raw).trim(), due, time, endTime, spanEnd, extra};
+    return {title:tidyTitle(titleTxt)||String(raw).trim(), due, time, endTime, spanEnd, extra, recurring:null};
   }
 
   // ── Plain sentence ──
   let title=src, due=null, time=null, endTime=null, noDate=false;
   const nd=title.match(/(^|[^a-z0-9])(tbd|tba|t\.b\.[da]\.?|to be decided|to be determined|to be announced|date unknown|unknown date|unknown|no date yet|no date|someday)($|[^a-z0-9])/i);
   if(nd){ noDate=true; title=title.replace(nd[2],""); }
+  const rc=grabRecurring(title); title=rc.rest;
+  const n=grabNumericDate(title); if(n.due){ due=n.due; title=n.rest; }
   const t=grabTime(title); time=t.time; endTime=t.endTime; title=t.rest;
-  const d=grabDate(title); due=d.due; title=d.rest; if(d.night&&!time) time="20:00";
+  if(!due){ const d=grabDate(title); due=d.due; title=d.rest; if(d.night&&!time) time="20:00"; }
+  else { const d=grabDate(title,{allowRelative:false}); if(!d.due) title=title.replace(new RegExp("\\b(?:this\\s+|next\\s+|on\\s+)?(?:"+WD_RE+")\\b,?","i")," "); } // "Fri 9/17" → the weekday is redundant
+  if(rc.recurring&&!due) due=rc.recurring==="daily"?tod():rc.recurring==="monthly"?tod():rc.recurring==="yearly"?tod():addDays(7); // a repeat needs a first occurrence
   title=tidyTitle(title);
   if(!title) title=String(raw).trim();
   if(noDate) due=DUE_TBD;
-  return {title, due, time, endTime, spanEnd:null, extra:""};
+  return {title, due, time, endTime, spanEnd:null, extra:"", recurring:rc.recurring};
 };
 
 // Re-parse an edited task title: a typed date/time reschedules it, a typed list name re-files it.
@@ -413,6 +496,7 @@ const titleEditPatch = (task, raw, cats) => {
     if (ra !== task.remindAt) { patch.remindAt = ra; if (!task.due && !p.due && !patch.due) patch.due = d; }
     if (p.endTime && p.endTime !== task.endTime) patch.endTime = p.endTime;
   }
+  if (p.recurring && p.recurring !== task.recurring) patch.recurring = p.recurring;
   return patch;
 };
 
@@ -570,10 +654,55 @@ const ICON_KEYWORDS = [
 const guessIcon = (name, fallback="📁") => {
   const n=(name||"").toLowerCase().trim();
   if(!n) return fallback;
-  for(const [keys,icon] of ICON_KEYWORDS){ if(keys.some(k=>new RegExp("\\b"+k+"\\b").test(n))) return icon; }
+  for(const [keys,icon] of [...ICON_KEYWORDS,...ICON_KEYWORDS_MORE]){ if(keys.some(k=>new RegExp("\\b"+k+"\\b").test(n))) return icon; }
   return fallback; // predictable default when nothing matches (no random jitter)
 };
-const CAT_ICONS = ["💼","📚","🏃","💰","🏠","❤️","🎯","✈️","🛒","🎨","🎮","🍔","☕","🌱","🐶","📞","🎵","⚽","💪","🧘","📝","💻","📅","🔥","⭐","🎓","🏥","🍳","🚗","🎁","📖","🧹","💡","🎬","🎉","🌍","🏋️","🧠","📷","🎸","🍕","🛏️","🐱","✏️","🔧","📌","🏆","🌸"];
+// The icon gallery, grouped the way people think about their lists. Roughly 190 choices; the
+// picker shows them in this order so related icons sit together.
+const CAT_ICONS = [
+  // work & study
+  "💼","📚","🎓","📝","📋","📊","📈","💻","🖥️","⌨️","🗂️","📁","📎","📌","🧾","📄","📜","🔬","🧪","🔢","🗣️","🧠","💡","🎯","🏁","🚀","🏢","🤝","📨","📧","☎️","📞",
+  // money
+  "💰","💳","🏦","💵","🪙","🧮","🛡️","⚖️",
+  // home & errands
+  "🏠","🛒","🛍️","🧹","🧺","🧼","🔧","🔨","🪴","🌱","🌿","🌸","🌻","📦","🧳","🔑","🚗","🚲","⛽","🛠️","🧰","🪑","🛋️","🛏️","🚿","🧴",
+  // health & body
+  "🏃","🏋️","🧘","🚶","🏊","🚴","🥾","⚽","🏀","🎾","⛳","⛷️","🏄","🥊","🩺","🦷","💊","🩹","🧬","💪","🥗","🍎","💧","😴","🌅",
+  // food
+  "🍔","🍕","🍜","🍣","🍳","🥐","🧁","🍰","🍦","🍫","☕","🍵","🧋","🍷","🍺",
+  // creative & fun
+  "🎨","🎬","🎵","🎸","🎹","🎤","🎧","🎮","🎲","♟️","🎭","📷","📸","✏️","🖌️","🧵","🧶","📖","✍️","🎪","🎡",
+  // people & occasions
+  "❤️","💜","👪","👶","👥","💍","🎂","🎉","🎁","🎄","🎃","🕯️","🙏","⛪","🕌",
+  // travel & places
+  "✈️","🛫","🗺️","🧭","🏖️","🏔️","⛺","🏨","🚆","🚢","🌍","🗽","🎢",
+  // animals & nature
+  "🐶","🐱","🐟","🐦","🐾","🐴","🐢","🦋","🌳","🌊","☀️","🌙","⭐","🌈","❄️","🔥",
+  // symbols & moods
+  "⚡","✨","💎","🏆","🥇","🎖️","🔔","⏰","📅","🗓️","🔒","🔓","✅","❌","⚠️","♻️","🧭","🎈","🪄","🧿","🫶","🤞","🙌",
+];
+// Extra keyword → icon pairs added to the guesser. Ordered so the more specific words win.
+const ICON_KEYWORDS_MORE = [
+  [["internship","internships","intern"],"🏢"],[["job search","job hunt","job hunting","applications","application","apply","applying"],"📨"],
+  [["resume","cv","cover letter"],"📄"],[["interview","interviews","interviewing"],"🤝"],[["networking","network","linkedin"],"🤝"],
+  [["thesis","dissertation","capstone"],"📜"],[["research","paper","papers"],"🔍"],[["essay","essays","writing assignment"],"✍️"],
+  [["reading","readings","textbook","textbooks"],"📖"],[["club","clubs","society","fest","club fest"],"🎪"],
+  [["podcast","podcasts","audiobook","audiobooks","listen"],"🎧"],[["youtube","video","videos","content","vlog","streaming","stream"],"🎬"],
+  [["side project","side hustle","startup","launch","venture"],"🚀"],[["admin","paperwork","forms","documents","docs"],"🗂️"],
+  [["errand","errands","to do","todo","misc","miscellaneous","stuff","random","other"],"📌"],
+  [["subscription","subscriptions","renewal","renewals"],"💳"],[["insurance"],"🛡️"],[["legal","lawyer","contract","contracts","visa","passport","immigration"],"⚖️"],
+  [["packing","pack","luggage","suitcase"],"🧳"],[["moving","move","relocation","boxes"],"📦"],[["renovation","renovate","diy","build"],"🔨"],
+  [["volunteer","volunteering","charity","donate","donation","community"],"🫶"],[["recycle","recycling","eco","sustainability","environment"],"♻️"],
+  [["chess"],"♟️"],[["board game","board games","dnd","d&d","tabletop"],"🎲"],[["concert","concerts","gig","gigs","festival"],"🎤"],
+  [["theater","theatre","play","musical","show","shows"],"🎭"],[["museum","gallery","exhibition"],"🏛️"],[["golf"],"⛳"],[["ski","skiing","snowboard"],"⛷️"],
+  [["surf","surfing"],"🏄"],[["boxing","martial arts","karate","mma","judo"],"🥊"],[["dance","dancing","ballet"],"💃"],
+  [["baking","bake","bread","cake"],"🧁"],[["tea","matcha","boba","bubble tea"],"🧋"],[["wine","cocktails","bar","drinks"],"🍷"],
+  [["halloween","costume"],"🎃"],[["anniversary","valentine","valentines"],"💍"],[["reminder","reminders","dont forget","don't forget","remember"],"🔔"],
+  [["someday","maybe","later","backlog","parking lot","ideas bin"],"🪄"],[["important","priority","priorities","must"],"⚠️"],[["done","completed","archive","archived"],"✅"],
+  [["winter","snow"],"❄️"],[["summer"],"☀️"],[["night","evening"],"🌙"],[["morning","routine","routines"],"🌅"],
+  [["sewing","knit","knitting","crochet","craft","crafts"],"🧶"],[["car wash","tires","oil change","mechanic"],"🛠️"],
+  [["phone","calls","call"],"📞"],[["kids","school run","daycare","pickup"],"👪"],
+];
 
 // Accent palettes (#25). "lavender" = the original look; the rest are pastel.
 const PALETTES = {
@@ -658,9 +787,10 @@ function playComplete(mode){
 }
 
 export default function Freely() {
-  const [dark, setDark] = useState(true);
+  const [dark, setDark] = useState(()=>{ try{ return localStorage.getItem("fs_dark")!=="0"; }catch{ return true; } });
   const [scheme, setScheme] = useState(()=>localStorage.getItem("fs_scheme")||"lavender");
   useEffect(()=>{ try{localStorage.setItem("fs_scheme",scheme);}catch{} },[scheme]);
+  useEffect(()=>{ try{localStorage.setItem("fs_dark",dark?"1":"0");}catch{} },[dark]);
   const [sound, setSound] = useState(()=>localStorage.getItem("fs_sound2")||"soft");
   useEffect(()=>{ try{localStorage.setItem("fs_sound2",sound);}catch{} },[sound]);
   const T = mkT(dark, PALETTES[scheme]||PALETTES.lavender);
@@ -688,12 +818,16 @@ export default function Freely() {
   // Real per-day completion counts (fuels Analytics' weekly bars + heatmap). Device-local, capped at ~70 days.
   const [dayStats,setDayStats]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_daystats")||"{}"); }catch{ return {}; } });
   const bumpStat=delta=>setDayStats(s=>{ const d=tod(); const n={...s,[d]:Math.max(0,(s[d]||0)+delta)}; const ks=Object.keys(n).sort(); while(ks.length>70) delete n[ks.shift()]; try{localStorage.setItem("fs_daystats",JSON.stringify(n));}catch{} return n; });
+  // Completion counts from your OTHER devices, keyed by device id; summed with this device's for display.
+  const [remoteStats,setRemoteStats]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_stats_remote")||"{}"); }catch{ return {}; } });
+  const allStats=(()=>{ const out={...dayStats}; Object.values(remoteStats).forEach(m=>Object.entries(m||{}).forEach(([d,n])=>{ out[d]=(out[d]||0)+(n||0); })); return out; })();
   // Focus mode: tie a task to the Pomodoro timer.
   const [focusTask,setFocusTask]=useState(null);
   const [messages,setMessages]=useState([]);   // 1:1 DMs
   const [dmPeer,setDmPeer]=useState(null);      // selected conversation email
   const [zenOpen,setZenOpen]=useState(false); // full-screen focus overlay
   const [tourStep,setTourStep]=useState(()=>{ try{ return localStorage.getItem("fs_tour")?-1:0; }catch{ return -1; } }); // first-run welcome tour (-1 = done)
+  const [tourDemo,setTourDemo]=useState("Dentist tomorrow 3pm");   // the tour's live "type it" box
   const focusRef=useRef(null);
   useEffect(()=>{ focusRef.current=focusTask; },[focusTask]);
   const [navOrg, setNavOrg] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_navorg")||"null"); }catch{ return null; } });
@@ -916,12 +1050,21 @@ export default function Freely() {
   const adoptPrefs=useCallback(g=>{
     const p=g&&g.prefs;
     if(!p||typeof p!=="object") return;
+    // Other devices' completion counts merge regardless of which prefs are newer: each device owns its
+    // own map, and a count only ever goes up, so the union of the largest values is always right.
+    if(p.stats&&typeof p.stats==="object"){
+      setRemoteStats(cur=>{ const n={...cur};
+        Object.entries(p.stats).forEach(([dev,m])=>{ if(dev===DEVICE_ID||!m||typeof m!=="object") return; const mine={...(n[dev]||{})}; Object.entries(m).forEach(([d,c])=>{ mine[d]=Math.max(mine[d]||0,c||0); }); n[dev]=mine; });
+        try{ localStorage.setItem("fs_stats_remote",JSON.stringify(n)); }catch{} return n; });
+    }
     if(!((p.at||0)>prefsAtRef.current)) return;
     prefsAtRef.current=p.at; try{ localStorage.setItem("fs_prefs_at",String(p.at)); }catch{}
     if(p.navOrg!==undefined) setNavOrg(p.navOrg);
     if(Array.isArray(p.hiddenTabs)) setHiddenTabs(p.hiddenTabs);
     if(p.sort) setSortMode(p.sort==="smart"?"manual":p.sort);
     if(typeof p.newAtBottom==="boolean") setNewAtBottom(p.newAtBottom);
+    if(typeof p.dark==="boolean") setDark(p.dark);
+    if(typeof p.scheme==="string"&&PALETTES[p.scheme]) setScheme(p.scheme);
   },[]);
 
   useEffect(()=>{
@@ -937,11 +1080,11 @@ export default function Freely() {
     if(!prefsReadyRef.current){ prefsReadyRef.current=true; return; }
     const t=setTimeout(()=>{
       const at=Date.now(); prefsAtRef.current=at; try{ localStorage.setItem("fs_prefs_at",String(at)); }catch{}
-      db.saveGami(user.id,{xp,streak,lastActive:lastActiveRef.current,awarded:[...awardedRef.current],prefs:{navOrg,hiddenTabs,sort:sortMode,newAtBottom,at}}).catch(()=>{});
+      db.saveGami(user.id,{xp,streak,lastActive:lastActiveRef.current,awarded:[...awardedRef.current],prefs:{navOrg,hiddenTabs,sort:sortMode,newAtBottom,dark,scheme,stats:{...remoteStats,[DEVICE_ID]:dayStats},at}}).catch(()=>{});
     },900);
     return ()=>clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[navOrg,hiddenTabs,sortMode,newAtBottom,user]);
+  },[navOrg,hiddenTabs,sortMode,newAtBottom,dark,scheme,dayStats,user]);
 
   const markActiveDay = useCallback(()=>{
     const today=tod();
@@ -959,7 +1102,7 @@ export default function Freely() {
 
   const addTask = useCallback(()=>{
     if (!input.trim()) return;
-    let {title,due:parsed,time,endTime,spanEnd,extra}=parseNL(input);
+    let {title,due:parsed,time,endTime,spanEnd,extra,recurring}=parseNL(input);
     let due=parsed||null;
     if(time && !due) due=tod();
     // Upcoming with no date typed → file it as "Date TBD" instead of silently guessing tomorrow.
@@ -979,7 +1122,7 @@ export default function Freely() {
     // Cards are ordered by `position`, highest first — so "add to the bottom" means going below the current lowest.
     const openPos=tasks.filter(x=>!x.done).map(x=>x.position||0);
     const position=(newAtBottom&&openPos.length)?Math.min(...openPos)-1000:Date.now();
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="flagged",notes,color:null,subtasks:[],recurring:null,quadrant:null,remindAt,endTime:(time&&endTime)?endTime:null,attachments:[],owner:ownerId,position,mydayDate:view==="myday"?todStr:null};
+    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="flagged",notes,color:null,subtasks:[],recurring:recurring||null,quadrant:null,remindAt,endTime:(time&&endTime)?endTime:null,attachments:[],owner:ownerId,position,mydayDate:view==="myday"?todStr:null};
     setTasks(ts=>[t,...ts]);
     setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
     if(view==="myday") markActiveDay();
@@ -1376,7 +1519,7 @@ export default function Freely() {
     const guessedNew=guessIcon(nu,null);
     setCats(c=>{ const n={}; Object.entries(c).forEach(([k,v])=>{ if(k===old){
       const wasAuto=!v.icon||v.icon==="📁"||v.icon===guessIcon(old)||v.icon===DEFAULT_CATS[old]?.icon;
-      const ic=(wasAuto&&guessedNew)?guessedNew:v.icon;
+      const ic=(guessedNew&&(wasAuto||guessedNew!==guessIcon(old,null)))?guessedNew:v.icon;   // a hand-picked icon still gives way when the new name clearly means something else
       n[nu]={...v,icon:ic};
     } else n[k]=v; }); return n; });
     tasks.filter(t=>t.tag===old&&t.owner===user?.id).forEach(t=>updateTask(t.id,{tag:nu}));
@@ -1415,26 +1558,48 @@ export default function Freely() {
           <div style={{fontSize:11,color:"#7a85a3",marginTop:4}}>Breathe with the ring · finish the timer to earn +25 XP</div>
         </div>
       )}
-      {tourStep>=0&&(()=>{ const TOUR=[
-          ["⚡","Welcome to Freely","Tasks, habits, notes and focus — one calm place. Six cards and you'll know your way around."],
-          ["✨","Just type it","“Call the dentist tomorrow 3pm” — the date, the time and the list all set themselves, and the title stays clean. Typos are forgiven. No date yet? Type “tbd”."],
-          ["👆","Two gestures","Swipe a task → for My Day, ← to delete. To reorder, "+(COARSE?"hold it for a moment and drag":"hold it — or just pull it up and down")+". A line shows where it lands."],
-          ["☀️","Today vs. everything","My Day is your shortlist for today and carries unfinished work forward. Upcoming, the Calendar and the Priority Matrix are the same tasks, seen differently."],
-          ["🤝","Work with people","Share any list by email, then assign a task to one person or the whole list — or mark it 🔒 private so only they see it. Teams live in Settings."],
-          ["🎯","Build your rhythm","Habits with weekdays and streaks, a 🍅 focus timer worth +25 XP, notes and a freeform canvas. Everything syncs to every device you sign in on."],
-        ]; const [em,ti,tx]=TOUR[tourStep]; const last=tourStep===TOUR.length-1;
+            {tourStep>=0&&(()=>{
+        // Four cards, and the one that matters is LIVE: you type a sentence and watch Freely read it.
+        // Everything not on these cards is either obvious on sight or one tap away in the guide.
+        const demo=parseNL(tourDemo);
+        const TOUR=[
+          ["⚡","Welcome to Freely","One calm place for everything you need to do. Three short cards and you're in — the rest you'll find by tapping around."],
+          ["✨","Just type it — go on, try",(
+            <div>
+              <div style={{marginBottom:10}}>No date pickers. Write the whole thing as one sentence and the date, time, repeat and list come out of it. Typos are fine.</div>
+              <input value={tourDemo} onChange={e=>setTourDemo(e.target.value)} placeholder="e.g. Dentist tomorrow 3pm" style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:10,border:`1px solid ${T.accent}66`,background:T.surface2,color:T.text,fontSize:13,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+              <div style={{display:"flex",flexWrap:"wrap",gap:5,justifyContent:"center",marginTop:8,minHeight:26}}>
+                {tourDemo.trim()&&<span style={{padding:"3px 9px",borderRadius:8,background:T.surface3,color:T.text,fontSize:11,fontWeight:700}}>{demo.title}</span>}
+                {demo.due&&<span style={{padding:"3px 9px",borderRadius:8,background:T.accentGlow,color:T.accent,fontSize:11,fontWeight:700}}>📅 {fmtDate(demo.due)}</span>}
+                {demo.time&&<span style={{padding:"3px 9px",borderRadius:8,background:T.accentGlow,color:T.accent,fontSize:11,fontWeight:700}}>⏰ {fmtClock(demo.time)}{demo.endTime?` – ${fmtClock(demo.endTime)}`:""}</span>}
+                {demo.recurring&&<span style={{padding:"3px 9px",borderRadius:8,background:T.accentGlow,color:T.accent,fontSize:11,fontWeight:700}}>🔁 {demo.recurring.startsWith("custom:")?"repeats":demo.recurring}</span>}
+              </div>
+              <div style={{fontSize:11,color:T.textMuted,marginTop:6}}>Try “pay rent every month”, “gym sat 10am”, or “essay in 2 weeks”.</div>
+            </div>
+          )],
+          ["👆","Two gestures, that's all",(
+            <div>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8,margin:"4px 0 10px",fontSize:12,fontWeight:700}}>
+                <span style={{color:T.danger}}>🗑 ←</span>
+                <span style={{padding:"8px 14px",borderRadius:10,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontWeight:600}}>a task</span>
+                <span style={{color:T.warning}}>→ ☀️</span>
+              </div>
+              <div>Swipe <b>left</b> to delete, <b>right</b> to add it to My Day. To reorder, {COARSE?"hold a task for a moment, then drag":"hold a task — or just pull it up or down"}. A line shows where it will land.</div>
+            </div>
+          )],
+          ["🏁","That's genuinely it","The tab at the top of your sidebar is the screen Freely opens on — drag your favourite up there. Sharing, teams, habits, focus and everything else are in Settings → 📖 whenever you want them."],
+        ];
+        const [em,ti,body]=TOUR[tourStep]; const last=tourStep===TOUR.length-1;
         const endTour=()=>{ try{localStorage.setItem("fs_tour","1");}catch{} setTourStep(-1); };
         return (
         <div style={{position:"fixed",inset:0,zIndex:2500,background:"rgba(5,6,12,.72)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-          <div style={{width:400,maxWidth:"94vw",maxHeight:"90vh",overflowY:"auto",background:T.surface,border:`1px solid ${T.border}`,borderRadius:20,padding:"26px 22px 20px",textAlign:"center",boxShadow:"0 24px 80px rgba(0,0,0,.5)"}}>
-            <div style={{fontSize:46,marginBottom:10}}>{em}</div>
+          <div style={{width:400,maxWidth:"94vw",maxHeight:"90vh",overflowY:"auto",background:T.surface,border:`1px solid ${T.border}`,borderRadius:20,padding:"24px 22px 18px",textAlign:"center",boxShadow:"0 24px 80px rgba(0,0,0,.5)"}}>
+            <div style={{fontSize:42,marginBottom:8}}>{em}</div>
             <div style={{fontFamily:"'Sora',sans-serif",fontSize:19,fontWeight:800,marginBottom:8}}>{ti}</div>
-            <div style={{fontSize:13,color:T.textMuted,lineHeight:1.6,minHeight:62}}>{tx}</div>
-            <div style={{display:"flex",justifyContent:"center",gap:6,margin:"16px 0"}}>
+            <div style={{fontSize:13,color:T.textMuted,lineHeight:1.6,minHeight:62}}>{body}</div>
+            <div style={{display:"flex",justifyContent:"center",gap:6,margin:"14px 0"}}>
               {TOUR.map((_,i)=><span key={i} style={{width:i===tourStep?18:7,height:7,borderRadius:4,background:i===tourStep?T.accent:T.surface3,transition:"all .25s"}}/>)}
             </div>
-            {/* The tour is short on purpose — this is the way back to the long version, any time. */}
-            <button onClick={()=>{ endTour(); setHelpOpen(true); }} style={{width:"100%",marginBottom:10,padding:"8px",borderRadius:10,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>📖 Open the full guide instead</button>
             <div style={{display:"flex",gap:10}}>
               <button onClick={endTour} style={{flex:1,padding:"10px",borderRadius:10,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:13,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Skip</button>
               <button onClick={()=>last?endTour():setTourStep(s=>s+1)} style={{flex:2,padding:"10px",borderRadius:10,border:"none",background:T.grad,color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{last?"Let's go ⚡":"Next"}</button>
@@ -1553,7 +1718,7 @@ export default function Freely() {
           {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onLinkNote={foldNoteIntoTask} onClearTaskNotes={id=>updateTask(id,{notes:""})} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
           {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} showToast={showToast} onCheckin={key=>{awardXp("habit-"+key+"-"+todStr,15);markActiveDay();navigator.vibrate?.(20);}}/>}
           {view==="calendar"&&<CalendarView T={T} tasks={myTasks} cats={cats} todStr={todStr} onToggle={toggleTask} onToggleStep={toggleStep} onQuickAdd={addCalendarTask} onMoveTask={moveTaskDay} onMoveStep={moveStep} onOpenTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
-          {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={dayStats} todStr={todStr}/>}
+          {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={allStats} todStr={todStr}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar} newAtBottom={newAtBottom} setNewAtBottom={setNewAtBottom} onHelp={()=>setHelpOpen(true)}/>}
           {(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={allGroups} listPeople={collaboratorsOf} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}
@@ -2138,6 +2303,47 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
   const patchSub=(subId,p)=>onUpdate(task.id,{subtasks:task.subtasks.map(s=>s.id===subId?{...s,...p}:s)});
   const [subDateId,setSubDateId]=useState(null);
   // A short one-line note here also gets parsed for a date/time (like a linked note): sets the reminder + cleans the text.
+  // Live parsing while you type in the title or the notes. The date, time, repeat and list update
+  // within a third of a second of each keystroke; the words themselves are only stripped out of the
+  // text when you finish (Enter / tap away), so nothing vanishes from under your cursor mid-word.
+  // Deleting the date words again puts the task back the way it was before you started editing.
+  const editOrigRef=useRef(null);
+  const liveTimer=useRef(null);
+  const liveParse=raw=>{
+    if(!editOrigRef.current) editOrigRef.current={due:task.due,remindAt:task.remindAt,endTime:task.endTime,tag:task.tag,recurring:task.recurring};
+    clearTimeout(liveTimer.current);
+    liveTimer.current=setTimeout(()=>{
+      const o=editOrigRef.current; if(!o) return;
+      const p=parseNL(raw), patch={};
+      let due=p.due||o.due||null;
+      if(p.time&&!due) due=tod();                                        // a time with no day means today
+      if((due||null)!==(task.due||null)) patch.due=due;
+      const d=(due&&!isTbd(due))?due:null;
+      const ra=(p.time&&d)?`${d}T${p.time}`:(p.time?null:o.remindAt);
+      if((ra||null)!==(task.remindAt||null)) patch.remindAt=ra||null;
+      const et=p.time?(p.endTime||null):(o.endTime||null);
+      if((et||null)!==(task.endTime||null)) patch.endTime=et||null;
+      const rec=p.recurring||o.recurring||null;
+      if((rec||null)!==(task.recurring||null)) patch.recurring=rec;
+      const hit=matchListName(p.title||raw,cats||{}); const tag=hit||o.tag;
+      if(tag&&tag!==task.tag) patch.tag=tag;
+      if(Object.keys(patch).length) onUpdate(task.id,patch);
+    },300);
+  };
+  const finishTitle=()=>{
+    clearTimeout(liveTimer.current); editOrigRef.current=null;
+    const raw=ttl.trim();
+    if(!raw){setTtl(task.title||"");return;}
+    if(raw===(task.title||"")) return; // unchanged → don't re-parse (avoids stripping a legit word on a no-op blur)
+    const patch=titleEditPatch(task,raw,cats);
+    if(Object.keys(patch).length) onUpdate(task.id,patch);
+    setTtl(patch.title||raw);
+  };
+  const liveNotes=raw=>{
+    const v=raw.trim();
+    if(!v||v.includes("\n")||v.length>80) return;   // only short single-line quick notes are read for dates
+    liveParse(v);
+  };
   const parseNotesBlur=()=>{
     const raw=nts.trim();
     if(!raw || raw.includes("\n") || raw.length>80) return; // only auto-parse short single-line quick notes
@@ -2175,19 +2381,11 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
         <div style={{width:42,height:4,borderRadius:2,background:T.surface3}}/>
       </div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-        <input value={ttl} onChange={e=>setTtl(e.target.value)} onBlur={()=>{
-          const raw=ttl.trim();
-          if(!raw){setTtl(task.title||"");return;}
-          if(raw===(task.title||"")) return; // unchanged → don't re-parse (avoids stripping a legit word on a no-op blur)
-          // Full re-parse: a typed date/time reschedules, a typed list name re-files the task.
-          const patch=titleEditPatch(task,raw,cats);
-          if(Object.keys(patch).length) onUpdate(task.id,patch);
-          setTtl(patch.title||raw);
-        }} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();}} placeholder="Task name" title="Tap to rename — retype a date/time or a list name and it re-files itself" style={{fontFamily:"'Sora',sans-serif",fontSize:13,fontWeight:600,flex:1,lineHeight:1.4,background:"transparent",border:"none",borderBottom:`1px dashed ${T.border}`,outline:"none",color:T.text,minWidth:0,padding:"1px 0"}}/>
+        <input value={ttl} onChange={e=>{setTtl(e.target.value);liveParse(e.target.value);}} onBlur={finishTitle} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();}} placeholder="Task name" title="Tap to rename — retype a date/time or a list name and it re-files itself" style={{fontFamily:"'Sora',sans-serif",fontSize:13,fontWeight:600,flex:1,lineHeight:1.4,background:"transparent",border:"none",borderBottom:`1px dashed ${T.border}`,outline:"none",color:T.text,minWidth:0,padding:"1px 0"}}/>
         <button onClick={onClose} style={{width:24,height:24,borderRadius:6,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginLeft:6}}><Ico n="x" s={13}/></button>
       </div>
       <DL label="Notes" T={T}>
-        <textarea value={nts} onChange={e=>{setNts(e.target.value);onUpdate(task.id,{notes:e.target.value});}} onBlur={parseNotesBlur} placeholder="Notes, links… a date/time here also sets the reminder" style={{marginTop:4,width:"100%",minHeight:52,padding:"6px 9px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"vertical",lineHeight:1.5}}/>
+        <textarea value={nts} onChange={e=>{setNts(e.target.value);onUpdate(task.id,{notes:e.target.value});liveNotes(e.target.value);}} onBlur={()=>{clearTimeout(liveTimer.current);editOrigRef.current=null;parseNotesBlur();}} placeholder="Notes, links… a date/time here also sets the reminder" style={{marginTop:4,width:"100%",minHeight:52,padding:"6px 9px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"vertical",lineHeight:1.5}}/>
         {nts&&<button onClick={()=>{setNts("");onUpdate(task.id,{notes:""});}} style={{marginTop:4,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:600,fontFamily:"'DM Sans',sans-serif",display:"inline-flex",alignItems:"center",gap:4}}><Ico n="trash" s={10} c={T.textMuted}/> Clear notes</button>}
       </DL>
       <DL label="Attachments 📎" T={T}>
@@ -2935,7 +3133,7 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
   const todayHabits=habits.filter(schedToday).slice().sort((a,b)=>(a.prio??999)-(b.prio??999));
   const extraHabits=habits.filter(h=>!schedToday(h));
   // Same smart icon system as the sidebar folders: the icon picks itself from the name as you type.
-  const onNameChange=v=>{ setName(v); if(!iconPicked) setIcon(guessIcon(v,"✨")); };
+  const onNameChange=v=>{ const g=guessIcon(v,null), was=guessIcon(name,null); setName(v); if(!iconPicked) setIcon(g||"✨"); else if(g&&g!==was){ setIcon(g); setIconPicked(false); } };
   const add=(nm,ic)=>{ const n=(nm??name).trim(); if(!n)return; const finalIc=ic||(iconPicked?icon:guessIcon(n,"✨")); const hDays=days&&days.length?days:null; setHabits(hs=>{ const id=Math.max(Date.now(),hs.reduce((m,h)=>Math.max(m,h.id||0),0)+1); return [...hs,{id,name:n,icon:finalIc,color,cadence:hDays?hDays.length:cadence,days:hDays,prio:null,log:[],created:todStr}]; }); setName(""); setIcon("✨"); setIconPicked(false); setDays(null); };
   const patch=(id,p)=>setHabits(hs=>hs.map(x=>x.id===id?{...x,...p}:x));
   const toggle=h=>{ const done=has(h,todStr); setHabits(hs=>hs.map(x=>x.id===h.id?{...x,log:done?(x.log||[]).filter(d=>d!==todStr):[...(x.log||[]),todStr]}:x));
@@ -3669,7 +3867,7 @@ function SidebarCreate({T,mode,onClose,onCreateList,onCreateGroup,onUploadIcon})
   const [iconPicked,setIconPicked]=useState(false);
   const [color,setColor]=useState(CAT_COLORS[0]);
   const iconFileRef=useRef(null);
-  const onName=v=>{ setName(v); if(!iconPicked) setIcon(guessIcon(v,"📁")); };
+  const onName=v=>{ const g=guessIcon(v,null), was=guessIcon(name,null); setName(v); if(!iconPicked) setIcon(g||"📁"); else if(g&&g!==was){ setIcon(g); setIconPicked(false); } };
   const create=()=>{ const v=name.trim(); if(!v) return; if(isGroup){ onCreateGroup(v,icon); } else { if(onCreateList(v,icon,color)===false){ alert(`A list called "${v}" already exists.`); return; } } };
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:2600,background:"rgba(5,6,12,.6)",display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
@@ -4046,20 +4244,20 @@ function TeamsSettings({T,teams=[],myEmail,myId,knownPeople=[],onCreate,onAddMem
 // "how do I…", not as a feature list, and sized for a phone first: full screen
 // under 640px, a centred sheet above it.
 const GUIDE = [
-  ["✅","The basics","A task is a card. Tap it to open the details panel, where you can add steps, a date, a time, notes, photos, a colour, a priority and who it belongs to.\n• Tap the circle to finish it.\n• Tap the title in the panel to rename it — Freely re-reads any date or list name you type in.\n• Everything saves by itself, on every device you sign in on."],
-  ["✨","Type it the way you'd say it","You never need a date picker. Type the whole thing into any add box:\n• “Call the dentist tomorrow 3pm”\n• “Essay draft friday”\n• “Team sync sept 30 4:00 pm - 5:30 pm”\n• “Rent 1st of every month”\nFreely pulls out the date, the start and end time, and the list — and leaves the title clean. Spelling is forgiven: “julky”, “tommorow” and “wenesday” all land correctly.\nNo date in mind? Type “tbd”, “tba” or “unknown” and it is filed as Date TBD instead of guessing."],
-  ["👆","Gestures","Two things a card does:\n• Swipe it ← to delete, → to add it to My Day.\n• Pick it up to reorder: hold it for a moment, or (with a mouse) just pull it along the list. On the Priority Matrix, picking a note up lets you drop it in any box.\nA line shows exactly where it will land before you let go. Reordering by hand switches the sort to “My order” so your arrangement sticks."],
-  ["☀️","My Day","Your shortlist for today, wiped clean each morning. Anything you did not finish is carried forward automatically — the banner at the top undoes that in one tap.\nSuggestions sit at the bottom of the list: overdue and near-due work you might want to pull in."],
-  ["📅","Upcoming & Calendar","Upcoming is everything with a date, soonest first, with anything overdue pinned to the top under a red header (“Move to today” fixes them all at once). Undated work waits under Date TBD.\nCalendar is the same tasks laid on a month. Drag a task — or a single step inside a task — onto a day to move it."],
-  ["🎯","Priority Matrix","Four boxes, by urgency and importance:\n• Top-left — urgent AND important: do it now.\n• Top-right — important, not urgent: schedule it.\n• Bottom-left — urgent, not important: hand it off.\n• Bottom-right — neither: drop it.\nTap the ⤢ on a box to blow it up full screen. Drag a note between boxes to change its priority — matrix and list are the same tasks, always."],
-  ["📁","Lists, folders & your home screen","Make a list for anything (Work, ACA, GoDo — your capitals are kept). Drag one list onto another to nest them into a folder.\n• Tap a list's name at the top of the screen to rename it, change its icon or colour.\n• Typing a list's name into a task files it there: “writing essay” becomes “essay” in your Writing list.\n• Whatever sits at the very top of your sidebar is the screen Freely opens on. Drag Upcoming above My Day and Upcoming becomes your home."],
-  ["🤝","Sharing & assigning","The 🤝 Share button next to a list's name opens sharing. Invite by email; they see the list the moment they sign in.\n• Assign a task to one person, or to everyone on the list at once.\n• Everyone on the list sees who a task belongs to — unless you mark the assignment 🔒 private, and then only that person sees it.\n• A task assigned to you appears under “Assigned to me”, even if the list was never shared with you.\n• Leave a list you were invited to any time with the Leave ✕ button."],
-  ["👥","Teams & messages","Settings → Teams makes a team. Everyone in it can message each other directly — no friend request between teammates.\n• Outside a team, the first message to a stranger is a request; they accept before you can chat freely.\n• A team is private: nobody sees it unless they were invited to join it, or invited purely to hand work to it.\n• You can assign a whole list to a team in one go."],
-  ["🔁","Habits","Habits are things you want to do repeatedly, not once. Pick which weekdays each one is due, give it a 1-2-3 priority, and check in with a tap. The streak counts consecutive days you kept it.\nToday's habits also appear as chips at the top of My Day."],
-  ["🍅","Focus","Open a task and hit Focus to start a Pomodoro on it. The full-screen timer breathes with the ring; finishing one earns +25 XP. Minimise it and it keeps running while you work elsewhere."],
-  ["📝","Notes & Canvas","Notes are for writing that is not a task. The Canvas is a freeform board — drop coloured sticky notes anywhere, drag them around, and link one to a task so its date and time follow along. An empty note removes itself rather than leaving clutter behind."],
-  ["📊","Progress","Analytics shows what you actually finished: a weekly bar chart, a heatmap of your year, your streak and your XP. XP comes from finishing tasks, keeping habits and completing focus sessions."],
-  ["⚙️","Settings worth knowing","• Sort order (due date, priority, A→Z, or your own) — remembered on every device.\n• New tasks to the bottom or the top of the list.\n• Hide any tab you do not use; reorder the rest by dragging in the sidebar.\n• Light or dark, and five colour schemes.\n• Export a backup of everything, or import one back."],
+  ["✅","The basics","A task is a card. Tap it to open the details, where you can add steps, a date, a time, notes, photos, a colour, a priority and who it's for.\n• Tap the circle to finish it.\n• Tap the title in the details to rename it — type a date or a list name in there and Freely picks it up as you type.\n• Everything saves by itself, on every device you sign in on."],
+  ["✨","Type it the way you'd say it","No date pickers. Type the whole thing into any add box:\n• “Call the dentist tomorrow 3pm”\n• “Essay draft friday”\n• “Team sync sept 30 4:00 pm - 5:30 pm”\n• “Pay rent every month”\n• “Groceries this weekend”\nFreely pulls out the date, the time, the repeat and the list, and leaves the title clean. Typos are forgiven — “tommorow”, “wensday”, “julky” and “fridya” all land where you meant.\nNo date yet? Type “tbd” or “unknown” and it waits under Date TBD instead of guessing."],
+  ["👆","Gestures","• Swipe a task ← to delete it, → to add it to My Day.\n• To reorder: hold a task for a moment, or (with a mouse) just pull it along the list. A line shows exactly where it lands. This only works in “My order” — in the other sorts the list arranges itself.\n• On the Priority Matrix, hold a note and drop it in any box."],
+  ["☀️","My Day","Your shortlist for today, wiped clean each morning. Anything unfinished is carried forward — the banner at the top undoes that in one tap.\nSuggestions for what to pull in sit at the bottom of the list."],
+  ["📅","Upcoming & Calendar","Upcoming is everything with a date, soonest first. Anything overdue is pinned to the top in red, with a one-tap “Move to today”. Undated work waits under Date TBD.\nCalendar is the same tasks on a month. Drag a task — or a single step inside one — onto a day to move it."],
+  ["🎯","Priority Matrix","Four boxes, by urgency and importance:\n• Top-left — urgent AND important: do it now.\n• Top-right — important, not urgent: schedule it.\n• Bottom-left — urgent, not important: hand it off.\n• Bottom-right — neither: drop it.\nTap ⤢ on a box to give it the whole screen. The matrix and your lists are the same tasks."],
+  ["📁","Lists, folders & your home screen","Make a list for anything — Groceries, Work, Side project. Your capitals are kept.\n• Drag one list onto another to nest them in a folder.\n• Tap a list's name at the top of the screen to rename it or change its icon and colour.\n• Type a list's name into a task and it's filed there: “work call the bank” goes to Work as “call the bank”.\n• Whatever is at the very top of your sidebar is the screen Freely opens on."],
+  ["🤝","Sharing & assigning","Tap 🤝 Share next to a list's name and invite someone by email — they see it the moment they sign in.\n• Assign a task to one person, or to everyone on the list at once.\n• Everyone on the list sees who a task is for — unless you mark it 🔒 private, and then only that person sees it.\n• Work assigned to you appears under “Assigned to me”, even from lists that were never shared with you.\n• Leave any list you were invited to with Leave ✕."],
+  ["👥","Teams & messages","Settings → Teams makes a team. Teammates can message each other straight away, no request needed.\n• Outside a team, your first message to someone is a request; they accept before you can chat freely.\n• A team is private — nobody sees it unless they were invited.\n• You can assign a whole list to a team in one go."],
+  ["🔁","Habits","Things you do repeatedly, not once. Pick the weekdays, give it a priority, check in with a tap. The streak counts consecutive days kept. Today's habits also sit at the top of My Day."],
+  ["🍅","Focus","Open a task and hit Focus to start a timer on it. Finishing one earns +25 XP. Minimise it and it keeps running while you work."],
+  ["📝","Notes & Canvas","Notes are for writing that isn't a task. The Canvas is a freeform board — sticky notes you drag anywhere, and link to a task so its date follows along. An empty note removes itself."],
+  ["📊","Progress","Analytics shows what you actually finished — a weekly chart, a heatmap, your streak and XP — counted across all your devices."],
+  ["⚙️","Settings worth knowing","• Sort order, new tasks to the bottom or top, and your theme — all remembered on every device.\n• Hide any tab you don't use; reorder the rest by dragging in the sidebar.\n• Export a backup of everything, or import one back."],
 ];
 function HelpGuide({T,onClose,onReplayTour,onSamples}) {
   const narrow = useNarrow();
@@ -4084,7 +4282,7 @@ function HelpGuide({T,onClose,onReplayTour,onSamples}) {
         <div style={{flex:1,overflowY:"auto",padding:"10px 14px 16px",display:"flex",flexDirection:"column",gap:6,WebkitOverflowScrolling:"touch"}}>
           {rows.length===0&&<div style={{textAlign:"center",padding:"36px 10px",color:T.textMuted,fontSize:12}}>Nothing in the guide matches “{q}”.</div>}
           {rows.map(([em,title,body])=>{ const i=GUIDE.findIndex(g=>g[1]===title); const isOpen=ql?true:open===i; return (
-            <div key={title} style={{border:`1px solid ${T.border}`,borderRadius:12,background:isOpen?T.surface2:"transparent",overflow:"hidden"}}>
+            <div key={title} style={{border:`1px solid ${T.border}`,borderRadius:12,background:isOpen?T.surface2:"transparent",overflow:"hidden",flexShrink:0}}>
               <button onClick={()=>setOpen(o=>o===i?-1:i)} style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:"11px 12px",background:"none",border:"none",cursor:"pointer",color:T.text,fontFamily:"'DM Sans',sans-serif",textAlign:"left"}}>
                 <span style={{fontSize:16,flexShrink:0}}>{em}</span>
                 <span style={{flex:1,minWidth:0,fontSize:13,fontWeight:700}}>{title}</span>
@@ -4146,7 +4344,7 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
   const [newCatIcon,setNewCatIcon]=useState(CAT_ICONS[0]);
   const [iconMenuFor,setIconMenuFor]=useState(null);
   const addCat=()=>{const name=newCat.trim();if(!name||Object.keys(cats).some(k=>k.toLowerCase()===name.toLowerCase()))return;setCats(c=>({...c,[name]:{color:newCatColor,icon:newCatIcon}}));setNewCat("");setNewCatIcon(CAT_ICONS[0]);setIconPicked(false);};
-  const onNameChange=v=>{ setNewCat(v); if(!iconPicked) setNewCatIcon(guessIcon(v)); };
+  const onNameChange=v=>{ const g=guessIcon(v,null), was=guessIcon(newCat,null); setNewCat(v); if(!iconPicked) setNewCatIcon(g||"📁"); else if(g&&g!==was){ setNewCatIcon(g); setIconPicked(false); } };
   const pickIcon=em=>{if(iconMenuFor==="__new__"){setNewCatIcon(em);setIconPicked(true);}else setCats(c=>({...c,[iconMenuFor]:{...c[iconMenuFor],icon:em}}));setIconMenuFor(null);};
   const Toggle=({val,onChange})=>(
     <div onClick={()=>onChange(!val)} style={{width:36,height:20,borderRadius:10,background:val?T.accent:T.surface3,cursor:"pointer",position:"relative",transition:"background .2s",flexShrink:0}}>
