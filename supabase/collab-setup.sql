@@ -13,6 +13,7 @@
 --   · Teammates can message each other directly, no friend request needed.
 --   · A task assigned to you is visible to you even if its list was never
 --     shared with you, and it shows up under "Assigned to me".
+--   · A list can be shared view-only: they can read it but not change, add or delete.
 --   · Everyone sharing a list sees who a task is assigned to — unless the
 --     assigner marks it private, and then only the assignee can see it.
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -79,6 +80,9 @@ alter table public.messages alter column recipient_email drop not null;
 
 -- Private assignment: hidden from the rest of the list, visible to the assignee
 alter table public.tasks add column if not exists assign_private boolean default false;
+
+-- View-only sharing: they see the list, they can't change it. Older rows have no value → editable.
+alter table public.folder_shares add column if not exists can_edit boolean default true;
 
 
 -- ╔═══════════════════════════════════════════════════════════════════════╗
@@ -215,12 +219,14 @@ create policy "collaborators edit shared tasks" on public.tasks for update to au
   using (
     exists (select 1 from public.folder_shares fs
             where fs.owner_id = tasks.user_id and fs.folder = tasks.tag
-              and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email'))
+              and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email')
+              and coalesce(fs.can_edit, true))
   )
   with check (
     exists (select 1 from public.folder_shares fs
             where fs.owner_id = tasks.user_id and fs.folder = tasks.tag
-              and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email'))
+              and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email')
+              and coalesce(fs.can_edit, true))
   );
 
 -- ...and add new work to that shared list (the app files it under the list's owner)
@@ -230,7 +236,8 @@ create policy "collaborators add to shared lists" on public.tasks for insert to 
     user_id = auth.uid()
     or exists (select 1 from public.folder_shares fs
                where fs.owner_id = tasks.user_id and fs.folder = tasks.tag
-                 and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email'))
+                 and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email')
+              and coalesce(fs.can_edit, true))
   );
 
 -- RESTRICTIVE: applies on top of every other rule. A private assignment is

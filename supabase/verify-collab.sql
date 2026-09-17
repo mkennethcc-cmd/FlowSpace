@@ -23,6 +23,7 @@ declare
   cnt      int;
   made_req boolean := false;
   tid      uuid := gen_random_uuid();
+  tid2     uuid := gen_random_uuid();
   res      text[] := '{}';
 begin
   select id into a_id from auth.users where lower(email) = a_mail;
@@ -213,13 +214,42 @@ begin
 
       select count(*) into cnt from public.tasks where id = tid;
       res := res || ('26. C can see the task assigned to them | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: invisible to C' end);
+
+      ------------------------------------------- a VIEW-ONLY share: B can look, not touch
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', a_id::text, 'email', a_mail)::text, true);
+      execute 'set local role authenticated';
+      begin
+        insert into public.folder_shares(owner_id, folder, shared_with_email, can_delete, can_edit)
+        values (a_id, mark || ' ro', b_mail, false, false);
+        insert into public.tasks(id, user_id, title, tag) values (tid2, a_id, mark || ' read-only job', mark || ' ro');
+        res := res || ('27. A shares a list VIEW-ONLY with B | ✓ PASS')::text;
+      exception when others then res := res || ('27. A shares a list VIEW-ONLY with B | ✗ FAIL: ' || sqlerrm); end;
+
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', b_id::text, 'email', b_mail)::text, true);
+      execute 'set local role authenticated';
+
+      select count(*) into cnt from public.tasks where id = tid2;
+      res := res || ('28. B can SEE the view-only task | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: invisible' end);
+
+      begin
+        update public.tasks set done = true where id = tid2;
+        get diagnostics cnt = row_count;
+        res := res || ('29. B CANNOT change it | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: the change went through' end);
+      exception when others then res := res || ('29. B CANNOT change it | ✓ PASS')::text; end;
+
+      begin
+        insert into public.tasks(id, user_id, title, tag) values (gen_random_uuid(), a_id, mark || ' sneaked in', mark || ' ro');
+        res := res || ('30. B CANNOT add to it | ✗ FAIL: the insert went through')::text;
+      exception when others then res := res || ('30. B CANNOT add to it | ✓ PASS')::text; end;
     end if;
   end if;
 
   ------------------------------------------------------------------- clean up
   execute 'set local role ' || quote_ident(orig);
   delete from public.tasks    where title like mark || '%';
-  delete from public.folder_shares where folder = mark;
+  delete from public.folder_shares where folder like mark || '%';
   delete from public.messages where body like mark || '%';
   if made_req then
     delete from public.chat_requests where from_email = a_mail and to_email = b_mail;

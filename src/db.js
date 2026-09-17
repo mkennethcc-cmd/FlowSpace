@@ -93,11 +93,14 @@ export const db = {
     const { data } = await supabase.from("folder_shares").select("*").eq("shared_with_email", email.toLowerCase());
     return data || [];
   },
-  async addShare(ownerId, folder, email, canDelete) {
-    const { error } = await supabase.from("folder_shares").upsert(
-      { owner_id: ownerId, folder, shared_with_email: email.toLowerCase().trim(), can_delete: !!canDelete },
-      { onConflict: "owner_id,folder,shared_with_email" }
-    );
+  // perm: "view" (look only) · "edit" (edit & add) · "delete" (edit, add & delete). Older callers passed a boolean.
+  async addShare(ownerId, folder, email, perm) {
+    if (typeof perm === "boolean") perm = perm ? "delete" : "edit";
+    const row = { owner_id: ownerId, folder, shared_with_email: email.toLowerCase().trim(), can_delete: perm === "delete" };
+    const attempt = r => supabase.from("folder_shares").upsert(r, { onConflict: "owner_id,folder,shared_with_email" });
+    // can_edit arrived later: a database that hasn't run the latest SQL still accepts the share (as editable).
+    let { error } = await attempt({ ...row, can_edit: perm !== "view" });
+    if (error && /can_edit/.test(error.message || "")) ({ error } = await attempt(row));
     if (error) throw error;
   },
   async removeShare(id) {

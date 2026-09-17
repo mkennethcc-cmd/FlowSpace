@@ -481,6 +481,8 @@ const parseNL = raw => {
   return {title, due, time, endTime, spanEnd:null, extra:"", recurring:rc.recurring};
 };
 
+// The title as it will read once the date/time/repeat/list words are lifted out of it.
+const cleanTitle = (raw, cats, tag) => { const p = parseNL(raw); let t = p.title || raw; const hit = matchListName(t, cats || {}); if (hit && hit !== tag) t = stripListName(t, hit); return t; };
 // Re-parse an edited task title: a typed date/time reschedules it, a typed list name re-files it.
 // Returns only the fields that actually change.
 const titleEditPatch = (task, raw, cats) => {
@@ -536,23 +538,34 @@ const dragHint = (axis="list") => axis==="matrix"
   ? (COARSE ? "hold a note, then drag it to another box" : "hold a note — or pull it — to move it between boxes")
   : (COARSE ? "hold a task, then drag to reorder" : "hold a task — or pull it up/down — to reorder");
 
-// The sidebar's own reading order, flattened (groups open in place; lists shared with you sit
-// in their own section and never count). Freely opens on whichever tab is first here.
-const firstTreeView = (items, org) => {
-  const tree = items.filter(i => !i.id.startsWith("s:"));
-  const groups = (org?.groups) || [];
+// The one place that knows how the sidebar is arranged: your stored order and folders, plus two
+// defaults — anything you haven't placed goes to the end, and a list someone shares with you starts
+// out inside a "Shared with me" folder until you drag it wherever you like, the very top included.
+const SHARED_GID = "g:shared";
+const sidebarLayout = (items, org) => {
+  const groupsIn = (org?.groups) || [];
+  const groups = groupsIn.some(g => g.id === SHARED_GID) ? groupsIn : [...groupsIn, { id: SHARED_GID, name: "Shared with me", icon: "🤝", collapsed: false }];
   const gmap = Object.fromEntries(groups.map(g => [g.id, g]));
-  const byId = Object.fromEntries(tree.map(i => [i.id, i]));
-  const allIds = [...tree.map(i => i.id), ...groups.map(g => g.id)];
+  const byId = Object.fromEntries(items.map(i => [i.id, i]));
+  const allIds = [...items.map(i => i.id), ...groups.map(g => g.id)];
+  const parentRaw = (org?.parent) || {};
   const stored = ((org?.order) || []).filter(id => allIds.includes(id));
   const order = [...stored, ...allIds.filter(id => !stored.includes(id))];
-  const parentOf = id => { const p = (org?.parent || {})[id]; return (p && gmap[p]) ? p : null; };
+  const parentOf = id => {
+    if (id in parentRaw) { const p = parentRaw[id]; return (p && gmap[p]) ? p : null; }   // an explicit null means "at the root, on purpose"
+    return id.startsWith("s:") ? SHARED_GID : null;
+  };
+  const childrenOf = pid => order.filter(id => parentOf(id) === pid);
+  return { groups, gmap, byId, allIds, parentRaw, order, parentOf, childrenOf };
+};
+// Freely opens on whichever tab is first in that order, folders opened in place — a shared list can be it too.
+const firstTreeView = (items, org) => {
+  const L = sidebarLayout(items, org);
   const walk = (pid, depth) => {
     if (depth > 40) return null;
-    for (const id of order) {
-      if (parentOf(id) !== pid) continue;
-      if (gmap[id]) { const hit = walk(id, depth+1); if (hit) return hit; }  // a group is a container, not a tab
-      else if (byId[id]) return byId[id].view;
+    for (const id of L.childrenOf(pid)) {
+      if (L.gmap[id]) { const hit = walk(id, depth + 1); if (hit) return hit; }
+      else if (L.byId[id]) return L.byId[id].view;
     }
     return null;
   };
@@ -1115,7 +1128,8 @@ export default function Freely() {
       if(hit){ tagForTask=hit; title=stripListName(title,hit); } // "writing essay" → "essay", filed in Writing
       else tagForTask=guessCat(title,cats);
     }
-    if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"); ownerId=rest.slice(0,ci); tagForTask=rest.slice(ci+1); }
+    if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"); ownerId=rest.slice(0,ci); tagForTask=rest.slice(ci+1);
+      const sh=sharedWithMe.find(x=>x.owner_id===ownerId&&x.folder===tagForTask); if(sh&&sh.can_edit===false){ showToast("View only — ask the owner for edit access 👀"); return; } }
     // A pasted blurb can carry a multi-day span and extra fields (Location, Cost…) — keep them on the task's notes.
     const abs=s=>new Date(s+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"});
     const notes=[spanEnd&&due?`📅 Runs ${abs(due)} → ${abs(spanEnd)}`:"",extra||""].filter(Boolean).join("\n");
@@ -1134,6 +1148,7 @@ export default function Freely() {
   const toggleTask = id=>{
     const task=tasks.find(t=>t.id===id);
     if(!task) return;
+    if(!canEditTask(task)){ showToast("View only — ask the owner for edit access 👀"); return; }
     const newDone=!task.done;
     setTasks(ts=>ts.map(t=>t.id===id?{...t,done:newDone}:t));
     bumpStat(newDone?1:-1);
@@ -1157,6 +1172,15 @@ export default function Freely() {
     if(task.owner===user?.id) return true;
     const sh=sharedWithMe.find(s=>s.owner_id===task.owner&&s.folder===task.tag);
     return !!(sh&&sh.can_delete);
+  };
+  // View-only collaborators can look but not touch. Work assigned to you is yours to tick off.
+  // A share row from before the can_edit column exists is treated as editable.
+  const canEditTask=task=>{
+    if(!task) return true;
+    if(task.owner===user?.id) return true;
+    if(assigneesOf(task).includes(user?.email?.toLowerCase())) return true;
+    const sh=sharedWithMe.find(s=>s.owner_id===task.owner&&s.folder===task.tag);
+    return !sh || sh.can_edit!==false;
   };
   const deleteTask = id=>{
     const t=tasks.find(x=>x.id===id);
@@ -1230,6 +1254,8 @@ export default function Freely() {
   },[user]);
 
   const updateTask = (id,patch)=>{
+    const cur=tasks.find(t=>t.id===id);
+    if(cur&&!canEditTask(cur)){ showToast("View only — ask the owner for edit access 👀"); return; }
     setTasks(ts=>ts.map(t=>t.id===id?{...t,...patch}:t));
     if(selTask?.id===id)setSelTask(s=>({...s,...patch}));
     if(user)db.updateTask(id,patch)
@@ -1291,7 +1317,7 @@ export default function Freely() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[tasks,user]);
   const undoCarry=()=>{ if(!carriedIds.length)return; navigator.vibrate?.(10); carriedIds.forEach(id=>updateTask(id,{mydayDate:null})); setCarriedIds([]); showToast("Carry-over undone"); };
-  const shareFolder=async(folder,email,canDelete)=>{ if(!user||!email.trim())return; try{ await db.addShare(user.id,folder,email,canDelete); refreshShares(); showToast(`Shared "${folder}" with ${email.trim()}`); }catch(e){ showToast("Share failed: "+(e.message||e)); } };
+  const shareFolder=async(folder,email,perm)=>{ if(!user||!email.trim())return; try{ await db.addShare(user.id,folder,email,perm); refreshShares(); showToast(`Shared "${folder}" with ${email.trim()}`); }catch(e){ showToast("Share failed: "+(e.message||e)); } };
   const unshareFolder=async id=>{ await db.removeShare(id).catch(()=>{}); refreshShares(); showToast("Collaborator removed"); };
 
   const remindedRef=useRef();
@@ -1370,7 +1396,7 @@ export default function Freely() {
     return [...out];
   };
   // Who shared the list I'm currently looking at (for the "Shared by …" header + Leave button).
-  const sharedViewInfo=view.startsWith("shared:")?(()=>{ const rest=view.slice(7),ci=rest.indexOf(":"),o=rest.slice(0,ci),f=rest.slice(ci+1); const em=idEmail[o]; return {owner:o,folder:f,email:em||null,nick:em?nickOf(em):null}; })():null;
+  const sharedViewInfo=view.startsWith("shared:")?(()=>{ const rest=view.slice(7),ci=rest.indexOf(":"),o=rest.slice(0,ci),f=rest.slice(ci+1); const em=idEmail[o]; const sh=sharedWithMe.find(x=>x.owner_id===o&&x.folder===f); return {owner:o,folder:f,email:em||null,nick:em?nickOf(em):null,canEdit:!sh||sh.can_edit!==false}; })():null;
   // Can I chat freely with them? (trusted, accepted request either way, or they've messaged me)
   const chatLinked=em=>trusted.includes(em)
     ||chatReqs.some(r=>r.status==="accepted"&&((r.from_email===em&&r.to_email===meEmail)||(r.to_email===em&&r.from_email===meEmail)))
@@ -1475,13 +1501,13 @@ export default function Freely() {
 
   const navItems=[
     {id:"myday",label:"My Day",icon:"sun",badge:myDay.filter(t=>!t.done).length},
+    {id:"habits",label:"Habits",icon:"repeat",badge:habits.filter(h=>!h.log?.includes(todStr)).length||null},
+    {id:"matrix",label:"Priority Matrix",icon:"grid",badge:null},
     {id:"upcoming",label:"Upcoming",icon:"arr",badge:upcoming.filter(t=>!t.done).length},
     {id:"calendar",label:"Calendar",icon:"cal",badge:null},
-    {id:"matrix",label:"Priority Matrix",icon:"grid",badge:null},
-    {id:"all",label:"All Tasks",icon:"layers",badge:null},
-    {id:"flagged",label:"Flagged",icon:"flag",badge:myTasks.filter(t=>t.starred&&!t.done).length},
     {id:"assigned",label:"Assigned to me",icon:"user",badge:tasks.filter(t=>!t.done&&assigneesOf(t).includes(user?.email?.toLowerCase())).length||null},
-    {id:"habits",label:"Habits",icon:"repeat",badge:habits.filter(h=>!h.log?.includes(todStr)).length||null},
+    {id:"flagged",label:"Flagged",icon:"flag",badge:myTasks.filter(t=>t.starred&&!t.done).length},
+    {id:"all",label:"All Tasks",icon:"layers",badge:null},
     {id:"messages",label:"Messages",icon:"chat",badge:messages.filter(m=>m.recipient_email===user?.email?.toLowerCase()&&!m.read).length||null,tint:"#ef4444"},
     {id:"notes",label:"Notes",icon:"note",badge:null},
   ];
@@ -1523,7 +1549,7 @@ export default function Freely() {
       n[nu]={...v,icon:ic};
     } else n[k]=v; }); return n; });
     tasks.filter(t=>t.tag===old&&t.owner===user?.id).forEach(t=>updateTask(t.id,{tag:nu}));
-    ownedShares.filter(s=>s.folder===old).forEach(s=>{ db.addShare(user.id,nu,s.shared_with_email,s.can_delete).then(()=>db.removeShare(s.id)).then(()=>refreshShares()).catch(()=>{}); });
+    ownedShares.filter(s=>s.folder===old).forEach(s=>{ db.addShare(user.id,nu,s.shared_with_email,s.can_edit===false?"view":s.can_delete?"delete":"edit").then(()=>db.removeShare(s.id)).then(()=>refreshShares()).catch(()=>{}); });
     // Keep the sidebar-org id in sync ("c:old" → "c:new") so the list keeps its position/group.
     const oid="c:"+old,nid="c:"+nu;
     setNavOrg(o=>{ if(!o)return o; const order=(o.order||[]).map(x=>x===oid?nid:x); const parent={}; Object.entries(o.parent||{}).forEach(([k,v])=>{ parent[k===oid?nid:k]=v; }); return {...o,order,parent}; });
@@ -1721,7 +1747,7 @@ export default function Freely() {
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={allStats} todStr={todStr}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar} newAtBottom={newAtBottom} setNewAtBottom={setNewAtBottom} onHelp={()=>setHelpOpen(true)}/>}
           {(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={allGroups} listPeople={collaboratorsOf} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} canEditFn={canEditTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={allGroups} listPeople={collaboratorsOf} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}
               sortMode={sortMode} setSortMode={setSortMode} showToast={showToast} onHelp={()=>setHelpOpen(true)}
               sharedInfo={sharedViewInfo} onLeaveShare={sharedViewInfo?()=>leaveShare(sharedViewInfo.owner,sharedViewInfo.folder):null}
               listManage={{ownedShares, onShare:shareFolder, onUnshare:unshareFolder, onDelete:deleteCat, setCats, onAssignAll:assignAllInLists, assignGroups:allGroups, onUploadIcon:uploadCatIcon}}/>
@@ -1883,8 +1909,9 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],listPeople=null,sharedInfo=null,onLeaveShare=null,listManage=null,sortMode="due",setSortMode,showToast,onHelp}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],listPeople=null,sharedInfo=null,onLeaveShare=null,listManage=null,sortMode="due",setSortMode,showToast,onHelp,canEditFn=null}) {
   const narrow=useNarrow();
+  const readOnly=!!(sharedInfo&&sharedInfo.canEdit===false);   // a view-only share: no add box, no ticking, no swiping
   const [manageMode,setManageMode]=useState(null); // "edit" (name/icon/color) | "share" (share/assign)
   const [collabOpen,setCollabOpen]=useState(false);
   const [filter,setFilter]=useState("all");
@@ -1923,6 +1950,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
     // Hand-arranging is only meaningful in "My order". In any other sort the list re-sorts itself
     // the moment you let go, so the drag is refused outright rather than quietly changing your sort.
     if(!canReorder){ navigator.vibrate?.(8); showToast?.("Dragging only works in “My order” — change the sort above to arrange by hand ✋"); return; }
+    if(canEditFn){ const tk=tasks.find(x=>String(x.id)===String(id)); if(tk&&!canEditFn(tk)) return; }
     didDragRef.current=true; dragIdRef.current=id; setDragId(id); navigator.vibrate?.(20);
     const t=tasks.find(x=>String(x.id)===String(id));
     const ghost=makeDragGhost(t?t.title:"Task",T.accent,T);
@@ -1953,10 +1981,14 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const beginSwipe=(id,sx)=>{
     didDragRef.current=true; setSwipeId(id); document.body.style.userSelect="none";
     const done=()=>{ window.removeEventListener("pointermove",mv); window.removeEventListener("pointerup",up); window.removeEventListener("pointercancel",up); document.body.style.userSelect=""; };
-    const mv=ev=>setSwipeX(Math.max(-95,Math.min(ev.clientX-sx,95)));
+    let lastDx=0;
+    const mv=ev=>{ lastDx=ev.clientX-sx; setSwipeX(Math.max(-95,Math.min(lastDx,95))); };
+    // Only a real release counts, and only where the finger was LAST SEEN. A pointercancel (the
+    // browser taking the touch over to scroll) reports clientX 0 — read as a full swipe left, it
+    // deleted tasks under a plain scroll, faster than anyone could react.
     const up=ev=>{
       done();
-      const dx=ev.clientX-sx;
+      const dx=ev.type==="pointercancel"?0:lastDx;
       if(dx>60){ navigator.vibrate?.(20); onToggleMyDay?.(id); }
       else if(dx<-60){ navigator.vibrate?.(25); deleteTask(id); }
       setSwipeId(null); setSwipeX(0);
@@ -1968,6 +2000,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   // (The grip handle also reorders, for discoverability.)
   const onCardDown=(e,id)=>{
     if(e.target.closest("button,[data-grip]")) return;
+    if(canEditFn){ const tk=tasks.find(x=>String(x.id)===String(id)); if(tk&&!canEditFn(tk)) return; }   // view-only: a tap opens it, nothing else
     didDragRef.current=false;
     const sx=e.clientX, sy=e.clientY, type=e.pointerType;
     let decided=false, timer=null, moved=0;
@@ -2025,6 +2058,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           {sharedKey&&(
             <div style={{fontSize:11,color:T.textMuted,marginTop:4,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
               <span>🤝 Shared by <b style={{color:T.text}}>{sharedInfo?.nick||"a collaborator"}</b>{sharedInfo?.email&&sharedInfo.nick!==sharedInfo.email?` (${sharedInfo.email})`:""}</span>
+              {readOnly&&<span title="You can see this list but not change it" style={{fontSize:9,fontWeight:800,color:T.warning,background:T.warning+"22",padding:"2px 8px",borderRadius:8}}>👀 VIEW ONLY</span>}
               <button onClick={()=>setCollabOpen(true)} style={{padding:"2px 10px",borderRadius:8,border:`1px solid ${T.accent}55`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>👥 Collaborators</button>
               {onLeaveShare&&<button onClick={()=>{ if(window.confirm("Leave this shared list? You'll stop seeing its tasks.")) onLeaveShare(); }} style={{padding:"2px 10px",borderRadius:8,border:`1px solid ${T.danger}44`,background:T.danger+"11",color:T.danger,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Leave ✕</button>}
             </div>
@@ -2087,7 +2121,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             </div>
           </div>
         );})()}
-        {view!=="completed"&&(
+        {view!=="completed"&&!readOnly&&(
           <div style={{display:"flex",gap:8,marginBottom:14}}>
             <div style={{flex:1,display:"flex",alignItems:"center",gap:9,background:T.surface,border:`1px solid ${T.border}`,borderRadius:11,padding:"0 12px"}}>
               <Ico n="plus" s={15} c={T.textMuted}/>
@@ -2139,7 +2173,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             const card=task=>(
               <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id}
                 dropEdge={drop?.id===String(task.id)?(drop.before?"top":"bottom"):null} canReorder={canReorder}
-                onDown={onCardDown} onGrip={gripDown} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true} onToggleMyDay={onToggleMyDay} myEmail={myEmail}/>
+                onDown={onCardDown} onGrip={gripDown} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true} canEdit={canEditFn?canEditFn(task):true} onToggleMyDay={onToggleMyDay} myEmail={myEmail}/>
             );
             return (<>
               {late.length>0&&<>
@@ -2195,7 +2229,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           </div>
         )}
       </div>
-      {selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} onClose={()=>setSelTask(null)} onFocus={onFocusTask} myEmail={myEmail} people={people} onAssign={onAssign} peopleGroups={peopleGroups} listPeople={listPeople}/>}
+      {selTask&&((canEditFn&&!canEditFn(selTask))?<TaskReadOnly task={selTask} T={T} cats={cats} onClose={()=>setSelTask(null)} ownerNick={sharedInfo?.nick}/>:<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} onClose={()=>setSelTask(null)} onFocus={onFocusTask} myEmail={myEmail} people={people} onAssign={onAssign} peopleGroups={peopleGroups} listPeople={listPeople}/>)}
       {manageMode&&catKey&&listManage&&(
         <SidebarManage T={T} target={{type:"list",id:"c:"+catKey,name:catKey}} isGroup={false} childLists={[catKey]}
           shares={(listManage.ownedShares||[]).filter(s=>s.folder===catKey)} meta={cats[catKey]||{}}
@@ -2216,7 +2250,38 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   );
 }
 
-function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,dropEdge=null,canReorder=true,onDown,onGrip,swipeX=0,canDelete=true,onToggleMyDay,myEmail}) {
+// What a view-only collaborator gets instead of the editor: the whole task, readable, nothing to break.
+function TaskReadOnly({task,T,cats,onClose,ownerNick}) {
+  const narrow=useNarrow();
+  const catMeta=cats[task.tag];
+  const qc=QUAD[task.quadrant];
+  const H=({children})=><div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>{children}</div>;
+  const chip=(key,txt,bg,fg,bold)=><span key={key} style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:bg,color:fg,fontWeight:bold?700:500}}>{txt}</span>;
+  return (
+    <div style={{width:narrow?"100%":280,flexGrow:narrow?1:0,minWidth:0,borderLeft:narrow?"none":`1px solid ${T.border}`,background:T.surface,overflowY:"auto",padding:"12px 14px 16px",display:"flex",flexDirection:"column",gap:12,animation:"slideIn .2s ease",flexShrink:0,fontFamily:"'DM Sans',sans-serif"}}>
+      <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
+        <div style={{flex:1,minWidth:0,fontFamily:"'Sora',sans-serif",fontSize:14,fontWeight:700,lineHeight:1.4,textDecoration:task.done?"line-through":"none",color:task.done?T.textMuted:T.text}}>{task.title}</div>
+        <button onClick={onClose} style={{width:24,height:24,borderRadius:6,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ico n="x" s={13}/></button>
+      </div>
+      <div style={{fontSize:10,color:T.textMuted,padding:"7px 10px",borderRadius:9,background:T.surface2,border:`1px solid ${T.border}`,lineHeight:1.5}}>👀 View only — {ownerNick||"the owner"} shared this list without editing rights. Ask them for edit access to change anything here.</div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+        {catMeta&&<span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:(catMeta.color||"#6b7280")+"22",color:catMeta.color||"#6b7280",fontWeight:600,textTransform:"capitalize",display:"inline-flex",alignItems:"center",gap:3}}><CatIcon icon={catMeta.icon} size={10}/>{task.tag}</span>}
+        {task.due&&chip("due","📅 "+fmtDate(task.due),T.surface3,T.text)}
+        {task.remindAt&&fmtClock(task.remindAt)&&chip("time","⏰ "+fmtClock(task.remindAt)+(task.endTime?` – ${fmtClock(task.endTime)}`:""),T.surface3,T.text)}
+        {qc&&chip("q",qc.icon+" "+qc.label,qc.color+"22",qc.color,true)}
+        {task.recurring&&chip("rec","🔁 "+(task.recurring.startsWith("custom:")?"repeats":task.recurring),T.surface3,T.text)}
+        {assigneesOf(task).map(em=>chip(em,"👤 "+nickOf(em).split("@")[0],T.accentGlow,T.accent,true))}
+      </div>
+      {task.notes&&task.notes.trim()&&<div><H>Notes</H><div style={{fontSize:12,color:T.text,lineHeight:1.55,whiteSpace:"pre-wrap"}}>{task.notes}</div></div>}
+      {task.subtasks?.length>0&&<div><H>Steps · {task.subtasks.filter(s=>s.done).length}/{task.subtasks.length}</H>
+        {task.subtasks.map(s=><div key={s.id} style={{display:"flex",alignItems:"center",gap:7,padding:"4px 0",fontSize:12,color:s.done?T.textMuted:T.text,textDecoration:s.done?"line-through":"none"}}><span style={{width:14,height:14,borderRadius:4,border:`1.5px solid ${s.done?T.success:T.border}`,background:s.done?T.success:"transparent",flexShrink:0}}/>{s.title}</div>)}</div>}
+      {task.attachments?.length>0&&<div><H>Attachments</H>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>{task.attachments.map(att=><a key={att.path||att.url} href={att.url} target="_blank" rel="noreferrer" title={att.name} style={{width:50,height:50,borderRadius:8,overflow:"hidden",border:`1px solid ${T.border}`,background:T.surface2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,textDecoration:"none"}}>{(att.type||"").startsWith("image/")?<img src={att.url} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>:"📄"}</a>)}</div></div>}
+    </div>
+  );
+}
+
+function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,dropEdge=null,canReorder=true,onDown,onGrip,swipeX=0,canDelete=true,canEdit=true,onToggleMyDay,myEmail}) {
   const inMyDay=task.mydayDate===tod();
   const assignees=assigneesOf(task);
   const assignedToMe=assignees.includes(myEmail);
@@ -2244,7 +2309,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
       style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:swipeX!==0?T.bg:(sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent"),border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:swipeX!==0?"none":"all .12s",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:swipeX!==0?`translateX(${swipeX}px)`:dragging?"scale(.98)":"scale(1)",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none",touchAction:"pan-y"}}>
       {task.color&&<div style={{position:"absolute",left:0,top:8,bottom:8,width:3,borderRadius:2,background:task.color}}/>}
       {onGrip&&<div data-grip onPointerDown={e=>onGrip(e,task.id)} onClick={e=>e.stopPropagation()} title={canReorder?"Drag to reorder":"Switch the sort to “My order” to drag tasks around"} style={{color:T.textMuted,opacity:canReorder?(hov?.7:.35):.12,transition:"opacity .15s",flexShrink:0,alignSelf:"center",cursor:"grab",padding:"6px 2px",margin:"-6px 0",paddingLeft:task.color?4:2,touchAction:"none"}}><Ico n="grip" s={16} c={T.textMuted}/></div>}
-      <button onClick={e=>{e.stopPropagation();onToggle(task.id);}} style={{width:19,height:19,borderRadius:5,border:`2px solid ${task.done?T.success:qColor||T.border}`,background:task.done?T.success:"transparent",cursor:"pointer",flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s"}}>
+      <button onClick={e=>{e.stopPropagation();if(canEdit)onToggle(task.id);}} title={canEdit?undefined:"View only"} style={{width:19,height:19,borderRadius:5,opacity:canEdit?1:.45,border:`2px solid ${task.done?T.success:qColor||T.border}`,background:task.done?T.success:"transparent",cursor:"pointer",flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s"}}>
         {task.done&&<Ico n="check" s={10} c="#fff" st={{animation:"checkB .25s ease"}}/>}
       </button>
       <div style={{flex:1,minWidth:0}}>
@@ -2275,7 +2340,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
       </div>
       <div style={{display:"flex",alignItems:"center",gap:2,flexShrink:0,marginTop:1}}>
         {qColor&&<div title={QUAD[task.quadrant]?.label} style={{width:6,height:6,borderRadius:"50%",background:qColor,marginRight:3}}/>}
-        <button onClick={e=>{e.stopPropagation();onToggleMyDay?.(task.id);}} title={inMyDay?"Remove from My Day":"Add to My Day"} style={{width:22,height:22,borderRadius:6,border:"none",cursor:"pointer",background:inMyDay?"#f59e0b22":"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="sun" s={12} c={inMyDay?"#f59e0b":T.textMuted}/></button>
+        {canEdit&&<button onClick={e=>{e.stopPropagation();onToggleMyDay?.(task.id);}} title={inMyDay?"Remove from My Day":"Add to My Day"} style={{width:22,height:22,borderRadius:6,border:"none",cursor:"pointer",background:inMyDay?"#f59e0b22":"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="sun" s={12} c={inMyDay?"#f59e0b":T.textMuted}/></button>}
         {canDelete&&<button onClick={e=>{e.stopPropagation();onDelete(task.id);}} title="Delete" style={{width:22,height:22,borderRadius:6,border:"none",cursor:"pointer",background:"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="trash" s={11} c={T.textMuted}/></button>}
       </div>
     </div>
@@ -2331,13 +2396,17 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
     },300);
   };
   const finishTitle=()=>{
-    clearTimeout(liveTimer.current); editOrigRef.current=null;
+    clearTimeout(liveTimer.current); const o=editOrigRef.current; editOrigRef.current=null;
     const raw=ttl.trim();
     if(!raw){setTtl(task.title||"");return;}
     if(raw===(task.title||"")) return; // unchanged → don't re-parse (avoids stripping a legit word on a no-op blur)
-    const patch=titleEditPatch(task,raw,cats);
+    // Judge the list-name strip against where the task WAS, not where live parsing already moved it.
+    const base=o?{...task,tag:o.tag}:task;
+    const patch=titleEditPatch(base,raw,cats);
     if(Object.keys(patch).length) onUpdate(task.id,patch);
-    setTtl(patch.title||raw);
+    // Even when the cleaned title is identical to the old one (you only appended a date), the box
+    // must not keep showing the date words the task itself no longer has.
+    setTtl(patch.title||cleanTitle(raw,cats,base.tag));
   };
   const liveNotes=raw=>{
     const v=raw.trim();
@@ -2361,18 +2430,18 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
   const narrow=useNarrow();   // phone: the panel takes the screen instead of squeezing the list into a sliver
   const panelDown=e=>{
     if(e.target.closest("input,textarea,select,button,a")) return;
-    const sx=e.clientX,sy=e.clientY; let decided=false;
+    const sx=e.clientX,sy=e.clientY; let decided=false,lastDx=0;
     const cleanup=()=>{ window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up);window.removeEventListener("pointercancel",up); };
-    const mv=ev=>{ const dx=ev.clientX-sx,dy=ev.clientY-sy; if(!decided){ if(Math.abs(dx)<8&&Math.abs(dy)<8)return; decided=true; if(Math.abs(dx)<=Math.abs(dy)){cleanup();return;} } if(dx>0)setCloseX(Math.min(dx,320)); };
-    const up=ev=>{ cleanup(); if(ev.clientX-sx>60)onClose(); else setCloseX(0); };
+    const mv=ev=>{ const dx=ev.clientX-sx,dy=ev.clientY-sy; if(!decided){ if(Math.abs(dx)<8&&Math.abs(dy)<8)return; decided=true; if(Math.abs(dx)<=Math.abs(dy)){cleanup();return;} } lastDx=dx; if(dx>0)setCloseX(Math.min(dx,320)); };
+    const up=ev=>{ cleanup(); if(ev.type!=="pointercancel"&&lastDx>60)onClose(); else setCloseX(0); };
     window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up);window.addEventListener("pointercancel",up);
   };
   // The panel is dense with inputs/buttons, so give it an always-grabbable handle that tracks instantly.
   const closeHandleDown=e=>{
     e.stopPropagation(); e.preventDefault();
-    const sx=e.clientX;
-    const mv=ev=>setCloseX(Math.max(0,Math.min(ev.clientX-sx,320)));
-    const up=ev=>{ window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up);window.removeEventListener("pointercancel",up); if(ev.clientX-sx>60)onClose(); else setCloseX(0); };
+    const sx=e.clientX; let lastDx=0;
+    const mv=ev=>{ lastDx=ev.clientX-sx; setCloseX(Math.max(0,Math.min(lastDx,320))); };
+    const up=ev=>{ window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up);window.removeEventListener("pointercancel",up); if(ev.type!=="pointercancel"&&lastDx>60)onClose(); else setCloseX(0); };
     window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up);window.addEventListener("pointercancel",up);
   };
   return (
@@ -2620,7 +2689,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
   const onNoteDown=(e,task)=>{
     if(e.target.closest("button")||e.target.tagName==="TEXTAREA") return;
     didDragNote.current=false;
-    const sx=e.clientX,sy=e.clientY,type=e.pointerType; let mode=null,hold=null,moved=0;
+    const sx=e.clientX,sy=e.clientY,type=e.pointerType; let mode=null,hold=null,moved=0,lastDx=0;
     const cleanup=()=>{ clearTimeout(hold); window.removeEventListener("pointermove",mv); window.removeEventListener("pointerup",up); window.removeEventListener("pointercancel",up); };
     const startDrag=()=>{ if(mode)return; mode="drag"; clearTimeout(hold); setDragId(task.id); navigator.vibrate?.(20);
       const ghost=makeDragGhost(task.title,QUAD[task.quadrant]?.color||T.accent,T);
@@ -2659,7 +2728,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
       );
     };
     const mv=ev=>{
-      const dx=ev.clientX-sx,dy=ev.clientY-sy;
+      const dx=ev.clientX-sx,dy=ev.clientY-sy; lastDx=dx;
       moved=Math.max(moved,Math.hypot(dx,dy));
       if(mode==="swipe"){ didDragNote.current=true; setSwipeX(Math.max(-95,Math.min(dx,95))); return; }
       if(mode) return;
@@ -2670,7 +2739,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
       // touch vertical: the card is pan-y, so the quadrant just scrolls
     };
     const up=ev=>{
-      if(mode==="swipe"){ const dx=ev.clientX-sx; cleanup(); setSwipeId(null); setSwipeX(0);
+      if(mode==="swipe"){ const dx=ev.type==="pointercancel"?0:lastDx; cleanup(); setSwipeId(null); setSwipeX(0);   // a cancelled touch never counts as a swipe
         if(dx<-60){ navigator.vibrate?.(25); deleteTask(task.id); }
         else if(dx>60){ navigator.vibrate?.(20); toggleMyDay(task.id); }
         return;
@@ -2937,7 +3006,7 @@ function SwipeRow({T,onDelete,onTap,children}) {
       if(mode==="swipe"){ didSwipe.current=true; setSx(Math.min(0,Math.max(dx,-140))); return; }
       if(Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)&&dx<0){ mode="swipe"; setSx(dx); }
       else if(Math.abs(dy)>10){ cleanup(); } };
-    const up=ev=>{ cleanup(); if(mode==="swipe"){ const dx=ev.clientX-startX; if(dx<-70){ navigator.vibrate?.(20); onDelete?.(); } setSx(0); } };
+    const up=ev=>{ cleanup(); if(mode==="swipe"){ const dx=ev.type==="pointercancel"?0:(ev.clientX-startX); if(dx<-70){ navigator.vibrate?.(20); onDelete?.(); } setSx(0); } };
     window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up);window.addEventListener("pointercancel",up);
   };
   return (
@@ -3087,7 +3156,7 @@ function NRow({note,T,sel,onSel,onUp,onDel}) {
       if(mode==="swipe"){ didSwipe.current=true; setSx(Math.min(0,Math.max(dx,-140))); return; }
       if(Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)&&dx<0){ mode="swipe"; setSx(dx); }
       else if(Math.abs(dy)>10){ cleanup(); } };
-    const up=ev=>{ cleanup(); if(mode==="swipe"){ const dx=ev.clientX-startX; if(dx<-70){ navigator.vibrate?.(20); onDel(note.id); } setSx(0); } };
+    const up=ev=>{ cleanup(); if(mode==="swipe"){ const dx=ev.type==="pointercancel"?0:(ev.clientX-startX); if(dx<-70){ navigator.vibrate?.(20); onDel(note.id); } setSx(0); } };
     window.addEventListener("pointermove",mv); window.addEventListener("pointerup",up); window.addEventListener("pointercancel",up);
   };
   return (
@@ -3691,19 +3760,10 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
   const [manage,setManage]=useState(null); // {type:"list"|"group", id, name}
   const [creating,setCreating]=useState(null); // "list" | "group"
 
-  // Folders/lists shared WITH me live in their own section (not the reorderable tree).
-  const sharedItems=items.filter(i=>i.id.startsWith("s:"));
-  const treeItems=items.filter(i=>!i.id.startsWith("s:"));
-  const itemMap=Object.fromEntries(treeItems.map(i=>[i.id,i]));
-  const groups=(org?.groups)||[];
-  const gmap=Object.fromEntries(groups.map(g=>[g.id,g]));
+  // Lists shared WITH you are part of the same draggable tree — they just start out inside a
+  // "Shared with me" folder. sidebarLayout() is the single source of truth for the arrangement.
+  const {groups,gmap,byId:itemMap,allIds,parentRaw,order,parentOf,childrenOf}=sidebarLayout(items,org);
   const isGroup=id=>!!gmap[id];
-  const allIds=[...treeItems.map(i=>i.id),...groups.map(g=>g.id)];
-  const parentRaw=(org?.parent)||{};
-  const parentOf=id=>{ const p=parentRaw[id]; return (p&&gmap[p])?p:null; };
-  const stored=((org?.order)||[]).filter(id=>allIds.includes(id));
-  const order=[...stored,...allIds.filter(id=>!stored.includes(id))];
-  const childrenOf=pid=>order.filter(id=>parentOf(id)===pid);
   const isDesc=(id,anc)=>{ let p=parentOf(id),n=0; while(p&&n++<60){ if(p===anc)return true; p=parentOf(p); } return false; };
   // Every list (cat) name nested anywhere under a group — used to share a whole folder at once.
   const listNamesUnder=gid=>{ const out=[]; const walk=pid=>childrenOf(pid).forEach(id=>{ if(isGroup(id))walk(id); else { const it=itemMap[id]; if(it&&it.id.startsWith("c:"))out.push(it.label); } }); walk(gid); return out; };
@@ -3716,7 +3776,7 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
     else if("group" in d){ targetParent=d.group; }
     else return;
     if(isGroup(id)&&(targetParent===id||isDesc(targetParent,id))) return; // no cycles
-    const np={...parentRaw}; if(targetParent)np[id]=targetParent; else delete np[id];
+    const np={...parentRaw}; if(targetParent)np[id]=targetParent; else if(id.startsWith("s:"))np[id]=null; else delete np[id];   // a shared list dragged to the root stays there (null = on purpose)
     let no=order.filter(x=>x!==id);
     // Land above or below the target depending on which half the pointer was over — so first/last slots work.
     if(beforeId){ const i=no.indexOf(beforeId); no.splice(i<0?no.length:(d.before===false?i+1:i),0,id); } else no.push(id);
@@ -3749,26 +3809,31 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
     const icon=(!g.icon||g.icon===guessIcon(g.name))?guessIcon(nm):g.icon;
     return {...g,name:nm,icon:g.icon?icon:null}; }));
   const setGroupIcon=(id,icon)=>write(order,parentRaw,groups.map(g=>g.id===id?{...g,icon}:g));
-  const delGroup=id=>{ const pg=parentOf(id); const np={...parentRaw}; order.forEach(x=>{ if(parentOf(x)===id){ if(pg)np[x]=pg; else delete np[x]; } }); delete np[id]; write(order.filter(x=>x!==id),np,groups.filter(g=>g.id!==id)); };
+  const delGroup=id=>{ const pg=parentOf(id); const np={...parentRaw}; order.forEach(x=>{ if(parentOf(x)===id){ if(pg)np[x]=pg; else if(x.startsWith("s:"))np[x]=null; else delete np[x]; } }); delete np[id]; write(order.filter(x=>x!==id),np,groups.filter(g=>g.id!==id)); };
   const toggle=id=>write(order,parentRaw,groups.map(g=>g.id===id?{...g,collapsed:!g.collapsed}:g));
 
-  const Leaf=(it,depth)=>{ const active=view===it.view,isDrag=dragId===it.id,isTarget=drop?.item===it.id,canRen=!!onRenameList&&it.id.startsWith("c:");
+  const Leaf=(it,depth)=>{ const active=view===it.view,isDrag=dragId===it.id,isTarget=drop?.item===it.id,canRen=!!onRenameList&&it.id.startsWith("c:"),isShared=it.id.startsWith("s:");
     return (
       <div key={it.id} data-item={it.id} onPointerDown={e=>startDrag(e,it.id)} onMouseEnter={()=>setHov(it.id)} onMouseLeave={()=>setHov(null)}
         style={{opacity:isDrag?.4:1,position:"relative",borderRadius:9,touchAction:"pan-y",display:"flex",alignItems:"center"}}>
         {isTarget&&<div style={{position:"absolute",left:6,right:6,[drop?.before===false?"bottom":"top"]:-1,height:3,borderRadius:2,background:T.accent,boxShadow:`0 0 8px ${T.accent}`,zIndex:5,pointerEvents:"none"}}/>}
-        <button onClick={()=>{ if(didDrag.current){didDrag.current=false;return;} onOpen(it.view); }} style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:8,padding:`7px ${canRen?4:10}px 7px ${10+depth*14}px`,borderRadius:9,border:"none",cursor:"grab",marginBottom:1,background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
+        <button onClick={()=>{ if(didDrag.current){didDrag.current=false;return;} onOpen(it.view); }} style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:8,padding:`7px ${(canRen||isShared)?4:10}px 7px ${10+depth*14}px`,borderRadius:9,border:"none",cursor:"grab",marginBottom:1,background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
           <Ico n="grip" s={11} c={T.textMuted} st={{opacity:hov===it.id?.5:.16,flexShrink:0}}/>
           {it.iconType==="ico"?<Ico n={it.icon} s={16} c={it.tint||(active?T.accent:T.textMuted)}/>:<span style={{width:16,textAlign:"center",flexShrink:0,display:"inline-flex",justifyContent:"center"}}><CatIcon icon={it.icon} size={14}/></span>}
-          <span style={{flex:1,textAlign:"left",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",textTransform:it.cap?"capitalize":"none"}}>{it.label}</span>
+          <span style={{flex:1,minWidth:0,textAlign:"left"}}>
+            <span style={{display:"block",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",textTransform:it.cap?"capitalize":"none"}}>{it.label}</span>
+            {it.sub&&<span style={{display:"block",fontSize:9,color:T.textMuted,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{it.sub}</span>}
+          </span>
           {it.badge>0&&<span style={{background:it.tint||(active?T.accent:T.surface3),color:(it.tint||active)?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{it.badge}</span>}
         </button>
+        {isShared&&onLeaveShare&&<button onClick={()=>{ if(window.confirm(`Leave "${it.label}"? You'll stop seeing its tasks.`)) onLeaveShare(it.owner,it.folder); }} data-nodrag title="Leave this shared list" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0,padding:"4px 6px",opacity:hov===it.id?.8:.3}}><Ico n="x" s={11}/></button>}
         {canRen&&<button onClick={()=>setManage({type:"list",id:it.id,name:it.label})} data-nodrag title="Manage this list — rename, share, icon, delete" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0,padding:"6px 8px 6px 2px",opacity:hov===it.id?.9:.4,fontSize:15,fontWeight:800,lineHeight:1}}>⋯</button>}
       </div>
     );
   };
   const renderLevel=(pid,depth)=> childrenOf(pid).map(id=>{
     if(isGroup(id)){ const g=gmap[id]; const isZone=drop?.group===id,isDrag=dragId===id,isTarget=drop?.item===id,cnt=childrenOf(id).length;
+      if(id===SHARED_GID&&cnt===0&&drop?.group!==id) return <div key={id} style={{margin:"10px 10px 4px",paddingTop:10,borderTop:`1px solid ${T.border}`,fontSize:9,color:T.textMuted,opacity:.6,lineHeight:1.5}}>🤝 Lists other people share with you appear here — drag them anywhere you like.</div>;
       return (
         <div key={id} style={{marginTop:2}}>
           <div data-item={id} onPointerDown={e=>startDrag(e,id)} onMouseEnter={()=>setHov(id)} onMouseLeave={()=>setHov(null)}
@@ -3779,7 +3844,7 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
             {renaming===id
               ? <input autoFocus defaultValue={g.name} onKeyDown={e=>{if(e.key==="Enter"){renGroup(id,e.target.value.trim());setRenaming(null);}if(e.key==="Escape")setRenaming(null);}} onBlur={e=>{renGroup(id,e.target.value.trim());setRenaming(null);}} data-nodrag style={{flex:1,minWidth:0,padding:"2px 6px",borderRadius:6,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,fontWeight:700,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
               : <button onClick={()=>toggle(id)} onDoubleClick={()=>setRenaming(id)} data-nodrag style={{flex:1,minWidth:0,textAlign:"left",background:"none",border:"none",cursor:"pointer",color:T.text,fontSize:11,fontWeight:700,letterSpacing:".3px",textTransform:"uppercase",fontFamily:"'DM Sans',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name} {cnt>0&&<span style={{color:T.textMuted,fontWeight:600}}>({cnt})</span>}</button>}
-            <button onClick={()=>setManage({type:"group",id,name:g.name})} data-nodrag title="Manage folder — rename, share all its lists, delete" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",padding:"4px 4px",opacity:hov===id?.9:.45,fontSize:15,fontWeight:800,lineHeight:1}}>⋯</button>
+            {id!==SHARED_GID&&<button onClick={()=>setManage({type:"group",id,name:g.name})} data-nodrag title="Manage folder — rename, share all its lists, delete" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",padding:"4px 4px",opacity:hov===id?.9:.45,fontSize:15,fontWeight:800,lineHeight:1}}>⋯</button>}
           </div>
           {!g.collapsed&&<div data-groupdrop={id} style={{background:isZone?T.accentGlow:"transparent",borderRadius:8}}>
             {renderLevel(id,depth+1)}
@@ -3795,7 +3860,7 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
     // Collapsed rail shows the SAME custom order as the open sidebar (groups flattened in place).
     const railIds=[]; const walkRail=pid=>childrenOf(pid).forEach(id=>{ if(isGroup(id)) walkRail(id); else railIds.push(id); });
     walkRail(null);
-    const railItems=[...railIds.map(id=>itemMap[id]).filter(Boolean),...sharedItems];
+    const railItems=railIds.map(id=>itemMap[id]).filter(Boolean);
     return <>{railItems.map(it=>(
       <button key={it.id} onClick={()=>onOpen(it.view)} title={it.label+(it.sub?` · ${it.sub}`:"")} style={{position:"relative",width:"100%",display:"flex",alignItems:"center",justifyContent:"center",padding:"8px 0",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,background:view===it.view?T.accentGlow:"transparent"}}>
         {it.iconType==="ico"?<Ico n={it.icon} s={16} c={it.tint||(view===it.view?T.accent:T.textMuted)}/>:<CatIcon icon={it.icon} size={15}/>}
@@ -3813,29 +3878,6 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
       </div>
       <div style={{fontSize:9,color:T.textMuted,opacity:.6,padding:"4px 10px 12px",lineHeight:1.5}}>💡 Hold & drag to reorder · drop a list onto a folder to tuck it inside · ⋯ to rename, share or delete</div>
 
-      <div style={{marginTop:6,paddingTop:10,borderTop:`1px solid ${T.border}`}}>
-        <div style={{display:"flex",alignItems:"center",gap:5,padding:"0 10px 4px"}}>
-          <span style={{fontSize:11}}>🤝</span>
-          <span style={{fontSize:10,fontWeight:700,letterSpacing:".4px",textTransform:"uppercase",color:T.textMuted}}>Shared with me</span>
-        </div>
-        {sharedItems.length===0
-          ? <div style={{fontSize:9,color:T.textMuted,opacity:.6,padding:"0 10px 6px",lineHeight:1.5}}>Lists & folders other people share with you will appear here.</div>
-          : sharedItems.map(it=>{ const active=view===it.view;
-              return (
-                <div key={it.id} style={{display:"flex",alignItems:"center"}}>
-                  <button onClick={()=>onOpen(it.view)} title={it.sub?`${it.label} · ${it.sub}`:it.label} style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:8,padding:"6px 4px 6px 10px",borderRadius:9,border:"none",cursor:"pointer",marginBottom:1,background:active?T.accentGlow:"transparent",color:active?T.accent:T.textMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:active?600:400}}>
-                    <span style={{fontSize:15,width:16,textAlign:"center",flexShrink:0}}>{it.icon}</span>
-                    <span style={{flex:1,minWidth:0,textAlign:"left"}}>
-                      <span style={{display:"block",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",textTransform:it.cap?"capitalize":"none"}}>{it.label}</span>
-                      {it.sub&&<span style={{display:"block",fontSize:9,color:T.textMuted,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{it.sub}</span>}
-                    </span>
-                    {it.badge>0&&<span style={{background:active?T.accent:T.surface3,color:active?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{it.badge}</span>}
-                  </button>
-                  {onLeaveShare&&<button onClick={()=>{ if(window.confirm(`Leave "${it.label}"? You'll stop seeing its tasks.`)) onLeaveShare(it.owner,it.folder); }} title="Leave this shared list" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0,padding:"6px 8px 6px 2px",opacity:.5,fontSize:11,lineHeight:1}}>✕</button>}
-                </div>
-              );
-            })}
-      </div>
 
       {creating&&<SidebarCreate T={T} mode={creating} onClose={()=>setCreating(null)} onUploadIcon={onUploadIcon}
         onCreateList={(name,icon,color)=>{ const ok=onAddList?.((name||"").trim(),icon,color)!==false; if(!ok) return false; setCreating(null); return true; }}
@@ -3931,7 +3973,7 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
       else { alert(`"${raw}" isn't a valid email or a saved nickname. Enter an email like name@example.com.`); return; }
     }
     if(isGroup&&childLists.length===0){ alert("This folder has no lists inside it yet — drag a list in first."); return; }
-    onShare(em,perm==="delete");
+    onShare(em,perm);
     setContacts(c=>em in c?c:{...c,[em]:""});
     setEmail("");
   };
@@ -3956,7 +3998,7 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
         {showEdit&&<>
         <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>Name</div>
         <div style={{display:"flex",gap:6,marginBottom:14}}>
-          <input ref={nameRef} value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveName();}} style={{flex:1,minWidth:0,padding:"8px 10px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:13,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+          <input ref={nameRef} value={name} onChange={e=>{ const v=e.target.value, g=guessIcon(v,null), was=guessIcon(name,null); setName(v); if(g&&g!==was&&g!==meta.icon) onSetIcon?.(g); }} onKeyDown={e=>{if(e.key==="Enter")saveName();}} style={{flex:1,minWidth:0,padding:"8px 10px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:13,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
           <button onClick={saveName} style={{padding:"8px 14px",borderRadius:9,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Save</button>
         </div>
 
@@ -3982,6 +4024,7 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
         <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap"}}>
           <input value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doShare();}} placeholder="their@email.com or nickname" style={{flex:1,minWidth:120,padding:"8px 10px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
           <select value={perm} onChange={e=>setPerm(e.target.value)} style={{padding:"8px 8px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",cursor:"pointer"}}>
+            <option value="view">View only</option>
             <option value="edit">Edit & add</option>
             <option value="delete">+ delete</option>
           </select>
@@ -4008,7 +4051,7 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
             <div key={s.id} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
               {isGroup&&<span style={{fontSize:9,color:T.textMuted,fontWeight:700,textTransform:"capitalize"}}>{s.folder}</span>}
               <span style={{fontSize:11,color:T.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {s.shared_with_email}</span>
-              <span style={{fontSize:8,fontWeight:700,color:s.can_delete?T.danger:T.textMuted,background:(s.can_delete?T.danger:T.textMuted)+"22",padding:"1px 5px",borderRadius:8}}>{s.can_delete?"can delete":"edit"}</span>
+              <span style={{fontSize:8,fontWeight:700,color:s.can_delete?T.danger:T.textMuted,background:(s.can_delete?T.danger:T.textMuted)+"22",padding:"1px 5px",borderRadius:8}}>{s.can_edit===false?"view only":s.can_delete?"can delete":"edit"}</span>
               <button onClick={()=>onUnshare(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:10,fontWeight:700}}>✕</button>
             </div>
           ))}
@@ -4330,7 +4373,7 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
       if(match) em=match[0];
       else { alert(`"${raw}" isn't a valid email or a saved nickname. Enter an email like name@example.com.`); return; }
     }
-    onShareFolder(shareFolderName,em,sharePerm==="delete");
+    onShareFolder(shareFolderName,em,sharePerm);
     setContacts(c=>em in c?c:{...c,[em]:""});
     setShareEmail("");
   };
@@ -4462,6 +4505,7 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
           </select>
           <input value={shareEmail} onChange={e=>setShareEmail(e.target.value)} placeholder="their@email.com" type="email" style={{flex:1,minWidth:120,padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
           <select value={sharePerm} onChange={e=>setSharePerm(e.target.value)} style={{padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",cursor:"pointer"}}>
+            <option value="view">View only</option>
             <option value="edit">Edit & add</option>
             <option value="delete">Edit, add & delete</option>
           </select>
@@ -4492,7 +4536,7 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
                 <span style={{fontSize:14}}>🤝</span>
                 <span style={{fontSize:12,fontWeight:600,textTransform:"capitalize"}}>{s.folder}</span>
                 <span style={{fontSize:11,color:T.textMuted,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {s.shared_with_email}</span>
-                <span style={{fontSize:9,fontWeight:700,color:s.can_delete?T.danger:T.textMuted,background:(s.can_delete?T.danger:T.textMuted)+"22",padding:"1px 6px",borderRadius:10}}>{s.can_delete?"can delete":"edit"}</span>
+                <span style={{fontSize:9,fontWeight:700,color:s.can_delete?T.danger:T.textMuted,background:(s.can_delete?T.danger:T.textMuted)+"22",padding:"1px 6px",borderRadius:10}}>{s.can_edit===false?"view only":s.can_delete?"can delete":"edit"}</span>
                 <button onClick={()=>onUnshare(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Remove</button>
               </div>
             ))}
