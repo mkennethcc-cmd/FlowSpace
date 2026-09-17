@@ -5,7 +5,7 @@ import AuthScreen, { SignupSuccess, ResetPassword } from "./AuthScreen";
 import {
   stripListName, matchListName, guessCat, ymd, tod, addDays, DUE_TBD, isTbd,
   dueKey, fmtDate, fmtClock, parseNL, cleanTitle, titleEditPatch, guessIcon, nextDue,
-  mergeGami, gamiRowDiffers, moveDuePatch, whenPatch,
+  mergeGami, gamiRowDiffers, moveDuePatch, whenPatch, inUpcoming, UPCOMING_SHARE, shareLabel, shareCovers,
 } from "./logic";
 
 const FontLink = () => (
@@ -609,7 +609,7 @@ export default function Freely() {
     try{ const left=JSON.parse(localStorage.getItem("fs_left_shares")||"[]"); localStorage.setItem("fs_left_shares",JSON.stringify([...new Set([...left,s.id])])); }catch{}
     setSharedWithMe(sm=>sm.filter(x=>x.id!==s.id));
     if(view===`shared:${ownerId}:${folder}`) navTo("myday");
-    showToast(`You left "${folder}" 👋`);
+    showToast(`You left "${shareLabel(folder)}" 👋`);
   };
   const refreshGroups=useCallback(()=>{
     if(!user) return; const me=user.email.toLowerCase();
@@ -634,7 +634,7 @@ export default function Freely() {
         if(eventType==="UPDATE") setTasks(ts=>ts.map(t=>t.id===n.id?fromDbTask(n):t));
         if(eventType==="DELETE") setTasks(ts=>ts.filter(t=>t.id!==o.id));
       })
-      .on("postgres_changes",{event:"*",schema:"public",table:"folder_shares"},()=>{ refreshShares(); })
+      .on("postgres_changes",{event:"*",schema:"public",table:"folder_shares"},()=>{ refreshShares(); db.loadTasks().then(setTasks).catch(()=>{}); })   // a new share brings tasks with it
       .on("postgres_changes",{event:"INSERT",schema:"public",table:"messages"},({new:m})=>{ setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,m]); }) // RLS only delivers rows we may see (own DMs + our team chats)
       .on("postgres_changes",{event:"*",schema:"public",table:"group_members"},()=>{ refreshGroups(); })
       .on("postgres_changes",{event:"*",schema:"public",table:"groups"},()=>{ refreshGroups(); })
@@ -721,19 +721,22 @@ export default function Freely() {
   const taskFromText=(raw,over={})=>{
     const p=parseNL(raw);
     const due=over.due!==undefined?over.due:(p.due||(p.time?tod():null));
-    const filed=over.tag?{tag:over.tag,title:p.title}:fileUnder(p.title);
+    const filed=over.tag!==undefined?{tag:over.tag,title:p.title}:fileUnder(p.title);
     return newTask({...filed,recurring:p.recurring||null,remindAt:p.time&&due&&!isTbd(due)?`${due}T${p.time}`:null,endTime:p.time?(p.endTime||null):null,...over,due});
   };
   const addTask=()=>{
     const raw=input.trim(); if(!raw) return;
     const p=parseNL(raw), over={starred:view==="flagged",mydayDate:view==="myday"?todStr:null};
     if(view.startsWith("cat:")) over.tag=view.slice(4);
+    let upcomingView=view==="upcoming";
     if(view.startsWith("shared:")){
-      const rest=view.slice(7),ci=rest.indexOf(":"); over.owner=rest.slice(0,ci); over.tag=rest.slice(ci+1);
-      const sh=sharedWithMe.find(x=>x.owner_id===over.owner&&x.folder===over.tag);
+      const rest=view.slice(7),ci=rest.indexOf(":"),folder=rest.slice(ci+1); over.owner=rest.slice(0,ci);
+      const sh=sharedWithMe.find(x=>x.owner_id===over.owner&&x.folder===folder);
       if(sh&&sh.can_edit===false){ showToast("View only — ask the owner for edit access 👀"); return; }
+      // Someone's Upcoming isn't a list: what you add there goes in no list, with a date so it belongs there.
+      if(folder===UPCOMING_SHARE){ over.tag=null; upcomingView=true; } else over.tag=folder;
     }
-    if(view==="upcoming"&&!p.due&&!p.time) over.due=DUE_TBD;   // Upcoming with no date typed → Date TBD, not a silent guess
+    if(upcomingView&&!p.due&&!p.time) over.due=DUE_TBD;   // Upcoming with no date typed → Date TBD, not a silent guess
     // A pasted blurb can carry a multi-day span and extra fields (Location, Cost…) — they go on the notes.
     const abs=s=>new Date(s+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"});
     over.notes=[p.spanEnd&&p.due?`📅 Runs ${abs(p.due)} → ${abs(p.spanEnd)}`:"",p.extra||""].filter(Boolean).join("\n");
@@ -777,8 +780,7 @@ export default function Freely() {
   const canDeleteTask=task=>{
     if(!task) return true;
     if(task.owner===user?.id) return true;
-    const sh=sharedWithMe.find(s=>s.owner_id===task.owner&&s.folder===task.tag);
-    return !!(sh&&sh.can_delete);
+    return sharedWithMe.some(s=>shareCovers(s,task)&&s.can_delete);
   };
   // View-only collaborators can look but not touch. Work assigned to you is yours to tick off.
   // A share row from before the can_edit column exists is treated as editable.
@@ -786,8 +788,8 @@ export default function Freely() {
     if(!task) return true;
     if(task.owner===user?.id) return true;
     if(assigneesOf(task).includes(user?.email?.toLowerCase())) return true;
-    const sh=sharedWithMe.find(s=>s.owner_id===task.owner&&s.folder===task.tag);
-    return !sh || sh.can_edit!==false;
+    const sh=sharedWithMe.filter(s=>shareCovers(s,task));
+    return !sh.length || sh.some(s=>s.can_edit!==false);
   };
   // Files leave storage only when their task is really gone: after the undo window, or at once for deletes
   // that can't be undone. Before this, every deleted task left its attachments in storage forever.
@@ -944,8 +946,9 @@ export default function Freely() {
     setMydayExtra(m=>{ const ids=m.date===todStr?m.ids.filter(x=>x!==t.id):[]; return {date:todStr,ids:on?[...ids,t.id]:ids,at:Date.now()}; });
   };
   const myDay=tasks.filter(inMyDay);
-  // Upcoming keeps anything still open, however overdue — a past deadline must never make a task vanish.
-  const upcoming=myTasks.filter(t=>t.due&&(!t.done||t.due>todStr));
+  const upcoming=myTasks.filter(t=>inUpcoming(t,todStr));
+  // What a share shows: that list of theirs, or — for a shared Upcoming — everything of theirs with a date.
+  const sharedTasks=(owner,folder)=>tasks.filter(t=>t.owner===owner&&(folder===UPCOMING_SHARE?inUpcoming(t,todStr):t.tag===folder));
   const myDayAllDone=myDay.length>0&&myDay.every(t=>t.done);
   const prevMyDayDone=useRef(false);
   useEffect(()=>{ if(myDayAllDone&&!prevMyDayDone.current) fireConfetti(); prevMyDayDone.current=myDayAllDone; },[myDayAllDone]);
@@ -977,7 +980,7 @@ export default function Freely() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[tasks,user,todStr]);
   const undoCarry=()=>{ if(!carriedIds.length)return; navigator.vibrate?.(10); carriedIds.forEach(id=>setInMyDay(tasks.find(x=>x.id===id),false)); setCarriedIds([]); showToast("Carry-over undone"); };
-  const shareFolder=async(folder,email,perm)=>{ if(!user||!email.trim())return; try{ await db.addShare(user.id,folder,email,perm); refreshShares(); showToast(`Shared "${folder}" with ${email.trim()}`); }catch(e){ showToast("Share failed: "+(e.message||e)); } };
+  const shareFolder=async(folder,email,perm)=>{ if(!user||!email.trim())return; try{ await db.addShare(user.id,folder,email,perm); refreshShares(); showToast(`Shared "${shareLabel(folder)}" with ${email.trim()}`); }catch(e){ showToast("Share failed: "+(e.message||e)); } };
   const unshareFolder=async id=>{ await db.removeShare(id).catch(()=>{}); refreshShares(); showToast("Collaborator removed"); };
 
   // A reminder fires once, when its time comes, for work that's yours (owned, or assigned to you — not every
@@ -1149,7 +1152,7 @@ export default function Freely() {
   const getViewTasks=()=>{
     let base;
     if(view.startsWith("cat:")){ const c=view.slice(4); base=tasks.filter(t=>t.tag===c&&t.owner===user?.id); }
-    else if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"),o=rest.slice(0,ci),f=rest.slice(ci+1); base=tasks.filter(t=>t.owner===o&&t.tag===f); }
+    else if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"); base=sharedTasks(rest.slice(0,ci),rest.slice(ci+1)); }
     else if(view==="flagged") base=myTasks.filter(t=>t.starred);
     else if(view==="assigned"){ const me=user?.email?.toLowerCase(); base=tasks.filter(t=>assigneesOf(t).includes(me)); }
     else base=view==="myday"?myDay:view==="upcoming"?upcoming:myTasks;
@@ -1173,7 +1176,7 @@ export default function Freely() {
   const sidebarItems=[
     ...navItems.filter(it=>!hiddenTabs.includes(it.id)).map(it=>({id:"n:"+it.id, view:it.id, label:it.label, icon:it.icon, iconType:"ico", badge:it.badge, tint:it.tint})),
     ...Object.entries(cats).map(([name,meta])=>({id:"c:"+name, view:"cat:"+name, label:name, icon:meta.icon, iconType:"cat", cap:true, badge:myTasks.filter(t=>t.tag===name&&!t.done).length})),
-    ...sharedWithMe.map(s=>({id:"s:"+s.owner_id+":"+s.folder, view:"shared:"+s.owner_id+":"+s.folder, label:s.folder, icon:"🤝", iconType:"cat", cap:true, badge:tasks.filter(t=>t.owner===s.owner_id&&t.tag===s.folder&&!t.done).length, owner:s.owner_id, folder:s.folder, sub:idEmail[s.owner_id]?`from ${nickOf(idEmail[s.owner_id]).split("@")[0]}`:null})),
+    ...sharedWithMe.map(s=>({id:"s:"+s.owner_id+":"+s.folder, view:"shared:"+s.owner_id+":"+s.folder, label:shareLabel(s.folder), icon:"🤝", iconType:"cat", cap:true, badge:sharedTasks(s.owner_id,s.folder).filter(t=>!t.done).length, owner:s.owner_id, folder:s.folder, sub:idEmail[s.owner_id]?`from ${nickOf(idEmail[s.owner_id]).split("@")[0]}`:null})),
   ];
   // Whatever sits at the top of your sidebar is your home screen. Drag "Upcoming" above "My Day"
   // and Freely opens on Upcoming — on this device and, once prefs sync, on every other one.
@@ -1184,7 +1187,7 @@ export default function Freely() {
   },[homeView,hiddenTabs,view]);
 
   const addSidebarList=(name,icon,color)=>{ const n=(name||"").trim(); // typed capitalization is kept ("GoDo" stays "GoDo")
-    if(!n||Object.keys(cats).some(k=>k.toLowerCase()===n.toLowerCase())) return false;
+    if(!n||n===UPCOMING_SHARE||Object.keys(cats).some(k=>k.toLowerCase()===n.toLowerCase())) return false;
     setCats(c=>({...c,[n]:{color:color||CAT_COLORS[Object.keys(c).length%CAT_COLORS.length],icon:icon||guessIcon(n)}}));
     // The new list adopts existing tasks that already mention its name ("ACA essay" → the new "aca" list).
     const esc=n.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
@@ -1196,7 +1199,7 @@ export default function Freely() {
   // Rename a list: carries its color/icon, moves every task's tag, keeps shares alive under the new name.
   const renameCat=(old,nuRaw)=>{
     const nu=(nuRaw||"").trim(); // typed capitalization is kept; a case-only rename ("godo" → "GoDo") is allowed
-    if(!nu||nu===old) return false;
+    if(!nu||nu===old||nu===UPCOMING_SHARE) return false;
     if(nu.toLowerCase()!==old.toLowerCase() && Object.keys(cats).some(k=>k.toLowerCase()===nu.toLowerCase())){ showToast(`A list called "${nu}" already exists`); return false; }
     // Re-guess the icon on rename — but only when the new name has a real keyword match, and the old icon
     // looked auto (matched the old name's guess, the built-in default, or the plain fallback). Hand-picked icons stay.
@@ -1587,9 +1590,10 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const labels={myday:"My Day",flagged:"Flagged",upcoming:"Upcoming",all:"All Tasks",assigned:"Assigned to me"};
   const catKey=view.startsWith("cat:")?view.slice(4):null;
   const sharedKey=view.startsWith("shared:")?view.slice(view.indexOf(":",7)+1):null;   // "shared:<owner>:<list>" — the list name may itself contain ":"
+  const upcomingLike=view==="upcoming"||sharedKey===UPCOMING_SHARE;   // your Upcoming, or someone's you were given
   const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
   const titleIcon=catKey?(cats[catKey]?.icon||"📁"):sharedKey?"🤝":null;
-  const titleText=catKey?cap(catKey):sharedKey?cap(sharedKey):labels[view];
+  const titleText=catKey?cap(catKey):sharedKey?cap(shareLabel(sharedKey)):labels[view];
   let show=filter==="active"?tasks.filter(t=>!t.done):filter==="done"?tasks.filter(t=>t.done):tasks;
   if(view==="all"&&catFilter) show=show.filter(t=>t.tag===catFilter);
   const QRANK={q1:0,q3:1,q2:2,q4:3};
@@ -1694,6 +1698,9 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
               {catKey&&listManage&&(
                 <button onClick={()=>setManageMode("share")} title="Share this list & assign people" style={{display:"inline-flex",alignItems:"center",gap:5,padding:"4px 12px",borderRadius:20,border:`1px solid ${T.accent}55`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}>🤝 Share</button>
               )}
+              {view==="upcoming"&&listManage&&(
+                <button onClick={()=>setManageMode("share")} title="Share your Upcoming — every task you've given a date" style={{display:"inline-flex",alignItems:"center",gap:5,padding:"4px 12px",borderRadius:20,border:`1px solid ${T.accent}55`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}>🤝 Share</button>
+              )}
               {view==="myday"&&dayTotal>0&&(
                 <div style={{position:"relative",width:34,height:34}} title={`${dayDone}/${dayTotal} done`}>
                   <svg width="34" height="34" style={{transform:"rotate(-90deg)"}}>
@@ -1790,9 +1797,9 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           </div>
         )}
         {(
-          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:view==="upcoming"?4:10,marginTop:-4,lineHeight:1.5}}>💡 Swipe ← to delete · → to add to My Day ☀️ · {canReorder?dragHint():"pick “My order” above to drag tasks around"} {onHelp&&<button onClick={onHelp} style={{background:"none",border:"none",padding:0,margin:0,color:T.accent,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif",textDecoration:"underline"}}>How it all works</button>}</div>
+          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:upcomingLike?4:10,marginTop:-4,lineHeight:1.5}}>{readOnly?"👀 View only — tap anything to read it. Ask the owner if you need to make changes.":<>💡 Swipe ← to delete · → to add to My Day ☀️ · {canReorder?dragHint():"pick “My order” above to drag tasks around"}</>} {onHelp&&<button onClick={onHelp} style={{background:"none",border:"none",padding:0,margin:0,color:T.accent,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif",textDecoration:"underline"}}>How it all works</button>}</div>
         )}
-        {view==="upcoming"&&(
+        {upcomingLike&&!readOnly&&(
           <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>📅 Type a date ("friday", "july 30", "next tue") to schedule — no date means it's filed as <b>Date TBD</b> until you decide. "tbd" / "tba" / "unknown" work too.</div>
         )}
         {view==="assigned"&&(
@@ -1824,7 +1831,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             const open=sortList(show.filter(t=>!t.done));
             const isLate=t=>t.due&&!isTbd(t.due)&&t.due<todStr;
             // A missed deadline floats to the top of Upcoming instead of getting buried (or looking lost).
-            const late=view==="upcoming"?open.filter(isLate):[];
+            const late=upcomingLike?open.filter(isLate):[];
             const rest=late.length?open.filter(t=>!isLate(t)):open;
             // The drop marker is drawn ON the card it points at, not inserted between cards.
             // Inserting it used to push every card below it down by its own height, which moved
@@ -1838,7 +1845,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
               {late.length>0&&<>
                 <div style={{fontSize:10,color:T.danger,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",padding:"2px 2px 4px",display:"flex",alignItems:"center",gap:5}}>
                   ⚠ Overdue · {late.length}
-                  <button onClick={()=>{ late.forEach(t=>updateTask(t.id,{due:todStr})); }} style={{marginLeft:"auto",background:"none",border:`1px solid ${T.danger}44`,borderRadius:7,padding:"2px 9px",cursor:"pointer",color:T.danger,fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif",textTransform:"none",letterSpacing:0}}>Move to today</button>
+                  {!readOnly&&<button onClick={()=>{ late.forEach(t=>updateTask(t.id,{due:todStr})); }} style={{marginLeft:"auto",background:"none",border:`1px solid ${T.danger}44`,borderRadius:7,padding:"2px 9px",cursor:"pointer",color:T.danger,fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif",textTransform:"none",letterSpacing:0}}>Move to today</button>}
                 </div>
                 {late.map(card)}
                 <div style={{height:1,background:T.border,margin:"8px 2px 4px"}}/>
@@ -1904,6 +1911,14 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           onUploadIcon={listManage.onUploadIcon}
           mode={manageMode}
           autoFocusName={manageMode==="edit"}/>
+      )}
+      {manageMode&&view==="upcoming"&&listManage&&(
+        <SidebarManage T={T} target={{type:"list",id:"n:upcoming",name:"Upcoming"}} isGroup={false} childLists={[UPCOMING_SHARE]} shareOnly
+          shares={(listManage.ownedShares||[]).filter(s=>s.folder===UPCOMING_SHARE)} meta={{icon:"📅"}}
+          onClose={()=>setManageMode(null)}
+          onShare={(em,perm)=>listManage.onShare?.(UPCOMING_SHARE,em,perm)}
+          onUnshare={listManage.onUnshare}
+          mode="share"/>
       )}
     </div>
   );
@@ -3462,8 +3477,12 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
         ev=>{ ghost.move(ev.clientX,ev.clientY);
           const el=document.elementFromPoint(ev.clientX,ev.clientY);
           const it=el&&el.closest("[data-item]"); const gd=el&&el.closest("[data-groupdrop]"); const rd=el&&el.closest("[data-rootdrop]");
-          if(it&&it.getAttribute("data-item")!==id){ const r=it.getBoundingClientRect(); dropRef.current={item:it.getAttribute("data-item"),before:ev.clientY<r.top+r.height/2}; }
-          else if(gd) dropRef.current={group:gd.getAttribute("data-groupdrop")};
+          const into=gid=>(isGroup(id)&&(gid===id||isDesc(gid,id)))?null:{group:gid};   // a folder can't go inside itself
+          if(it&&it.getAttribute("data-item")!==id){ const tid=it.getAttribute("data-item"), r=it.getBoundingClientRect();
+            // On a folder's name: its top edge means "above this folder", the rest means "into it" — the only
+            // way into a collapsed folder, and what dropping a list on "Shared with me" should do.
+            dropRef.current=isGroup(tid)&&ev.clientY>=r.top+r.height*0.35?into(tid):{item:tid,before:ev.clientY<r.top+r.height/2}; }
+          else if(gd) dropRef.current=into(gd.getAttribute("data-groupdrop"));
           else if(rd) dropRef.current={group:null};
           else dropRef.current=null;
           setDrop(dropRef.current);
@@ -3502,11 +3521,12 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
   };
   const renderLevel=(pid,depth)=> childrenOf(pid).map(id=>{
     if(isGroup(id)){ const g=gmap[id]; const isZone=drop?.group===id,isDrag=dragId===id,isTarget=drop?.item===id,cnt=childrenOf(id).length;
-      if(id===SHARED_GID&&cnt===0&&drop?.group!==id) return <div key={id} style={{margin:"10px 10px 4px",paddingTop:10,borderTop:`1px solid ${T.border}`,fontSize:9,color:T.textMuted,opacity:.6,lineHeight:1.5}}>🤝 Lists other people share with you appear here — drag them anywhere you like.</div>;
+      // Empty "Shared with me": still a place to drop a shared list back into, and it lights up when you're over it.
+      if(id===SHARED_GID&&cnt===0) return <div key={id} data-groupdrop={id} style={{margin:"10px 6px 4px",padding:"10px 4px 6px",minHeight:44,boxSizing:"border-box",borderTop:`1px solid ${T.border}`,borderRadius:isZone?8:0,background:isZone?T.accentGlow:"transparent",boxShadow:isZone?`inset 0 0 0 1.5px ${T.accent}`:"none",fontSize:9,color:isZone?T.accent:T.textMuted,opacity:isZone?1:.6,fontWeight:isZone?700:400,lineHeight:1.5}}>{isZone?"🤝 Let go to put it back in Shared with me":"🤝 Lists other people share with you appear here — drag them anywhere you like."}</div>;
       return (
         <div key={id} style={{marginTop:2}}>
           <div data-item={id} onPointerDown={e=>startDrag(e,id)} onMouseEnter={()=>setHov(id)} onMouseLeave={()=>setHov(null)}
-            style={{display:"flex",alignItems:"center",gap:4,padding:`6px 8px 5px ${8+depth*14}px`,opacity:isDrag?.4:1,position:"relative",borderRadius:8,touchAction:"pan-y"}}>
+            style={{display:"flex",alignItems:"center",gap:4,padding:`6px 8px 5px ${8+depth*14}px`,opacity:isDrag?.4:1,position:"relative",borderRadius:8,touchAction:"pan-y",background:isZone?T.accentGlow:"transparent",boxShadow:isZone?`inset 0 0 0 1.5px ${T.accent}`:"none"}}>
             {isTarget&&<div style={{position:"absolute",left:6,right:6,[drop?.before===false?"bottom":"top"]:-1,height:3,borderRadius:2,background:T.accent,boxShadow:`0 0 8px ${T.accent}`,zIndex:5,pointerEvents:"none"}}/>}
             <button onClick={()=>toggle(id)} data-nodrag style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0}}><Ico n="chevron" s={11} c={T.textMuted} st={{transform:g.collapsed?"none":"rotate(90deg)",transition:"transform .15s"}}/></button>
             <span style={{fontSize:14,display:"inline-flex",alignItems:"center"}}><CatIcon icon={g.icon||guessIcon(g.name)} size={13}/></span>
@@ -3614,12 +3634,12 @@ function SidebarCreate({T,mode,onClose,onCreateList,onCreateGroup,onUploadIcon})
 // mode: "full" (sidebar ⋯) · "edit" (name/icon/color/delete only) · "share" (share + assign only).
 // One panel, two tabs — never both at once, so it fits a phone screen exactly like it fits a laptop.
 // `mode` only picks which tab opens first ("edit" from the ✎, "share" from the 🤝 button).
-function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename,onShare,onUnshare,onDelete,onSetIcon,onSetColor,onAssignAll,assignGroups=[],onUploadIcon,autoFocusName=false,mode="edit"}) {
+function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename,onShare,onUnshare,onDelete,onSetIcon,onSetColor,onAssignAll,assignGroups=[],onUploadIcon,autoFocusName=false,mode="edit",shareOnly=false}) {
   const [tab,setTab]=useState(mode==="share"?"share":"edit");
   const showEdit=tab==="edit", showShare=tab==="share";
   const [name,setName]=useState(target.name);
   const [email,setEmail]=useState("");
-  const [perm,setPerm]=useState("edit");
+  const [perm,setPerm]=useState("view");   // they can look, not touch — unless you choose otherwise
   const [assignEmail,setAssignEmail]=useState("");
   const iconFileRef=useRef(null);
   const nameRef=useRef(null);
@@ -3653,16 +3673,16 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
           <CatIcon icon={meta.icon||"📁"} size={20}/>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:15,fontWeight:800,fontFamily:"'Sora',sans-serif",textTransform:"capitalize",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{target.name}</div>
-            <div style={{fontSize:10,color:T.textMuted}}>{isGroup?`Folder · ${childLists.length} list${childLists.length===1?"":"s"} inside`:"List"}</div>
+            <div style={{fontSize:10,color:T.textMuted}}>{isGroup?`Folder · ${childLists.length} list${childLists.length===1?"":"s"} inside`:shareOnly?"Every task you've given a date":"List"}</div>
           </div>
           <button onClick={onClose} style={{width:26,height:26,borderRadius:7,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={13}/></button>
         </div>
 
-        <div style={{display:"flex",gap:6,marginBottom:14}}>
+        {!shareOnly&&<div style={{display:"flex",gap:6,marginBottom:14}}>
           {[["edit","✎ Edit"],["share","🤝 Share & assign"]].map(([id,label])=>(
             <button key={id} onClick={()=>setTab(id)} style={{flex:1,padding:"7px 0",borderRadius:9,border:`1px solid ${tab===id?T.accent:T.border}`,background:tab===id?T.accentGlow:"transparent",color:tab===id?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{label}</button>
           ))}
-        </div>
+        </div>}
 
         {showEdit&&<>
         <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>Name</div>
@@ -3689,7 +3709,7 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
 
         {showShare&&<>
         <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>Share 🤝</div>
-        <div style={{fontSize:10,color:T.textMuted,marginBottom:8,lineHeight:1.5}}>{isGroup?"Invites the person to every list inside this folder.":"Invite another Freely user by the email they signed up with — or a saved nickname."}</div>
+        <div style={{fontSize:10,color:T.textMuted,marginBottom:8,lineHeight:1.5}}>{isGroup?"Invites the person to every list inside this folder.":shareOnly?"They'll see every task you've given a date — from all your lists, even ones you haven't shared — including ones you add later.":"Invite another Freely user by the email they signed up with — or a saved nickname."}</div>
         <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap"}}>
           <input value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doShare();}} placeholder="their@email.com or nickname" style={{flex:1,minWidth:120,padding:"8px 10px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
           <select value={perm} onChange={e=>setPerm(e.target.value)} style={{padding:"8px 8px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",cursor:"pointer"}}>
@@ -3963,7 +3983,7 @@ const GUIDE = [
   ["📅","Upcoming & Calendar","Upcoming is everything with a date, soonest first. Anything overdue is pinned to the top in red, with a one-tap “Move to today”. Undated work waits under Date TBD.\nCalendar is the same tasks on a month. Drag a task — or a single step inside one — onto a day to move it."],
   ["🎯","Priority Matrix","Four boxes, by urgency and importance:\n• Top-left — urgent AND important: do it now.\n• Top-right — important, not urgent: schedule it.\n• Bottom-left — urgent, not important: hand it off.\n• Bottom-right — neither: drop it.\nTap ⤢ on a box to give it the whole screen. The matrix and your lists are the same tasks."],
   ["📁","Lists, folders & your home screen","Make a list for anything — Groceries, Work, Side project. Your capitals are kept.\n• Drag one list onto another to nest them in a folder.\n• Tap a list's name at the top of the screen to rename it or change its icon and colour.\n• Type a list's name into a task and it's filed there: “work call the bank” goes to Work as “call the bank”.\n• Whatever is at the very top of your sidebar is the screen Freely opens on."],
-  ["🤝","Sharing & assigning","Tap 🤝 Share next to a list's name and invite someone by email — they see it the moment they sign in.\n• Assign a task to one person, or to everyone on the list at once.\n• Everyone on the list sees who a task is for — unless you mark it 🔒 private, and then only that person sees it.\n• Work assigned to you appears under “Assigned to me”, even from lists that were never shared with you.\n• Leave any list you were invited to with Leave ✕."],
+  ["🤝","Sharing & assigning","Tap 🤝 Share next to a list's name and invite someone by email — they see it the moment they sign in. They can only look, unless you give them editing rights.\n• Share your whole Upcoming the same way — 🤝 Share at the top of it — and they see everything you've given a date, from every list.\n• Assign a task to one person, or to everyone on the list at once.\n• Everyone on the list sees who a task is for — unless you mark it 🔒 private, and then only that person sees it.\n• Work assigned to you appears under “Assigned to me”, even from lists that were never shared with you.\n• Leave any list you were invited to with Leave ✕."],
   ["👥","Teams & messages","Settings → Teams makes a team. Teammates can message each other straight away, no request needed.\n• Outside a team, your first message to someone is a request; they accept before you can chat freely.\n• A team is private — nobody sees it unless they were invited.\n• You can assign a whole list to a team in one go."],
   ["🔁","Habits","Things you do repeatedly, not once. Pick the weekdays, give it a priority, check in with a tap. The streak counts consecutive days kept. Today's habits also sit at the top of My Day."],
   ["🍅","Focus","Open a task and hit Focus to start a timer on it. Finishing one earns +25 XP. Minimise it and it keeps running while you work."],
@@ -4109,13 +4129,13 @@ function SettingsView({T,dark,setDark,scheme,setScheme,sound,setSound,onExport,o
       )}
       <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 16px 14px",marginBottom:14}}>
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>Sharing 🤝</div>
-        <div style={{fontSize:11,color:T.textMuted,marginBottom:10,lineHeight:1.5}}>To share a list, tap 🤝 Share next to its name. Everything you share is listed here.</div>
+        <div style={{fontSize:11,color:T.textMuted,marginBottom:10,lineHeight:1.5}}>To share a list, tap 🤝 Share next to its name — or at the top of Upcoming to share everything you've given a date. Everything you share is listed here.</div>
         {(!ownedShares||ownedShares.length===0)
           ? <div style={{fontSize:11,color:T.textMuted,opacity:.7}}>You aren't sharing any lists yet.</div>
           : <div style={{display:"flex",flexDirection:"column",gap:5}}>
               {ownedShares.map(s=>(
                 <div key={s.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
-                  <span style={{fontSize:12,fontWeight:600,flexShrink:0,maxWidth:"35%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.folder}</span>
+                  <span style={{fontSize:12,fontWeight:600,flexShrink:0,maxWidth:"35%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{shareLabel(s.folder)}</span>
                   <span style={{fontSize:11,color:T.textMuted,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {contacts[s.shared_with_email]||s.shared_with_email}</span>
                   <span style={{fontSize:9,fontWeight:700,flexShrink:0,color:s.can_delete?T.danger:T.textMuted,background:(s.can_delete?T.danger:T.textMuted)+"22",padding:"1px 6px",borderRadius:10}}>{s.can_edit===false?"view only":s.can_delete?"can delete":"edit"}</span>
                   <button onClick={()=>onUnshare(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}>Remove</button>

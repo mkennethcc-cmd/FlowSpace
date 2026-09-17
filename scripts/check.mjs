@@ -71,6 +71,27 @@ section("Due-date labels");
 const fd=[["2026-09-16","Today"],["2026-09-17","Tomorrow"],["2026-10-02","Oct 2"],["2027-03-15","Mar 15, 2027"],["2026-09-14","2d overdue"],["9999-12-31","Date TBD"]];
 for (const [d, want] of fd) { const got = fmtDate(d); report(got === want, `fmtDate(${d}) → ${got}, expected ${want}`); }
 
+section("Sharing rules");
+{
+  const { inUpcoming, shareCovers, shareLabel, UPCOMING_SHARE } = L, today = "2026-09-16";
+  const U = [[{ due: "2026-09-01", done: false }, true, "an overdue open task stays in Upcoming"],
+             [{ due: "2026-09-01", done: true }, false, "a finished past task leaves Upcoming"],
+             [{ due: "2026-09-20", done: true }, true, "a finished task whose day hasn't come stays"],
+             [{ due: "9999-12-31", done: false }, true, "Date TBD is in Upcoming"],
+             [{ due: null, done: false }, false, "no date, not in Upcoming"]];
+  for (const [t, want, what] of U) report(inUpcoming(t, today) === want, `inUpcoming: ${what}`);
+  const list = { owner_id: "a", folder: "work" }, up = { owner_id: "a", folder: UPCOMING_SHARE };
+  const S = [[list, { owner: "a", tag: "work", due: null }, true, "a list share covers its own list"],
+             [list, { owner: "a", tag: "home", due: "2026-09-20" }, false, "a list share doesn't cover another list"],
+             [list, { owner: "b", tag: "work", due: null }, false, "a list share doesn't cover someone else's list of the same name"],
+             [up, { owner: "a", tag: "home", due: "2026-09-20" }, true, "a shared Upcoming covers a dated task in any list"],
+             [up, { owner: "a", tag: null, due: "9999-12-31" }, true, "a shared Upcoming covers Date TBD"],
+             [up, { owner: "a", tag: "home", due: null }, false, "a shared Upcoming doesn't cover an undated task"],
+             [up, { owner: "b", tag: "home", due: "2026-09-20" }, false, "a shared Upcoming doesn't cover someone else's tasks"]];
+  for (const [sh, t, want, what] of S) report(shareCovers(sh, t) === want, `shareCovers: ${what}`);
+  report(shareLabel(UPCOMING_SHARE) === "Upcoming" && shareLabel("work") === "work", "shareLabel names a shared Upcoming");
+}
+
 await import("./check-sync.mjs").then(m => m.run(report, section));
 await import("./check-names.mjs").then(m => m.run(report, section));
 

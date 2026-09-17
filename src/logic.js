@@ -110,6 +110,15 @@ export const addDays = n => { const d=new Date(); d.setDate(d.getDate()+n); retu
 // sorts to the end of Upcoming, and never counts as overdue.
 export const DUE_TBD = "9999-12-31";
 export const isTbd = d => d === DUE_TBD;
+// Upcoming: everything with a date that's still open — however overdue, a missed deadline must never make
+// a task vanish — plus finished ones whose day hasn't come yet.
+export const inUpcoming = (t, today) => !!t.due && (!t.done || t.due > today);
+// Someone's whole Upcoming is shared as this reserved list name. It covers every task of theirs that has a
+// date, from any list: the same rule the database enforces (task_shared_with_me in supabase/setup.sql).
+export const UPCOMING_SHARE = "__upcoming__";
+export const shareLabel = folder => folder === UPCOMING_SHARE ? "Upcoming" : folder;
+export const shareCovers = (share, t) =>
+  share.owner_id === t.owner && (share.folder === t.tag || (share.folder === UPCOMING_SHARE && !!t.due));
 // Sort key for "by due date". The date alone is not enough: two things on the same day then
 // come out in whatever order they were typed, so a 4pm event can sit above a 10am one.
 // Untimed work sorts after timed work on that day.

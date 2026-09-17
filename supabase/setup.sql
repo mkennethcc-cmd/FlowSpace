@@ -16,6 +16,7 @@
 --     shared with you, and it shows up under "Assigned to me".
 --   · A list can be shared view-only: they can read it but not change, add or delete — enforced
 --     even over older sharing rules.
+--   · Your Upcoming can be shared too: they see every task you've given a date, from any list.
 --   · Everyone sharing a list sees who a task is assigned to — unless the
 --     assigner marks it private, and then only the assignee can see it.
 --   · Habits keep the order you drag them into, on every device.
@@ -177,15 +178,19 @@ begin
   return new;
 end $$;
 
--- does my share on someone's list allow this? ('edit' or 'delete'; false when it isn't shared with me)
+-- is this task shared with me, and does that share allow this? action: 'view' · 'edit' · 'delete'.
+-- A task reaches you through a share of its list, or through a share of its owner's Upcoming — the
+-- folder '__upcoming__' — which covers every task of theirs that has a date (dated = due is not null).
 -- A share from before the can_edit column existed counts as editable, the same as in the app.
-create or replace function public.share_allows(list_owner uuid, list_name text, action text)
+create or replace function public.task_shared_with_me(task_owner uuid, task_list text, dated boolean, action text)
 returns boolean language sql security definer stable set search_path = public as $$
   select exists (select 1 from public.folder_shares fs
-                 where fs.owner_id = list_owner and fs.folder = list_name
+                 where fs.owner_id = task_owner
                    and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email')
-                   and case when action = 'delete' then coalesce(fs.can_delete, false)
-                            else coalesce(fs.can_edit, true) end);
+                   and (fs.folder = task_list or (fs.folder = '__upcoming__' and dated))
+                   and case action when 'delete' then coalesce(fs.can_delete, false)
+                                   when 'edit'   then coalesce(fs.can_edit, true)
+                                   else true end);
 $$;
 
 
@@ -299,29 +304,21 @@ create policy "assignees update" on public.tasks for update to authenticated
 -- saved on their screen but is silently dropped, and the new assignee sees nothing.
 drop policy if exists "collaborators edit shared tasks" on public.tasks;
 create policy "collaborators edit shared tasks" on public.tasks for update to authenticated
-  using (
-    exists (select 1 from public.folder_shares fs
-            where fs.owner_id = tasks.user_id and fs.folder = tasks.tag
-              and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email')
-              and coalesce(fs.can_edit, true))
-  )
-  with check (
-    exists (select 1 from public.folder_shares fs
-            where fs.owner_id = tasks.user_id and fs.folder = tasks.tag
-              and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email')
-              and coalesce(fs.can_edit, true))
-  );
+  using      (public.task_shared_with_me(user_id, tag, due is not null, 'edit'))
+  with check (public.task_shared_with_me(user_id, tag, due is not null, 'edit'));
 
 -- ...and add new work to that shared list (the app files it under the list's owner)
 drop policy if exists "collaborators add to shared lists" on public.tasks;
 create policy "collaborators add to shared lists" on public.tasks for insert to authenticated
-  with check (
-    user_id = auth.uid()
-    or exists (select 1 from public.folder_shares fs
-               where fs.owner_id = tasks.user_id and fs.folder = tasks.tag
-                 and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email')
-              and coalesce(fs.can_edit, true))
-  );
+  with check (user_id = auth.uid() or public.task_shared_with_me(user_id, tag, due is not null, 'edit'));
+
+-- Seeing and deleting through a share. Lists already had rules for these; a shared Upcoming needs them.
+drop policy if exists "shared with me: read" on public.tasks;
+create policy "shared with me: read" on public.tasks for select to authenticated
+  using (public.task_shared_with_me(user_id, tag, due is not null, 'view'));
+drop policy if exists "shared with me: delete" on public.tasks;
+create policy "shared with me: delete" on public.tasks for delete to authenticated
+  using (public.task_shared_with_me(user_id, tag, due is not null, 'delete'));
 
 -- RESTRICTIVE: applies on top of every other rule. A private assignment is
 -- visible only to the task's owner and the people it is assigned to.
@@ -356,14 +353,16 @@ create trigger keep_task_owner before update on public.tasks
 -- before view-only existed; one of those let every share edit, which self-test checks 29 and 30 caught.
 drop policy if exists "tasks: change only with edit rights" on public.tasks;
 create policy "tasks: change only with edit rights" on public.tasks as restrictive for update to authenticated
-  using      (user_id = auth.uid() or public.is_assigned_to_me(assigned_to) or public.share_allows(user_id, tag, 'edit'))
-  with check (user_id = auth.uid() or public.is_assigned_to_me(assigned_to) or public.share_allows(user_id, tag, 'edit'));
+  using      (user_id = auth.uid() or public.is_assigned_to_me(assigned_to) or public.task_shared_with_me(user_id, tag, due is not null, 'edit'))
+  with check (user_id = auth.uid() or public.is_assigned_to_me(assigned_to) or public.task_shared_with_me(user_id, tag, due is not null, 'edit'));
 drop policy if exists "tasks: add only with edit rights" on public.tasks;
 create policy "tasks: add only with edit rights" on public.tasks as restrictive for insert to authenticated
-  with check (user_id = auth.uid() or public.share_allows(user_id, tag, 'edit'));
+  with check (user_id = auth.uid() or public.task_shared_with_me(user_id, tag, due is not null, 'edit'));
 drop policy if exists "tasks: delete only with delete rights" on public.tasks;
 create policy "tasks: delete only with delete rights" on public.tasks as restrictive for delete to authenticated
-  using (user_id = auth.uid() or public.share_allows(user_id, tag, 'delete'));
+  using (user_id = auth.uid() or public.task_shared_with_me(user_id, tag, due is not null, 'delete'));
+-- (replaced by task_shared_with_me above; nothing uses it any more)
+drop function if exists public.share_allows(uuid, text, text);
 
 -- Shares: only the list's OWNER creates or changes a share, so a view-only person can't upgrade
 -- themselves and a collaborator can't pass your list on. The invited person may still remove their own

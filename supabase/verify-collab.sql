@@ -26,6 +26,8 @@ declare
   tid      uuid := gen_random_uuid();
   tid2     uuid := gen_random_uuid();
   nid      uuid := gen_random_uuid();
+  c_id     uuid := '00000000-0000-0000-0000-0000000000cc';   -- a made-up account, so no real share is touched
+  c_mail   text := 'selftest-upcoming@example.com';
   res      text[] := '{}';
 begin
   select id into a_id from auth.users where lower(email) = a_mail;
@@ -326,6 +328,50 @@ begin
       execute 'set local role authenticated';
       select count(*) into cnt from public.profiles where id in (a_id, b_id);
       res := res || ('41. A stranger CANNOT look up A''s or B''s email | ' || case when cnt = 0 then '✓ PASS' else ('✗ FAIL: ' || cnt || ' visible') end);
+
+      ------------------------------------ A shares their Upcoming (every dated task)
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', a_id::text, 'email', a_mail)::text, true);
+      execute 'set local role authenticated';
+      begin
+        insert into public.folder_shares(owner_id, folder, shared_with_email, can_delete, can_edit)
+        values (a_id, '__upcoming__', c_mail, false, false);
+        insert into public.tasks(id, user_id, title, tag, due) values (gen_random_uuid(), a_id, mark || ' dated job', mark || ' never shared', current_date + 3);
+        insert into public.tasks(id, user_id, title, tag) values (gen_random_uuid(), a_id, mark || ' someday job', mark || ' never shared');
+        res := res || ('42. A shares their Upcoming VIEW-ONLY | ✓ PASS')::text;
+      exception when others then res := res || ('42. A shares their Upcoming VIEW-ONLY | ✗ FAIL: ' || sqlerrm); end;
+
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', c_id::text, 'email', c_mail)::text, true);
+      execute 'set local role authenticated';
+      select count(*) into cnt from public.tasks where title = mark || ' dated job';
+      res := res || ('43. They see A''s dated task (its list was never shared) | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: invisible' end);
+      select count(*) into cnt from public.tasks where title = mark || ' someday job';
+      res := res || ('44. They CANNOT see A''s task with no date | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: it leaked' end);
+      begin
+        update public.tasks set done = true where title = mark || ' dated job';
+        get diagnostics cnt = row_count;
+        res := res || ('45. View-only: they CANNOT change it | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: the change went through' end);
+      exception when others then res := res || ('45. View-only: they CANNOT change it | ✓ PASS')::text; end;
+
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', a_id::text, 'email', a_mail)::text, true);
+      execute 'set local role authenticated';
+      update public.folder_shares set can_edit = true where owner_id = a_id and folder = '__upcoming__' and shared_with_email = c_mail;
+
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', c_id::text, 'email', c_mail)::text, true);
+      execute 'set local role authenticated';
+      begin
+        update public.tasks set done = true where title = mark || ' dated job';
+        get diagnostics cnt = row_count;
+        res := res || ('46. Given edit rights, they CAN tick it off | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: blocked' end);
+      exception when others then res := res || ('46. Given edit rights, they CAN tick it off | ✗ FAIL: ' || sqlerrm); end;
+      begin
+        delete from public.tasks where title = mark || ' dated job';
+        get diagnostics cnt = row_count;
+        res := res || ('47. Without delete rights, they CANNOT delete it | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: the task was deleted' end);
+      exception when others then res := res || ('47. Without delete rights, they CANNOT delete it | ✓ PASS')::text; end;
     end if;
   end if;
 
@@ -333,6 +379,7 @@ begin
   execute 'set local role ' || quote_ident(orig);
   delete from public.tasks    where title like mark || '%';
   delete from public.folder_shares where folder like mark || '%';
+  delete from public.folder_shares where folder = '__upcoming__' and shared_with_email = c_mail;
   delete from public.messages where body like mark || '%' or body = 'rewritten by B';
   delete from public.notes where title like mark || '%';
   delete from public.categories where name like mark || '%';
