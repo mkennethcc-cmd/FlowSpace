@@ -3,3 +3,8 @@ dist
 .env
 .env.local
 .DS_Store
+
+# Local-only: editor/agent settings and the original starter kit (kept on disk, not in the repo)
+.claude/settings.local.json
+.claude/launch.json
+Original Files/
