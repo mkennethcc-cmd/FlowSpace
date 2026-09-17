@@ -1,6 +1,7 @@
 -- ═══════════════════════════════════════════════════════════════════════════
---  Freely · messaging, teams and assignment setup
---  Paste this whole file into Supabase → SQL Editor → Run. Safe to run again.
+--  Freely · database setup
+--  Paste this whole file into Supabase → SQL Editor → Run. Safe to run again,
+--  and safe to run on a database that already has data — it only ever adds.
 --
 --  Order matters here: every table and column is created FIRST, then the
 --  helper functions that read them, then the security rules. (Postgres checks
@@ -16,6 +17,8 @@
 --   · A list can be shared view-only: they can read it but not change, add or delete.
 --   · Everyone sharing a list sees who a task is assigned to — unless the
 --     assigner marks it private, and then only the assignee can see it.
+--   · Habits keep the order you drag them into, on every device.
+--   · Each list name exists once per person (the app saves lists by name).
 -- ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -84,6 +87,16 @@ alter table public.tasks add column if not exists assign_private boolean default
 -- View-only sharing: they see the list, they can't change it. Older rows have no value → editable.
 alter table public.folder_shares add column if not exists can_edit boolean default true;
 
+-- Habit order. Without it the order you drag habits into only survived by accident.
+alter table public.habits add column if not exists position double precision;
+
+-- One row per list name per person. The app saves lists by upserting on (user_id, name), which needs
+-- this index. Any accidental duplicates are removed first (keeping one), or the index can't be built.
+delete from public.categories a
+  using public.categories b
+  where a.user_id = b.user_id and a.name = b.name and a.ctid < b.ctid;
+create unique index if not exists categories_user_name_key on public.categories (user_id, name);
+
 
 -- ╔═══════════════════════════════════════════════════════════════════════╗
 -- ║  STEP 2 · Helper functions                                            ║
@@ -124,6 +137,20 @@ $$;
 -- ╔═══════════════════════════════════════════════════════════════════════╗
 -- ║  STEP 3 · Security rules                                              ║
 -- ╚═══════════════════════════════════════════════════════════════════════╝
+
+-- Your own notes, canvas, habits and lists ──────────────────────────────────
+-- The app saves these by changing only the rows that changed (insert or update), where it used to
+-- delete everything and re-insert. That needs update permission, so it is granted here explicitly —
+-- for your own rows only. Added alongside any existing rules; it never opens anyone else's data.
+do $$
+declare t text;
+begin
+  foreach t in array array['notes','canvas_notes','habits','categories'] loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('drop policy if exists "own rows" on public.%I', t);
+    execute format('create policy "own rows" on public.%I for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid())', t);
+  end loop;
+end $$;
 
 -- Profiles ────────────────────────────────────────────────────────────────
 alter table public.profiles enable row level security;

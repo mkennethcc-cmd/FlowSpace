@@ -1,6 +1,7 @@
 -- ═══════════════════════════════════════════════════════════════════════════
 --  Freely · collaboration self-test
---  Paste into Supabase → SQL Editor → Run, then send me the result table.
+--  Run supabase/setup.sql first. Then paste this into Supabase → SQL Editor → Run,
+--  and send me the result table.
 --
 --  It pretends to BE each of your two accounts and really performs every
 --  collaboration action, so it proves the security rules behave correctly.
@@ -24,6 +25,7 @@ declare
   made_req boolean := false;
   tid      uuid := gen_random_uuid();
   tid2     uuid := gen_random_uuid();
+  nid      uuid := gen_random_uuid();
   res      text[] := '{}';
 begin
   select id into a_id from auth.users where lower(email) = a_mail;
@@ -243,6 +245,35 @@ begin
         insert into public.tasks(id, user_id, title, tag) values (gen_random_uuid(), a_id, mark || ' sneaked in', mark || ' ro');
         res := res || ('30. B CANNOT add to it | ✗ FAIL: the insert went through')::text;
       exception when others then res := res || ('30. B CANNOT add to it | ✓ PASS')::text; end;
+
+      ------------------- saving your own notes and lists the way the app now does (insert, then update)
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', a_id::text, 'email', a_mail)::text, true);
+      execute 'set local role authenticated';
+      begin
+        insert into public.notes(id, user_id, title) values (nid, a_id, mark || ' note')
+          on conflict (id) do update set title = excluded.title;
+        insert into public.notes(id, user_id, title) values (nid, a_id, mark || ' note edited')
+          on conflict (id) do update set title = excluded.title;
+        select count(*) into cnt from public.notes where id = nid and title = mark || ' note edited';
+        res := res || ('31. A saves a note, then saves a change to it | ' || case when cnt = 1 then '✓ PASS' else '✗ FAIL: the change was not saved' end);
+      exception when others then res := res || ('31. A saves a note, then saves a change to it | ✗ FAIL: ' || sqlerrm); end;
+
+      begin
+        insert into public.categories(user_id, name, color, icon) values (a_id, mark, '#000000', '📁')
+          on conflict (user_id, name) do update set color = excluded.color;
+        insert into public.categories(user_id, name, color, icon) values (a_id, mark, '#ffffff', '📁')
+          on conflict (user_id, name) do update set color = excluded.color;
+        select count(*) into cnt from public.categories where user_id = a_id and name = mark;
+        res := res || ('32. A saves a list twice by name — still one list | ' || case when cnt = 1 then '✓ PASS' else ('✗ FAIL: ' || cnt || ' copies') end);
+      exception when others then res := res || ('32. A saves a list twice by name — still one list | ✗ FAIL: ' || sqlerrm); end;
+
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims',
+        json_build_object('sub', '00000000-0000-0000-0000-0000000000ff', 'email', 'stranger@example.com')::text, true);
+      execute 'set local role authenticated';
+      select count(*) into cnt from public.notes where id = nid;
+      res := res || ('33. A stranger CANNOT read A''s notes | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: leaked' end);
     end if;
   end if;
 
@@ -251,6 +282,8 @@ begin
   delete from public.tasks    where title like mark || '%';
   delete from public.folder_shares where folder like mark || '%';
   delete from public.messages where body like mark || '%';
+  delete from public.notes where title like mark || '%';
+  delete from public.categories where name like mark || '%';
   if made_req then
     delete from public.chat_requests where from_email = a_mail and to_email = b_mail;
   end if;

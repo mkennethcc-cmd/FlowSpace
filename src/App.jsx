@@ -2,6 +2,11 @@ import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { supabase } from "./supabase";
 import { db, fromDbTask } from "./db";
 import AuthScreen, { SignupSuccess, ResetPassword } from "./AuthScreen";
+import {
+  stripListName, matchListName, guessCat, ymd, tod, addDays, DUE_TBD, isTbd,
+  dueKey, fmtDate, fmtClock, parseNL, cleanTitle, titleEditPatch, guessIcon, nextDue,
+  mergeGami, gamiRowDiffers, moveDuePatch, whenPatch,
+} from "./logic";
 
 const FontLink = () => (
   <style>{`
@@ -14,7 +19,6 @@ const FontLink = () => (
     @keyframes checkB{0%{transform:scale(0)rotate(-20deg);}60%{transform:scale(1.2);}100%{transform:scale(1);}}
     @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
     @keyframes glow{0%,100%{box-shadow:0 0 10px #c084fc28;}50%{box-shadow:0 0 22px #c084fc66;}}
-    @keyframes ripple{0%{transform:scale(0);opacity:.6;}100%{transform:scale(2.5);opacity:0;}}
     #root{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;}
     input,textarea{user-select:text;-webkit-user-select:text;}
     .te{animation:slideIn .3s cubic-bezier(.34,1.56,.64,1);}
@@ -28,7 +32,6 @@ const Ico = ({ n, s=16, c="currentColor", st={} }) => {
     moon:<><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></>,
     check:<><polyline points="20 6 9 17 4 12"/></>,
     plus:<><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></>,
-    star:<><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></>,
     cal:<><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></>,
     grid:<><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></>,
     bar:<><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></>,
@@ -41,25 +44,20 @@ const Ico = ({ n, s=16, c="currentColor", st={} }) => {
     menu:<><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></>,
     search:<><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></>,
     note:<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></>,
-    done:<><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></>,
     sparkles:<><path d="M12 3L13.5 8.5L19 10L13.5 11.5L12 17L10.5 11.5L5 10L10.5 8.5L12 3Z"/><path d="M5 3L5.5 5L7 5.5L5.5 6L5 8L4.5 6L3 5.5L4.5 5L5 3Z"/><path d="M19 13L19.5 15L21 15.5L19.5 16L19 18L18.5 16L17 15.5L18.5 15L19 13Z"/></>,
     fire:<><path d="M8.5 14.5A2.5 2.5 0 0011 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></>,
     arr:<><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></>,
     repeat:<><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></>,
     grip:<><circle cx="9" cy="6" r="1" fill="currentColor"/><circle cx="15" cy="6" r="1" fill="currentColor"/><circle cx="9" cy="12" r="1" fill="currentColor"/><circle cx="15" cy="12" r="1" fill="currentColor"/><circle cx="9" cy="18" r="1" fill="currentColor"/><circle cx="15" cy="18" r="1" fill="currentColor"/></>,
-    tag:<><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></>,
     target:<><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></>,
     edit:<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></>,
     flag:<><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></>,
     chevron:<><polyline points="9 18 15 12 9 6"/></>,
     link:<><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></>,
     user:<><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
-    msg:<><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></>,
     send:<><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></>,
     chat:<><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/></>,
     users:<><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></>,
-    brain:<><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2z"/></>,
-    paint:<><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></>,
   };
   return (
     <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={st}>
@@ -82,102 +80,8 @@ const QUAD_ORDER = ["q1","q2","q3","q4"];
 // This device's id. Completion counts are kept PER DEVICE and summed for display, so two phones
 // used on the same day never overwrite each other and nothing is ever counted twice.
 const DEVICE_ID=(()=>{ try{ let id=localStorage.getItem("fs_device"); if(!id){ id=Math.random().toString(36).slice(2,10); localStorage.setItem("fs_device",id); } return id; }catch{ return "local"; } })();
-const MONTHS = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
-const WEEKDAYS = {sun:0,mon:1,tue:2,wed:3,thu:4,fri:5,sat:6};
-
-const CAT_KEYWORDS = {
-  health:["gym","run","running","workout","exercise","yoga","doctor","dentist","medic","meditate","jog","therapy","health","hydrate","sleep"],
-  personal:["friend","friends","family","birthday","party","dinner","lunch","movie","date","shopping","grocery","groceries","hangout","mom","dad","vacation","trip","brunch","wedding"],
-  finance:["budget","invoice","tax","taxes","pay","bill","bills","bank","rent","salary","expense","refund","insurance","mortgage"],
-  school:["homework","study","studying","exam","class","assignment","lecture","quiz","essay","thesis","school","course","revision"],
-  work:["meeting","client","report","email","project","deadline","standup","presentation","interview","proposal","slides","sprint","ticket","work","launch"],
-};
-// Tiny capped edit-distance so date typos still parse ("julky" → "july", "tommorow" → "tomorrow").
-const editDist=(a,b,max=2)=>{
-  if(Math.abs(a.length-b.length)>max) return max+1;
-  let prev2=null, prev=[...Array(b.length+1)].map((_,i)=>i);
-  for(let i=1;i<=a.length;i++){
-    const cur=[i]; let best=cur[0];
-    for(let j=1;j<=b.length;j++){
-      cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));
-      if(i>1&&j>1&&a[i-1]===b[j-2]&&a[i-2]===b[j-1]) cur[j]=Math.min(cur[j],prev2[j-2]+1); // transposition
-      if(cur[j]<best)best=cur[j];
-    }
-    if(best>max) return max+1;
-    prev2=prev; prev=cur;
-  }
-  return prev[b.length];
-};
-const DATE_WORDS=["january","february","march","april","june","july","august","september","october","november","december",
-  "monday","tuesday","wednesday","thursday","friday","saturday","sunday",
-  "tomorrow","today","tonight","yesterday","weekend","morning","afternoon","evening","midnight","unknown"];
-// Typos edit-distance can't safely reach: too short to risk fuzzing, or two letters wrong in a
-// seven-letter word ("wensday"). Written out so they cost nothing and can never misfire.
-const WORD_FIX={
-  tmr:"tomorrow",tmrw:"tomorrow",tomoro:"tomorrow",tomorow:"tomorrow",tommorow:"tomorrow",tommorrow:"tomorrow",
-  tomarrow:"tomorrow",tomorro:"tomorrow","2morrow":"tomorrow","2mrw":"tomorrow",
-  "2day":"today",todya:"today",tdy:"today",tonite:"tonight",tnite:"tonight",tnght:"tonight",
-  yesteday:"yesterday",yestarday:"yesterday",ystrday:"yesterday",yesterdy:"yesterday",
-  mondey:"monday",munday:"monday",mnday:"monday",tuseday:"tuesday",teusday:"tuesday",tusday:"tuesday",
-  wensday:"wednesday",wendsday:"wednesday",wednsday:"wednesday",wedensday:"wednesday",wenesday:"wednesday",wedneday:"wednesday",
-  thurdsay:"thursday",thusday:"thursday",thrusday:"thursday",thursdy:"thursday",thursady:"thursday",
-  fryday:"friday",firday:"friday",fridy:"friday",saterday:"saturday",saturaday:"saturday",satrday:"saturday",
-  sundy:"sunday",sundey:"sunday",sunay:"sunday",
-  janurary:"january",januaray:"january",janaury:"january",jaunary:"january",
-  febuary:"february",febraury:"february",febrary:"february",
-  marhc:"march",mrach:"march",appril:"april",arpil:"april",aprl:"april",
-  jne:"june",jly:"july",juley:"july",juyl:"july",
-  augsut:"august",agust:"august",augest:"august",
-  septmber:"september",setember:"september",septembr:"september",spetember:"september",
-  octobor:"october",ocotber:"october",octber:"october",
-  novemebr:"november",novmber:"november",novermber:"november",
-  decmber:"december",decemeber:"december",desember:"december",decemebr:"december",
-  nxt:"next",wkend:"weekend",wknd:"weekend",weeknd:"weekend",
-  mornin:"morning",aftrnoon:"afternoon",evning:"evening",evenin:"evening",
-  tbc:"tbd",unkown:"unknown",unkonwn:"unknown",
-};
-// Real words that sit one typo away from a date word. Without this "the marsh report" would
-// silently become a March deadline.
-const NOT_A_TYPO=new Set(["marsh","marshes","sundae","sundaes","mayday","monkey","juneau","julia","julian","augusta","augustus","maybe","money","today","tonight","toned","toning","weekends","mornings","evenings","aprons"]);
-const fuzzDateWords=raw=>raw.replace(/[A-Za-z0-9]{3,}/g,w=>{
-  const lw=w.toLowerCase();
-  if(WORD_FIX[lw]) return WORD_FIX[lw];              // a known misspelling, whatever its length
-  if(DATE_WORDS.includes(lw)||NOT_A_TYPO.has(lw)) return w;
-  if(lw.length<5||/[^a-z]/.test(lw)) return w;       // too short, or a number/time token — leave it alone
-  const max=lw.length>=8?2:1; // long words tolerate 2 typos, short ones just 1 (keeps "money" ≠ "monday")
-  for(const d of DATE_WORDS){ if(editDist(lw,d,max)<=max) return d; }
-  return w;
-});
-
-// Remove a list's name from a typed task ("writing essay" → "essay" filed under "writing").
-const stripListName=(raw,name)=>{
-  const esc=name.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
-  const out=raw.replace(new RegExp("(^|[^a-zA-Z0-9])"+esc+"($|[^a-zA-Z0-9])","i"),"$1$2")
-    .replace(/\s{2,}/g," ").replace(/^[\s,\-–—:]+|[\s,\-–—:]+$/g,"").trim();
-  return out||raw; // never strip down to nothing
-};
-
-// A list's own name typed in the text wins ("ACA essay 4pm" → the "aca" list).
-// Longest name first so "aca essays" beats a hypothetical "aca" prefix list. Returns null when nothing matches.
-const matchListName = (text, cats) => {
-  const t = (text || "").toLowerCase();
-  for (const name of Object.keys(cats).sort((a,b)=>b.length-a.length)) {
-    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (esc && new RegExp("(^|[^a-z0-9])" + esc + "($|[^a-z0-9])", "i").test(t)) return name;
-  }
-  return null;
-};
-const guessCat = (title, cats) => {
-  const t = (title || "").toLowerCase();
-  const hit = matchListName(title, cats);
-  if (hit) return hit;
-  for (const cat of ["health","personal","finance","school","work"]) {
-    if (cats[cat] && CAT_KEYWORDS[cat].some(k => t.includes(k))) return cat;
-  }
-  return cats["personal"] ? "personal" : (cats["work"] ? "work" : Object.keys(cats)[0] || "work");
-};
-
-// Robust press-to-drag: mouse drags after a tiny move; touch drags after a 120ms hold.
+// Robust press-to-drag: mouse drags after a tiny move; touch drags after a 250ms hold (same as tasks —
+// a finger that rests a moment before scrolling must not pick the item up).
 // Calls onActivate() once when a real drag should begin (not a tap/click/scroll).
 function startPressDrag(e, onActivate) {
   const sx = e.clientX, sy = e.clientY, type = e.pointerType;
@@ -190,7 +94,7 @@ function startPressDrag(e, onActivate) {
     else if (dx > 8 || dy > 8) { finish(); } // moved before the hold fired → it's a scroll, cancel
   };
   const up = () => finish();
-  if (type !== "mouse") timer = setTimeout(activate, 120);
+  if (type !== "mouse") timer = setTimeout(activate, 250);
   window.addEventListener("pointermove", mv);
   window.addEventListener("pointerup", up);
   window.addEventListener("pointercancel", up);
@@ -220,34 +124,6 @@ function runDrag(onMove, onDrop) {
   window.addEventListener("pointercancel", up);
 }
 
-const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-const tod = () => ymd(new Date());
-const addDays = n => { const d=new Date(); d.setDate(d.getDate()+n); return ymd(d); };
-// "Date TBD": stored as a real far-future date so it flows through the existing due column,
-// sorts to the end of Upcoming, and never counts as overdue.
-const DUE_TBD = "9999-12-31";
-const isTbd = d => d === DUE_TBD;
-// Sort key for "by due date". The date alone is not enough: two things on the same day then
-// come out in whatever order they were typed, so a 4pm event can sit above a 10am one.
-// Untimed work sorts after timed work on that day.
-const dueKey = t => {
-  if (!t.due) return "9999-99-99 99:99";
-  const hm = (t.remindAt && t.remindAt.includes("T")) ? t.remindAt.split("T")[1].slice(0,5) : "99:99";
-  return t.due + " " + hm;
-};
-const fmtDate = s => {
-  if (!s) return null;
-  if (isTbd(s)) return "Date TBD";
-  // Both sides at LOCAL midnight — comparing a noon due-date against midnight today shifted every
-  // label a day ("due yesterday" read as "Today"). Whole-day steps also keep this DST-proof.
-  const [yy,mo,dd] = s.split("-").map(Number);
-  const d = new Date(yy, mo-1, dd), t = new Date(); t.setHours(0,0,0,0);
-  const diff = Math.round((d-t)/86400000);
-  if (diff<0) return `${Math.abs(diff)}d overdue`;
-  if (diff===0) return "Today"; if (diff===1) return "Tomorrow";
-  return d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
-};
-
 // A task can be assigned to several people. Stored as a comma-separated email list in assigned_to.
 const assigneesOf = task => (task?.assignedTo||"").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean);
 // System notices in a team chat (e.g. "X was added") are normal messages prefixed with this marker.
@@ -264,243 +140,6 @@ const avatarOf = email => { if(!email) return ""; try{ const a=JSON.parse(localS
 const Avatar = ({email,size=18}) => avatarOf(email)
   ? <span style={{width:size,height:size,borderRadius:"50%",background:"rgba(128,128,128,.18)",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:size*0.68,flexShrink:0,lineHeight:1}}>{avatarOf(email)}</span>
   : <span style={{width:size,height:size,borderRadius:"50%",background:avatarColor(email),color:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:Math.max(8,size*0.5),fontWeight:700,flexShrink:0}}>{initialOf(email)}</span>;
-
-// "…THH:MM" or bare "HH:MM" → "4:00 PM"
-const fmtClock = s => {
-  if (!s) return "";
-  const t = s.includes("T") ? s.split("T")[1] : s; if (!t) return "";
-  let [h,m] = t.split(":"); h = parseInt(h,10); if (isNaN(h)) return "";
-  const ap = h>=12 ? "PM" : "AM"; h = h%12 || 12;
-  return `${h}:${m||"00"} ${ap}`;
-};
-
-const MO_RE="jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
-const WD_RE="sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:s|nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?";
-// "sat", "sun" and "mon" are ordinary words too ("sat on the bench", "sun cream", "mon ami"). On their
-// own they only count as a weekday when something around them says so — a cue in front, or nothing
-// but punctuation after (the time has already been lifted out by then, so "gym sat 10am" qualifies).
-const WD_AMBIG=/^(sat|sun|mon)$/i;
-const pad2=x=>String(x).padStart(2,"0");
-// One time token → {h,m}. Handles "4:30", "4 : 30", "4::30" (stray colon), "9.30" (dot, only trusted
-// next to am/pm), "1840" (24h compact) and a bare "4".
-const timeTok=tok=>{
-  const c=(tok||"").replace(/\s+/g,"");
-  let m=c.match(/^(\d{1,2}):{1,2}(\d{2})$/); if(m) return {h:+m[1],m:+m[2],colon:true};
-  m=c.match(/^(\d{1,2})\.(\d{2})$/);         if(m) return {h:+m[1],m:+m[2],dot:true};
-  m=c.match(/^(\d{3,4})$/);                  if(m) return {h:+m[1].slice(0,-2),m:+m[1].slice(-2),compact:true};
-  return {h:+c,m:0,bare:true};
-};
-const hhmm=(t,ap)=>{ let h=t.h,m=t.m; ap=(ap||"").toLowerCase().replace(/[.\s]/g,"");
-  if(ap[0]==="p"&&h<12)h+=12; if(ap[0]==="a"&&h===12)h=0;
-  return (h>=0&&h<24&&m>=0&&m<60)?`${pad2(h)}:${pad2(m)}`:null; };
-// A number that may be a time, plus an optional meridiem: "am"/"p.m." with or without a space, or a
-// single letter glued on ("3p", "10a"). None of it may run into a word ("2 amazing" isn't 2am).
-const TIME_TOK="(\\d{1,2}\\s*[:.]{1,2}\\s*\\d{2}|\\d{3,4}|\\d{1,2})(\\s*a\\.?m\\.?|\\s*p\\.?m\\.?|[ap])?(?![a-z])";
-const TIME_CUE="(\\bfrom\\s+|\\bat\\s+|\\bby\\s+|@\\s*|\\btimes?\\s*:\\s*|\\bwhen\\s*:\\s*|\\bhours?\\s*:\\s*)?";
-// A zone written right after the clock ("9 PM EDT") is swallowed with it instead of littering the title.
-const TIME_TZ="(?:\\s*\\b(?:E[DS]T|C[DS]T|M[DS]T|P[DS]T|AK[DS]T|HST|GMT|UTC|BST|CES?T|IST|JST|AES?T|AEDT|ET|PT|CT|MT)\\b)?";
-// A bare small hour is an afternoon/evening hour: "dinner at 7" is 7pm, "from 4 to 5" is 4–5pm.
-const pmGuess=h=>(h>=1&&h<=7)?h+12:h;
-// Times written as words. "night" on its own is left alone — "movie night" is a title, not a clock.
-const WORD_TIMES=[
-  [/\b(?:at\s+)?(?:noon|midday|12\s*noon)\b/i,"12:00"],
-  [/\b(?:in\s+the\s+|this\s+)?morning\b/i,"09:00"],       // "tomorrow" is left for the date pass
-  [/\b(?:in\s+the\s+|this\s+)?afternoon\b/i,"14:00"],
-  [/\b(?:in\s+the\s+|this\s+)?evening\b/i,"18:00"],
-  [/\bat\s+night\b/i,"20:00"],
-];
-// Pull a time (and an end time) out of `text` → {time,endTime,rest}. Tolerates missing/extra spaces,
-// a meridiem on either end or neither, stray colons, dots next to am/pm, and 24-hour "1840".
-function grabTime(text){
-  let rest=text||"", m;
-  const rangeRe=new RegExp(TIME_CUE+"\\b"+TIME_TOK+"\\s*(?:[-~]|to|until|til{1,2}|through|thru)\\s*"+TIME_TOK+TIME_TZ,"gi");
-  while((m=rangeRe.exec(rest))!==null){
-    const A=timeTok(m[2]), B=timeTok(m[4]); let apA=(m[3]||"").trim(); const apB=(m[5]||"").trim();
-    // A bare "14-17" is a date range, not a time — demand some real time signal.
-    if(!(apA||apB||m[1]||A.colon||B.colon||A.compact||B.compact)) continue;
-    if((A.dot&&!apA&&!apB)||(B.dot&&!apB&&!apA)) continue;       // "2.10-2.30" with no am/pm is not a clock
-    if(A.h>23||B.h>23) continue;
-    const inherited=!apA&&!!apB;
-    if(inherited) apA=apB;                                        // "4:00 - 5:30 pm" → both pm
-    if(!apA&&!apB&&A.bare&&B.bare){ A.h=pmGuess(A.h); B.h=pmGuess(B.h); }   // "from 4 to 5" → 16:00–17:00
-    let s=hhmm(A,apA), e=hhmm(B,apB);
-    if(s&&e&&s>=e&&inherited){ const alt=hhmm({h:A.h,m:A.m},"am"); if(alt&&alt<e) s=alt; } // "11 - 1 pm"
-    if(!s) continue;
-    return {time:s,endTime:(e&&e!==s)?e:null,rest:rest.slice(0,m.index)+" "+rest.slice(m.index+m[0].length)};
-  }
-  const oneRe=new RegExp(TIME_CUE+"\\b"+TIME_TOK+TIME_TZ,"gi");
-  while((m=oneRe.exec(rest))!==null){
-    const A=timeTok(m[2]), ap=(m[3]||"").trim(), cue=!!m[1];
-    let h=A.h, mn=A.m, ok=false;
-    if(ap||A.colon) ok=true;                                      // "3pm", "15:30", "4:30"
-    else if(A.dot) ok=false;                                      // "v2.10" is a version, not ten past two
-    else if(cue&&A.compact) ok=true;                              // "at 1840"
-    else if(cue&&A.bare){ h=pmGuess(h); ok=true; }                // "dinner at 7" → 7pm
-    if(!ok||h>23) continue;                                       // a bare year like "2026" is left alone
-    const v=hhmm({h,m:mn},ap); if(!v) continue;
-    return {time:v,endTime:null,rest:rest.slice(0,m.index)+" "+rest.slice(m.index+m[0].length)};
-  }
-  for(const [re,t] of WORD_TIMES){ const w=rest.match(re); if(w) return {time:t,endTime:null,rest:rest.slice(0,w.index)+" "+rest.slice(w.index+w[0].length)}; }
-  return {time:null,endTime:null,rest};
-}
-const lastOfMonth=(y,mo)=>new Date(y,mo+1,0);
-// Dates written in digits — lifted out FIRST, before the clock, so "2026-09-30" is never read as
-// "20:26 to 09:30". US order for slashes (9/17 = September 17), because that is how the app's
-// users write them; a four-digit year may lead (ISO) or trail.
-function grabNumericDate(text){
-  const rest=text||"";
-  let m=rest.match(/(^|[^\d\/])(\d{4})-(\d{1,2})-(\d{1,2})(?![\d\/])/);
-  if(m){ const y=+m[2],mo=+m[3]-1,d=+m[4]; if(mo>=0&&mo<12&&d>=1&&d<=31) return {due:ymd(new Date(y,mo,d)),rest:rest.slice(0,m.index+m[1].length)+" "+rest.slice(m.index+m[0].length)}; }
-  m=rest.match(/(^|[^\d\/.])(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?(?![\d\/])/);
-  if(m){ const mo=+m[2]-1,d=+m[3]; let y=m[4]?(+m[4]<100?2000+ +m[4]:+m[4]):new Date().getFullYear();
-    if(mo>=0&&mo<12&&d>=1&&d<=31){
-      if(!m[4]&&new Date(y,mo,d)<new Date(new Date().toDateString())) y++;
-      return {due:ymd(new Date(y,mo,d)),rest:rest.slice(0,m.index+m[1].length)+" "+rest.slice(m.index+m[0].length)}; } }
-  return {due:null,rest};
-}
-// Pull one date out of `text` → {due,rest,mon,day,yr}. `allowRelative` off = only explicit calendar dates.
-function grabDate(text,{allowRelative=true}={}){
-  let rest=text||"";
-  const cut=(s,i,len)=>s.slice(0,i)+" "+s.slice(i+len);
-  const now=new Date(), Y=now.getFullYear(), M=now.getMonth();
-  if(allowRelative){
-    let r=rest.match(/\btomorrow\b/i);    if(r) return {due:addDays(1),rest:cut(rest,r.index,r[0].length)};
-    r=rest.match(/\btonight\b/i);         if(r) return {due:tod(),rest:cut(rest,r.index,r[0].length),night:true};
-    r=rest.match(/\btoday\b|\beod\b|\bend\s+of\s+(?:the\s+)?day\b/i); if(r) return {due:tod(),rest:cut(rest,r.index,r[0].length)};
-    r=rest.match(/\bnext\s+week\b/i);     if(r) return {due:addDays(7),rest:cut(rest,r.index,r[0].length)};
-    // "in 2 days", "in a week", "in 3 weeks", "in a month"
-    r=rest.match(/\bin\s+(a|an|one|two|three|four|five|six|\d{1,2})\s+(day|week|month)s?\b/i);
-    if(r){ const words={a:1,an:1,one:1,two:2,three:3,four:4,five:5,six:6}; const n=words[r[1].toLowerCase()]??+r[1];
-      const d=new Date(); if(r[2].toLowerCase()==="day") d.setDate(d.getDate()+n); else if(r[2].toLowerCase()==="week") d.setDate(d.getDate()+7*n); else d.setMonth(d.getMonth()+n);
-      return {due:ymd(d),rest:cut(rest,r.index,r[0].length)}; }
-    // "this weekend" = the coming Saturday, "next weekend" = the one after
-    r=rest.match(/\b(this|next|the)?\s*weekend\b/i);
-    if(r){ let delta=(6-now.getDay()+7)%7; if(delta===0&&now.getDay()!==6) delta=7; if((r[1]||"").toLowerCase()==="next") delta+=7;
-      const d=new Date(); d.setDate(d.getDate()+delta); return {due:ymd(d),rest:cut(rest,r.index,r[0].length)}; }
-    r=rest.match(/\bend\s+of\s+(?:the\s+)?month\b|\beom\b/i);
-    if(r) return {due:ymd(lastOfMonth(Y,M)),rest:cut(rest,r.index,r[0].length)};
-    r=rest.match(/\bend\s+of\s+(?:the\s+)?week\b|\beow\b/i);
-    if(r){ let delta=(5-now.getDay()+7)%7; const d=new Date(); d.setDate(d.getDate()+delta); return {due:ymd(d),rest:cut(rest,r.index,r[0].length)}; }
-  }
-  // Explicit month-date wins over a bare weekday ("Friday July 24" means July 24). A trailing 4-digit year is
-  // used as-is. The space is optional, so "sep17" and "17sep" work.
-  let mon=null,day=null;
-  let m=rest.match(new RegExp("\\b(?:(?:on|at)\\s+)?("+MO_RE+")\\.?\\s*(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?\\s*,?\\s*(\\d{4})?","i"));
-  if(m){ mon=MONTHS[m[1].toLowerCase().substring(0,3)]; day=+m[2]; }
-  else { m=rest.match(new RegExp("\\b(?:(?:on|at)\\s+)?(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?\\s*(?:of\\s+)?("+MO_RE+")\\.?\\s*,?\\s*(\\d{4})?","i"));
-         if(m){ mon=MONTHS[m[2].toLowerCase().substring(0,3)]; day=+m[1]; } }
-  if(m&&mon!=null&&day>=1&&day<=31){
-    let yr=m[3]?+m[3]:Y;
-    if(!m[3]&&new Date(yr,mon,day)<new Date(now.toDateString())) yr++;
-    let out=cut(rest,m.index,m[0].length);
-    out=out.replace(new RegExp("\\b(?:this\\s+)?(?:next\\s+)?(?:(?:on|at)\\s+)?(?:"+WD_RE+")\\b,?","i")," "); // drop a redundant weekday
-    return {due:ymd(new Date(yr,mon,day)),rest:out,mon,day,yr};
-  }
-  if(allowRelative){
-    // A day of the month on its own: "the 17th", "by the 3rd", "due 30th" — this month if it hasn't passed, else next.
-    const od=rest.match(/\b(?:on\s+|by\s+|due\s+)?(?:the\s+)?(\d{1,2})(st|nd|rd|th)\b/i);
-    if(od){ const d=+od[1]; if(d>=1&&d<=31){ let y=Y,mo=M; if(d<now.getDate()){ mo++; if(mo>11){mo=0;y++;} }
-      const dd=Math.min(d,lastOfMonth(y,mo).getDate()); return {due:ymd(new Date(y,mo,dd)),rest:cut(rest,od.index,od[0].length)}; } }
-    const wd=rest.match(new RegExp("\\b(this\\s+|next\\s+|on\\s+|at\\s+|by\\s+|every\\s+)?("+WD_RE+")\\b\\.?","i"));
-    if(wd){
-      const bare=wd[2].toLowerCase();
-      if(WD_AMBIG.test(bare)&&!wd[1]){ const after=rest.slice(wd.index+wd[0].length); if(!/^\s*(?:[,.;:!?)\]]|$)/.test(after)) return {due:null,rest}; }
-      const key=bare.substring(0,3),target=WEEKDAYS[key],cur=now.getDay();
-      let delta=(target-cur+7)%7; if(delta===0)delta=7; if(/^next/i.test(wd[1]||""))delta+=7;
-      const d=new Date(); d.setDate(d.getDate()+delta);
-      return {due:ymd(d),rest:cut(rest,wd.index,wd[0].length)};
-    }
-  }
-  return {due:null,rest};
-}
-// Repeat words → the app's recurrence codes. Returns {recurring, rest}. "every monday" leaves the weekday
-// in place for grabDate, so the first occurrence lands on the right day.
-function grabRecurring(text){
-  let rest=text||"", m;
-  const take=(re,val)=>{ m=rest.match(re); if(!m) return null; rest=rest.slice(0,m.index)+" "+rest.slice(m.index+m[0].length); return val; };
-  let rec=take(/\b(?:every\s+day|daily|each\s+day|everyday)\b/i,"daily")
-    || take(/\b(?:every\s+(?:other|second|2)\s+weeks?|biweekly|fortnightly)\b/i,"custom:2:weeks")
-    || take(/\b(?:every\s+week|weekly|each\s+week)\b/i,"weekly")
-    || take(/\b(?:every\s+month|monthly|each\s+month)\b/i,"monthly")
-    || take(/\b(?:every\s+year|yearly|annually|each\s+year)\b/i,"yearly");
-  if(!rec){ m=rest.match(/\bevery\s+(\d{1,2})\s+(day|week|month)s?\b/i); if(m){ rec=`custom:${+m[1]}:${m[2].toLowerCase()}s`; rest=rest.slice(0,m.index)+" "+rest.slice(m.index+m[0].length); } }
-  if(!rec){ m=rest.match(new RegExp("\\bevery\\s+(?="+WD_RE+"\\b)","i")); if(m){ rec="weekly"; rest=rest.slice(0,m.index)+" "+rest.slice(m.index+m[0].length); } }
-  return {recurring:rec,rest};
-}
-const tidyTitle=s=>s.replace(/[•*·]/g," ").replace(/\(\s*\)|\[\s*\]|\{\s*\}/g," ").replace(/\s{2,}/g," ").replace(/\s+([,.;:!?])/g,"$1").replace(/,\s*,/g,",")
-  .replace(/\b(on|at|by|from|in|due)\s*([,.]|$)/gi,"$2").replace(/\s{2,}/g," ").replace(/^[\s,;:.\-–—]+|[\s,;:.\-–—]+$/g,"").trim();
-// Labelled fields in a pasted blurb ("Club Fest · Dates: … · Time: …"). Pasting into an input flattens
-// the newlines, so we split on the labels themselves rather than on line breaks.
-const FIELD_RE=/\s*[•*\-–—]?\s*\b(dates?|time|times|when|hours?|location|where|place|venue|room|cost|price|rsvp|contact|notes?|details?|info)\s*:\s*/gi;
-
-const parseNL = raw => {
-  // Pasted listings carry exotic punctuation: zero-width spaces, and dashes that aren't the plain hyphen
-  // ("4 PM − 5 PM"). Normalise both, or a perfectly good time range parses as a lone start time.
-  const src = fuzzDateWords(String(raw||"")
-    .replace(/[​-‍﻿]/g,"")
-    .replace(/[‐-―−⁃﹘﹣－]/g,"-")
-    .replace(/[\r\n]+/g," • ").trim());
-
-  // ── Structured paste: title first, then "Dates:" / "Time:" / "Location:" fields ──
-  const segs=[]; let last=0, lab=null, mm; FIELD_RE.lastIndex=0;
-  while((mm=FIELD_RE.exec(src))!==null){ segs.push({lab,text:src.slice(last,mm.index)}); lab=mm[1].toLowerCase(); last=FIELD_RE.lastIndex; }
-  segs.push({lab,text:src.slice(last)});
-  if(segs.length>1 && segs[0].text.trim()){
-    const pick=re=>segs.filter(s=>s.lab&&re.test(s.lab)).map(s=>s.text).join(" ").trim();
-    const dateTxt=pick(/^dates?$/), timeTxt=pick(/^(times?|when|hours?)$/);
-    let titleTxt=segs[0].text, time=null, endTime=null, due=null, spanEnd=null;
-    if(timeTxt){ const r=grabTime(timeTxt); time=r.time; endTime=r.endTime; }
-    else { const r=grabTime(titleTxt); time=r.time; endTime=r.endTime; titleTxt=r.rest; }
-    if(dateTxt){
-      const n1=grabNumericDate(dateTxt); const d1=n1.due?n1:grabDate(dateTxt); due=d1.due;
-      if(due){ // "Sept 14 – Sept 17" or "Sept 14–17" → remember the closing day
-        const d2=grabDate(d1.rest,{allowRelative:false});
-        if(d2.due&&d2.due>due) spanEnd=d2.due;
-        else { const dm=d1.rest.match(/^\s*(?:[-–—]|to|through|thru|until)\s*(\d{1,2})(?!\d)/i);
-               if(dm&&d1.mon!=null){ const dd=+dm[1]; if(dd>d1.day&&dd<=31) spanEnd=ymd(new Date(d1.yr,d1.mon,dd)); } }
-      }
-    } else { const n=grabNumericDate(titleTxt); if(n.due){ due=n.due; titleTxt=n.rest; } else { const r=grabDate(titleTxt); due=r.due; titleTxt=r.rest; } }
-    const extra=segs.filter(s=>s.lab&&!/^(dates?|times?|when|hours?)$/.test(s.lab)&&s.text.trim())
-      .map(s=>`${s.lab.charAt(0).toUpperCase()+s.lab.slice(1)}: ${tidyTitle(s.text)}`).join("\n");
-    return {title:tidyTitle(titleTxt)||String(raw).trim(), due, time, endTime, spanEnd, extra, recurring:null};
-  }
-
-  // ── Plain sentence ──
-  let title=src, due=null, time=null, endTime=null, noDate=false;
-  const nd=title.match(/(^|[^a-z0-9])(tbd|tba|t\.b\.[da]\.?|to be decided|to be determined|to be announced|date unknown|unknown date|unknown|no date yet|no date|someday)($|[^a-z0-9])/i);
-  if(nd){ noDate=true; title=title.replace(nd[2],""); }
-  const rc=grabRecurring(title); title=rc.rest;
-  const n=grabNumericDate(title); if(n.due){ due=n.due; title=n.rest; }
-  const t=grabTime(title); time=t.time; endTime=t.endTime; title=t.rest;
-  if(!due){ const d=grabDate(title); due=d.due; title=d.rest; if(d.night&&!time) time="20:00"; }
-  else { const d=grabDate(title,{allowRelative:false}); if(!d.due) title=title.replace(new RegExp("\\b(?:this\\s+|next\\s+|on\\s+)?(?:"+WD_RE+")\\b,?","i")," "); } // "Fri 9/17" → the weekday is redundant
-  if(rc.recurring&&!due) due=rc.recurring==="daily"?tod():rc.recurring==="monthly"?tod():rc.recurring==="yearly"?tod():addDays(7); // a repeat needs a first occurrence
-  title=tidyTitle(title);
-  if(!title) title=String(raw).trim();
-  if(noDate) due=DUE_TBD;
-  return {title, due, time, endTime, spanEnd:null, extra:"", recurring:rc.recurring};
-};
-
-// The title as it will read once the date/time/repeat/list words are lifted out of it.
-const cleanTitle = (raw, cats, tag) => { const p = parseNL(raw); let t = p.title || raw; const hit = matchListName(t, cats || {}); if (hit && hit !== tag) t = stripListName(t, hit); return t; };
-// Re-parse an edited task title: a typed date/time reschedules it, a typed list name re-files it.
-// Returns only the fields that actually change.
-const titleEditPatch = (task, raw, cats) => {
-  const p = parseNL(raw); const patch = {};
-  let newTitle = p.title || raw;
-  const hit = matchListName(newTitle, cats || {});
-  if (hit && hit !== task.tag) { patch.tag = hit; newTitle = stripListName(newTitle, hit); }
-  if (newTitle !== task.title) patch.title = newTitle;
-  if (p.due && p.due !== task.due) patch.due = p.due;
-  if (p.time) {
-    const d = (p.due && !isTbd(p.due) ? p.due : null) || (task.due && !isTbd(task.due) ? task.due : null) || tod();
-    const ra = `${d}T${p.time}`;
-    if (ra !== task.remindAt) { patch.remindAt = ra; if (!task.due && !p.due && !patch.due) patch.due = d; }
-    if (p.endTime && p.endTime !== task.endTime) patch.endTime = p.endTime;
-  }
-  if (p.recurring && p.recurring !== task.recurring) patch.recurring = p.recurring;
-  return patch;
-};
 
 // Download an attachment (the plain `download` attribute is ignored cross-origin, so fetch → blob → save).
 const downloadFile=async(url,name)=>{
@@ -579,7 +218,6 @@ const DEFAULT_CATS = {
   personal: {color:"#f59e0b", icon:"💜"}, // not a star/sun — those read like the My Day ☀️ marker
   finance:  {color:"#a855f7", icon:"💰"},
 };
-const DEFAULT_CAT_NAMES = Object.keys(DEFAULT_CATS);
 
 // Starter tasks for a brand-new account — a tiny guided tour that lives right in the task list.
 const sampleTasks = (uid) => {
@@ -616,60 +254,6 @@ const isImgIcon = ic => typeof ic === "string" && (ic.startsWith("http") || ic.s
 const CatIcon = ({icon, size=14}) => isImgIcon(icon)
   ? <img src={icon} alt="" style={{width:size,height:size,borderRadius:4,objectFit:"cover",verticalAlign:"middle",flexShrink:0}}/>
   : <span style={{fontSize:size+1,lineHeight:1}}>{icon}</span>;
-// Auto-pick a folder icon from its name; falls back to a varied (name-seeded) emoji.
-const ICON_KEYWORDS = [
-  [["cat","cats","kitten","kitty"],"🐱"],[["dog","dogs","puppy","puppies","pup"],"🐶"],
-  [["fish","aquarium"],"🐟"],[["bird","birds"],"🐦"],[["pet","pets","animal","animals","vet"],"🐾"],
-  [["water","hydrate","hydration"],"💧"],[["walk","walking","steps","stroll"],"🚶"],
-  [["gym","workout","lift","weights","exercise","fitness"],"🏋️"],[["run","running","jog","jogging","marathon","cardio"],"🏃"],
-  [["swim","swimming","pool"],"🏊"],[["bike","biking","cycle","cycling"],"🚴"],[["hike","hiking","trail"],"🥾"],
-  [["yoga","stretch","stretching","pilates","meditate","meditating","meditation","breathe","breathing","mindfulness"],"🧘"],[["soccer","football"],"⚽"],[["basketball","hoops"],"🏀"],[["tennis"],"🎾"],
-  [["doctor","appointment","clinic","hospital","checkup"],"🩺"],[["dentist","teeth","tooth","floss","flossing","brush","brushing"],"🦷"],
-  [["meds","medicine","pills","prescription","pharmacy","vitamin","vitamins","supplement","supplements"],"💊"],[["mental","therapy","mindful","meditation"],"🧠"],
-  [["health","wellness","selfcare","spa"],"💪"],[["sleep","rest","nap"],"🛏️"],
-  [["wake","wake up","get up","sunrise","early riser"],"🌅"],[["shower","bathe","bath","cold plunge"],"🚿"],
-  [["smoke","smoking","vape","vaping","nicotine","cigarette","cigarettes"],"🚭"],[["alcohol","sober","sobriety"],"🚫"],
-  [["sugar","junk food","candy","snacking"],"🍬"],[["screen time","no phone","less phone","scrolling","doomscrolling"],"📵"],
-  [["pray","prayer","worship","church","bible","quran","gratitude","grateful"],"🙏"],
-  [["work","job","office","career","business"],"💼"],[["meeting","meetings","standup","sync"],"📅"],
-  [["client","clients","customer"],"🤝"],[["project","projects"],"📋"],[["email","emails","inbox","mail"],"✉️"],
-  [["deadline","urgent"],"⏰"],
-  [["school","class","classes","course","courses","study","studies","exam","exams","homework","assignment"],"📚"],
-  [["college","university","uni","campus","grad"],"🎓"],[["lecture","lesson","notes"],"📝"],
-  [["language","languages","spanish","french","japanese","korean","german","chinese","duolingo","vocab","vocabulary"],"🗣️"],
-  [["science","lab","chemistry","biology","physics"],"🔬"],[["math","maths","algebra","calculus"],"🔢"],
-  [["money","finance","financial","budget","budgeting"],"💰"],[["bank","banking","savings","saving"],"🏦"],
-  [["bill","bills","invoice","invoices","payment"],"🧾"],[["invest","investing","stocks","crypto","portfolio"],"📈"],
-  [["tax","taxes"],"🧾"],[["shop","shopping","buy","store","mall"],"🛍️"],[["grocery","groceries","supermarket"],"🛒"],
-  [["wishlist","wish"],"⭐"],[["home","house","apartment","household"],"🏠"],
-  [["clean","cleaning","chore","chores","laundry","tidy"],"🧹"],[["repair","fix","maintenance","handyman"],"🔧"],
-  [["garden","gardening","plant","plants","yard"],"🌱"],[["car","cars","vehicle","auto","drive","driving"],"🚗"],
-  [["food","meal","meals","cook","cooking","recipe","recipes","kitchen"],"🍳"],
-  [["restaurant","dining","dinner","lunch","brunch"],"🍽️"],[["coffee","cafe"],"☕"],
-  [["salad","veggies","vegetable","vegetables","fruit","fruits","healthy","protein"],"🥗"],
-  [["sun","sunlight","sunshine","outside","outdoors","nature","fresh air"],"☀️"],
-  [["travel","trip","trips","vacation","holiday","tour","journey"],"✈️"],[["flight","flights","airport"],"🛫"],
-  [["hotel","booking"],"🏨"],[["beach","ocean","sea"],"🏖️"],[["camp","camping","outdoor"],"⛺"],
-  [["movie","movies","film","cinema"],"🎬"],[["music","song","songs","playlist","band"],"🎵"],
-  [["guitar","ukulele","bass"],"🎸"],[["piano"],"🎹"],
-  [["game","games","gaming"],"🎮"],[["book","books","read","reading","novel"],"📖"],
-  [["art","drawing","draw","paint","painting","sketch","creative"],"🎨"],[["photo","photos","photography","camera","picture"],"📷"],
-  [["write","writing","blog","journal","diary"],"✍️"],[["code","coding","program","programming","dev","developer","software"],"💻"],
-  [["tech","gadget","device","app","apps"],"📱"],[["design","figma"],"🎨"],[["idea","ideas","brainstorm","inspiration"],"💡"],
-  [["goal","goals","target","objective","resolution"],"🎯"],[["plan","planning","plans","schedule","agenda"],"🗓️"],
-  [["love","relationship","date","dating","partner","crush"],"❤️"],[["family","kids","kid","child","children","parent"],"👪"],
-  [["baby","newborn","pregnancy"],"👶"],[["friend","friends","social","hangout"],"👥"],[["wedding","marriage","engaged"],"💍"],
-  [["birthday","bday"],"🎂"],[["party","celebrate","celebration","event","events"],"🎉"],
-  [["holiday","christmas","xmas"],"🎄"],[["gift","gifts","present","presents"],"🎁"],
-  [["beauty","makeup","skincare","hair","nails"],"💄"],[["fashion","clothes","clothing","outfit","wardrobe"],"👗"],
-  [["dream","dreams","bucket","someday"],"✨"],
-];
-const guessIcon = (name, fallback="📁") => {
-  const n=(name||"").toLowerCase().trim();
-  if(!n) return fallback;
-  for(const [keys,icon] of [...ICON_KEYWORDS,...ICON_KEYWORDS_MORE]){ if(keys.some(k=>new RegExp("\\b"+k+"\\b").test(n))) return icon; }
-  return fallback; // predictable default when nothing matches (no random jitter)
-};
 // The icon gallery, grouped the way people think about their lists. Roughly 190 choices; the
 // picker shows them in this order so related icons sit together.
 const CAT_ICONS = [
@@ -694,30 +278,6 @@ const CAT_ICONS = [
   // symbols & moods
   "⚡","✨","💎","🏆","🥇","🎖️","🔔","⏰","📅","🗓️","🔒","🔓","✅","❌","⚠️","♻️","🧭","🎈","🪄","🧿","🫶","🤞","🙌",
 ];
-// Extra keyword → icon pairs added to the guesser. Ordered so the more specific words win.
-const ICON_KEYWORDS_MORE = [
-  [["internship","internships","intern"],"🏢"],[["job search","job hunt","job hunting","applications","application","apply","applying"],"📨"],
-  [["resume","cv","cover letter"],"📄"],[["interview","interviews","interviewing"],"🤝"],[["networking","network","linkedin"],"🤝"],
-  [["thesis","dissertation","capstone"],"📜"],[["research","paper","papers"],"🔍"],[["essay","essays","writing assignment"],"✍️"],
-  [["reading","readings","textbook","textbooks"],"📖"],[["club","clubs","society","fest","club fest"],"🎪"],
-  [["podcast","podcasts","audiobook","audiobooks","listen"],"🎧"],[["youtube","video","videos","content","vlog","streaming","stream"],"🎬"],
-  [["side project","side hustle","startup","launch","venture"],"🚀"],[["admin","paperwork","forms","documents","docs"],"🗂️"],
-  [["errand","errands","to do","todo","misc","miscellaneous","stuff","random","other"],"📌"],
-  [["subscription","subscriptions","renewal","renewals"],"💳"],[["insurance"],"🛡️"],[["legal","lawyer","contract","contracts","visa","passport","immigration"],"⚖️"],
-  [["packing","pack","luggage","suitcase"],"🧳"],[["moving","move","relocation","boxes"],"📦"],[["renovation","renovate","diy","build"],"🔨"],
-  [["volunteer","volunteering","charity","donate","donation","community"],"🫶"],[["recycle","recycling","eco","sustainability","environment"],"♻️"],
-  [["chess"],"♟️"],[["board game","board games","dnd","d&d","tabletop"],"🎲"],[["concert","concerts","gig","gigs","festival"],"🎤"],
-  [["theater","theatre","play","musical","show","shows"],"🎭"],[["museum","gallery","exhibition"],"🏛️"],[["golf"],"⛳"],[["ski","skiing","snowboard"],"⛷️"],
-  [["surf","surfing"],"🏄"],[["boxing","martial arts","karate","mma","judo"],"🥊"],[["dance","dancing","ballet"],"💃"],
-  [["baking","bake","bread","cake"],"🧁"],[["tea","matcha","boba","bubble tea"],"🧋"],[["wine","cocktails","bar","drinks"],"🍷"],
-  [["halloween","costume"],"🎃"],[["anniversary","valentine","valentines"],"💍"],[["reminder","reminders","dont forget","don't forget","remember"],"🔔"],
-  [["someday","maybe","later","backlog","parking lot","ideas bin"],"🪄"],[["important","priority","priorities","must"],"⚠️"],[["done","completed","archive","archived"],"✅"],
-  [["winter","snow"],"❄️"],[["summer"],"☀️"],[["night","evening"],"🌙"],[["morning","routine","routines"],"🌅"],
-  [["sewing","knit","knitting","crochet","craft","crafts"],"🧶"],[["car wash","tires","oil change","mechanic"],"🛠️"],
-  [["phone","calls","call"],"📞"],[["kids","school run","daycare","pickup"],"👪"],
-];
-
-// Accent palettes (#25). "lavender" = the original look; the rest are pastel.
 const PALETTES = {
   lavender: {name:"Lavender", accent:"#c084fc", accentAlt:"#818cf8"},
   rose:     {name:"Rose",     accent:"#fda4af", accentAlt:"#f9a8d4"},
@@ -748,25 +308,6 @@ function fireConfetti(){
     const x=(Math.random()-0.5)*640, y=280+Math.random()*340, rot=Math.random()*720;
     d.animate([{transform:"translate(-50%,0) rotate(0)",opacity:1},{transform:`translate(calc(-50% + ${x}px),${y}px) rotate(${rot}deg)`,opacity:0}],{duration:1100+Math.random()*800,easing:"cubic-bezier(.2,.6,.3,1)"}).onfinish=()=>d.remove();
   }
-}
-
-// Next due date for a recurring task.
-function nextDue(due, rec){
-  const base = due ? new Date(due+"T12:00:00") : new Date();
-  if(rec==="daily") base.setDate(base.getDate()+1);
-  else if(rec==="weekly") base.setDate(base.getDate()+7);
-  else if(rec==="monthly") base.setMonth(base.getMonth()+1);
-  else if(rec==="yearly") base.setFullYear(base.getFullYear()+1);
-  else if(rec && rec.startsWith("custom:")){
-    const [,nStr,unit]=rec.split(":"); const n=Math.max(1,parseInt(nStr)||1);
-    if(unit==="days") base.setDate(base.getDate()+n);
-    else if(unit==="weeks") base.setDate(base.getDate()+7*n);
-    else if(unit==="months") base.setMonth(base.getMonth()+n);
-    else if(unit==="years") base.setFullYear(base.getFullYear()+n);
-    else return null;
-  }
-  else return null;
-  return ymd(base);
 }
 
 // Joyful little major-arpeggio chime via Web Audio (no asset). (#29)
@@ -818,8 +359,6 @@ export default function Freely() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const isLoadingData = useRef(false);
-  const syncTimers = useRef({});
   const [tasks, setTasks] = useState([]);
   const [ownedShares, setOwnedShares] = useState([]);
   const [sharedWithMe, setSharedWithMe] = useState([]);
@@ -828,6 +367,10 @@ export default function Freely() {
   const [canvasNotes, setCanvasNotes] = useState([]);
   const [notes, setNotes] = useState([]);
   const [habits, setHabits] = useState([]);
+  // My Day for tasks in other people's lists. Their row belongs to them, so your "in My Day" can't be
+  // written onto it — it lives here instead (and syncs with your preferences): {date, ids, at}.
+  const [mydayExtra,setMydayExtra]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_myday_extra")||"null")||{date:"",ids:[],at:0}; }catch{ return {date:"",ids:[],at:0}; } });
+  useEffect(()=>{ try{ localStorage.setItem("fs_myday_extra",JSON.stringify(mydayExtra)); }catch{} },[mydayExtra]);
   // Real per-day completion counts (fuels Analytics' weekly bars + heatmap). Device-local, capped at ~70 days.
   const [dayStats,setDayStats]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_daystats")||"{}"); }catch{ return {}; } });
   const bumpStat=delta=>setDayStats(s=>{ const d=tod(); const n={...s,[d]:Math.max(0,(s[d]||0)+delta)}; const ks=Object.keys(n).sort(); while(ks.length>70) delete n[ks.shift()]; try{localStorage.setItem("fs_daystats",JSON.stringify(n));}catch{} return n; });
@@ -841,8 +384,6 @@ export default function Freely() {
   const [zenOpen,setZenOpen]=useState(false); // full-screen focus overlay
   const [tourStep,setTourStep]=useState(()=>{ try{ return localStorage.getItem("fs_tour")?-1:0; }catch{ return -1; } }); // first-run welcome tour (-1 = done)
   const [tourDemo,setTourDemo]=useState("Dentist tomorrow 3pm");   // the tour's live "type it" box
-  const focusRef=useRef(null);
-  useEffect(()=>{ focusRef.current=focusTask; },[focusTask]);
   const [navOrg, setNavOrg] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_navorg")||"null"); }catch{ return null; } });
   const [hiddenTabs, setHiddenTabs] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_hidden_tabs")||"[]"); }catch{ return []; } });
   // Sidebar order + hidden tabs + sort choice ride along with the gamification row so every device agrees.
@@ -853,22 +394,19 @@ export default function Freely() {
   const [newAtBottom, setNewAtBottom] = useState(()=>localStorage.getItem("fs_new_bottom")!=="0");
   useEffect(()=>{ try{ localStorage.setItem("fs_new_bottom",newAtBottom?"1":"0"); }catch{} },[newAtBottom]);
   const prefsAtRef = useRef(Number(localStorage.getItem("fs_prefs_at")||0));
-  const prefsReadyRef = useRef(false);
   useEffect(()=>{ try{ localStorage.setItem("fs_hidden_tabs",JSON.stringify(hiddenTabs)); }catch{} },[hiddenTabs]);
   const [sGroups,setSGroups]=useState([]);   // teams I'm in (chat + manage): [{id,name,icon,created_by,members:[emails]}]
   const [allGroups,setAllGroups]=useState([]); // every team I can see — used so you can assign to a team you're not on
   const [chatReqs,setChatReqs]=useState([]); // chat requests involving me
   const [profRows,setProfRows]=useState([]); // profiles (id,email,avatar) — powers avatars + account lookups
   const [myAvatar,setMyAvatar]=useState(()=>{ try{ return localStorage.getItem("fs_avatar")||""; }catch{ return ""; } });
-  useEffect(()=>{ if(navOrg) try{ localStorage.setItem("fs_navorg",JSON.stringify(navOrg)); }catch{} },[navOrg]);
+  useEffect(()=>{ try{ navOrg?localStorage.setItem("fs_navorg",JSON.stringify(navOrg)):localStorage.removeItem("fs_navorg"); }catch{} },[navOrg]);
   const [cats, setCats] = useState(DEFAULT_CATS);
   // A phone has no room for a permanent sidebar: it starts closed there and opens OVER the
   // content as a drawer, the way every mobile app does it.
   const narrow = useNarrow();
   const [sideOpen, setSideOpen] = useState(()=> typeof window==="undefined" || window.innerWidth>=640);
   useEffect(()=>{ if(narrow) setSideOpen(false); },[narrow]);
-  const [defOpen, setDefOpen] = useState(true);
-  const [customOpen, setCustomOpen] = useState(true);
   const [selTask, setSelTask] = useState(null);
   const keepSelRef = useRef(false);
   const [input, setInput] = useState("");
@@ -889,28 +427,26 @@ export default function Freely() {
   const [pomSecs, setPomSecs] = useState(25*60);
   const [pomRun, setPomRun] = useState(false);
   const [pomLen, setPomLen] = useState(25);
-  const pomLenRef = useRef(25);
-  useEffect(()=>{ pomLenRef.current=pomLen; },[pomLen]);
   const cyclePom = ()=>{ if(pomRun) return; const opts=[5,15,25,30,45,50]; let i=opts.indexOf(pomLen); if(i<0)i=2; const m=opts[(i+1)%opts.length]; setPomLen(m); setPomSecs(m*60); };
-  const pomRef = useRef(null);
   const inputRef = useRef(null);
-
-  useEffect(() => {
-    if (pomRun) pomRef.current = setInterval(()=>setPomSecs(t=>{
-      if(t<=1){
-        clearInterval(pomRef.current); setPomRun(false);
-        // Session finished → celebrate + reward (+25 XP), and release the focused task.
-        try{ navigator.vibrate?.([60,60,60]); playComplete(localStorage.getItem("fs_sound2")||"soft"); }catch{}
-        awardXp(null,25);
-        showToast(focusRef.current?`🍅 Focus session done: "${focusRef.current.title}" · +25 XP`:"🍅 Pomodoro complete! +25 XP");
-        setFocusTask(null);
-        return pomLenRef.current*60;
-      }
-      return t-1;
-    }),1000);
-    else clearInterval(pomRef.current);
-    return ()=>clearInterval(pomRef.current);
+  // The countdown reads the clock rather than counting ticks: phones throttle timers while the screen is
+  // locked, and a tick counter stretched a 25-minute session to however long the phone slept.
+  const pomEndRef = useRef(0);
+  useEffect(()=>{
+    if(!pomRun) return;
+    pomEndRef.current=Date.now()+pomSecs*1000;
+    const iv=setInterval(()=>setPomSecs(Math.max(0,Math.round((pomEndRef.current-Date.now())/1000))),500);
+    return ()=>clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[pomRun]);
+  useEffect(()=>{
+    if(!pomRun||pomSecs>0) return;
+    setPomRun(false); setPomSecs(pomLen*60);
+    navigator.vibrate?.([60,60,60]); playComplete(sound); awardXp(null,25);
+    showToast(focusTask?`🍅 Focus session done: "${focusTask.title}" · +25 XP`:"🍅 Pomodoro complete! +25 XP");
+    setFocusTask(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[pomSecs,pomRun]);
 
   useEffect(()=>{
     const fn=e=>{
@@ -922,46 +458,123 @@ export default function Freely() {
   },[]);
 
   useEffect(()=>{
-    supabase.auth.getSession().then(({data:{session}})=>{setUser(session?.user??null);setAuthLoading(false);});
+    supabase.auth.getSession()
+      .then(({data:{session}})=>setUser(session?.user??null))
+      .catch(()=>{})                          // offline start: show sign-in rather than "Loading…" forever
+      .finally(()=>setAuthLoading(false));
     const {data:{subscription}}=supabase.auth.onAuthStateChange((_,session)=>setUser(session?.user??null));
     return ()=>subscription.unsubscribe();
   },[]);
 
+  // ── Loading and saving ────────────────────────────────────────────────────────────────────────────
+  // Tasks save the moment they change and arrive live from other devices. Notes, the canvas, habits and
+  // lists save a moment after you stop editing, as a DIFF against `syncedRef` — the copy this device last
+  // loaded or saved (see syncRows in db.js). null there means "not loaded yet", which is what stops a
+  // half-loaded app from ever writing. There is no loading flag that can get stuck.
+  const userRef=useRef(null); userRef.current=user;
+  const syncedRef=useRef({notes:null,canvas:null,habits:null,cats:null});
+  const tasksLoadedRef=useRef(false);   // the task list has arrived at least once since sign-in
+  const latestRef=useRef({}); latestRef.current={notes,canvas:canvasNotes,habits,cats};
+  const saveTimerRef=useRef({}), saveChainRef=useRef({}), saveErrAtRef=useRef(0), reloadTimerRef=useRef(null);
+  const SAVERS={notes:db.syncNotes,canvas:db.syncCanvas,habits:db.syncHabits,cats:db.syncCats};
+  const runSave=name=>{
+    clearTimeout(saveTimerRef.current[name]); saveTimerRef.current[name]=null;
+    const job=(saveChainRef.current[name]||Promise.resolve()).then(async()=>{
+      const prev=syncedRef.current[name], next=latestRef.current[name], uid=userRef.current?.id;
+      if(!uid||prev==null||prev===next) return;
+      try{ await SAVERS[name](prev,next,uid); if(syncedRef.current[name]===prev) syncedRef.current[name]=next; }
+      catch(e){
+        console.error(`saving ${name} failed`,e);
+        if(Date.now()-saveErrAtRef.current>30000){ saveErrAtRef.current=Date.now(); showToast("Couldn't save your latest changes — Freely will keep retrying."); }
+        saveTimerRef.current[name]=setTimeout(()=>runSave(name),15000);
+      }
+    });
+    saveChainRef.current[name]=job;
+    return job;
+  };
+  const scheduleSave=name=>{ if(syncedRef.current[name]==null) return; clearTimeout(saveTimerRef.current[name]); saveTimerRef.current[name]=setTimeout(()=>runSave(name),1200); };
+  useEffect(()=>{ scheduleSave("notes"); },[notes]);
+  useEffect(()=>{ scheduleSave("canvas"); },[canvasNotes]);
+  useEffect(()=>{ scheduleSave("habits"); },[habits]);
+  useEffect(()=>{ scheduleSave("cats"); },[cats]);
+  // Everything waiting to save goes now; anything already saving finishes first.
+  const flushSaves=()=>Promise.all(Object.keys(SAVERS).map(n=>saveTimerRef.current[n]?runSave(n):(saveChainRef.current[n]||Promise.resolve())));
+  // Combine a fresh load with what's on screen. If nothing was touched here since the load began, the
+  // server's copy is simply shown. Otherwise: this device's edits win, rows that only exist on the server
+  // (added on another device) are kept, and rows deleted here stay deleted.
+  const mergeLoaded=(start,local,server)=>{
+    if(local===start) return server;
+    if(Array.isArray(server)){ const had=new Set((start||[]).map(x=>String(x.id))), mine=new Set(local.map(x=>String(x.id)));
+      return [...local,...server.filter(x=>!mine.has(String(x.id))&&!had.has(String(x.id)))]; }
+    const out={...local}; for(const k of Object.keys(server)) if(!(k in local)&&!(start&&k in start)) out[k]=server[k]; return out;
+  };
+  const loadAll=async initial=>{
+    const u=userRef.current; if(!u) return;
+    clearTimeout(reloadTimerRef.current);
+    if(!initial) await flushSaves();
+    const start={...latestRef.current};
+    if(initial) setSyncing(true);
+    const [t,c,n,h,k,os,sm]=await Promise.allSettled([db.loadTasks(),db.loadCanvas(u.id),db.loadNotes(u.id),db.loadHabits(u.id),db.loadCats(u.id),db.loadOwnedShares(u.id),db.loadSharedWithMe(u.email)]);
+    if(initial) setSyncing(false);
+    if(userRef.current?.id!==u.id) return;          // signed out or switched accounts meanwhile
+    const ok=r=>r.status==="fulfilled";
+    if(ok(t)){
+      let list=t.value;
+      // A brand-new account gets the starter tasks — once, on its first day. Not on every new device an
+      // existing account signs in on, just because it happens to have no tasks.
+      const newAccount=u.created_at&&Date.now()-new Date(u.created_at).getTime()<86400000;
+      if(initial&&!list.length&&newAccount){ try{ if(!localStorage.getItem("fs_seed_"+u.id)){ localStorage.setItem("fs_seed_"+u.id,"1"); list=sampleTasks(u.id); list.forEach(s=>db.insertTask(s,u.id).catch(()=>{})); } }catch{} }
+      setTasks(list); tasksLoadedRef.current=true;
+    }
+    const adopt=(name,res,set)=>{
+      if(!ok(res)) return;
+      const cur=latestRef.current[name];
+      const server=name==="cats"?(res.value||{}):res.value;
+      let shown=mergeLoaded(start[name],cur,server);
+      if(name==="cats"&&!res.value&&cur===start[name]) shown=DEFAULT_CATS;   // no lists saved yet → the built-in ones, written by the next save
+      syncedRef.current[name]=server;
+      set(shown);
+      if(shown!==server) scheduleSave(name);
+    };
+    adopt("canvas",c,setCanvasNotes); adopt("notes",n,setNotes); adopt("habits",h,setHabits); adopt("cats",k,setCats);
+    if(ok(os)) setOwnedShares(os.value);
+    if(ok(sm)) setSharedWithMe(dropLeftShares(sm.value));
+    if([t,c,n,h,k].some(r=>!ok(r))){
+      showToast("Couldn't load everything — retrying in a moment…");
+      reloadTimerRef.current=setTimeout(()=>loadAll(false),10000);
+    }
+  };
+
   useEffect(()=>{
+    syncedRef.current={notes:null,canvas:null,habits:null,cats:null}; tasksLoadedRef.current=false;
     if(!user){setTasks([]);setCanvasNotes([]);setNotes([]);setHabits([]);setCats(DEFAULT_CATS);setOwnedShares([]);setSharedWithMe([]);setMessages([]);setSGroups([]);setChatReqs([]);return;}
-    isLoadingData.current=true; setSyncing(true);
-    db.loadHabits(user.id).then(setHabits).catch(()=>{});
     db.loadMessages().then(setMessages).catch(()=>{});
     db.loadChatReqs(user.email).then(setChatReqs).catch(()=>{});
     db.loadProfiles().then(rows=>{ setProfRows(rows); try{ localStorage.setItem("fs_avatars",JSON.stringify(Object.fromEntries(rows.map(r=>[r.email,r.avatar||""])))); }catch{} }).catch(()=>{});
     db.upsertProfile(user.id,user.email,myAvatar||undefined).catch(()=>{});
     refreshGroups();
-    Promise.all([db.loadTasks(),db.loadCanvas(user.id),db.loadNotes(user.id),db.loadCats(user.id),db.loadOwnedShares(user.id),db.loadSharedWithMe(user.email)])
-      .then(([t,c,n,cats,os,sm])=>{
-        setTasks(t); setCanvasNotes(c); setNotes(n);
-        // Brand-new account (no tasks anywhere, never seeded on this device) → drop in the starter tour tasks.
-        try{
-          if(t.length===0 && !localStorage.getItem("fs_seed_"+user.id)){
-            localStorage.setItem("fs_seed_"+user.id,"1");
-            const seeds=sampleTasks(user.id);
-            setTasks(seeds);
-            seeds.forEach(s=>db.insertTask(s,user.id).catch(()=>{}));
-          }
-        }catch{}
-        if(cats) setCats(cats);
-        setOwnedShares(os);
-        try{ const left=JSON.parse(localStorage.getItem("fs_left_shares")||"[]"); setSharedWithMe(sm.filter(x=>!left.includes(x.id))); }catch{ setSharedWithMe(sm); }
-        setSyncing(false);
-        setTimeout(()=>{isLoadingData.current=false;},200);
-      }).catch(()=>setSyncing(false));
+    loadAll(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[user]);
+
+  // Leaving the app saves anything pending at once; coming back picks up what other devices changed.
+  useEffect(()=>{
+    if(!user) return;
+    const onVis=()=>{ syncGami(); if(document.hidden) flushSaves(); else loadAll(false); };
+    const onHide=()=>{ flushSaves(); syncGami(); };
+    document.addEventListener("visibilitychange",onVis); window.addEventListener("pagehide",onHide);
+    return ()=>{ document.removeEventListener("visibilitychange",onVis); window.removeEventListener("pagehide",onHide); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[user]);
 
   useEffect(()=>{ if(keepSelRef.current){ keepSelRef.current=false; return; } setSelTask(null); },[view]);
-  // If the user hides the tab they're currently on, fall back to My Day.
   // Opening tab: the first one in your own sidebar order (see the effect further down, which needs
   // the sidebar list to exist first). Once you pick a tab yourself, Freely stops moving under you.
   const viewPickedRef = useRef(false);
-  const goView=v=>{ viewPickedRef.current=true; setView(v); setSideOpen(false); };
+  // Going somewhere from the palette, the calendar, a note… is your choice too — otherwise the
+  // "open on your first tab" rule would snap straight back to that tab.
+  const navTo=v=>{ viewPickedRef.current=true; setView(v); };
+  const goView=v=>{ navTo(v); setSideOpen(false); };
 
   // Swipe anywhere on the sidebar itself: drag right = open, drag left = collapse.
   // The rail is always visible (60px), so it's always grabbable — no fiddly screen-edge needed.
@@ -988,7 +601,7 @@ export default function Freely() {
     await db.removeShare(s.id).catch(()=>{}); // may be blocked for non-owners — the local leave below still applies
     try{ const left=JSON.parse(localStorage.getItem("fs_left_shares")||"[]"); localStorage.setItem("fs_left_shares",JSON.stringify([...new Set([...left,s.id])])); }catch{}
     setSharedWithMe(sm=>sm.filter(x=>x.id!==s.id));
-    if(view===`shared:${ownerId}:${folder}`) setView("myday");
+    if(view===`shared:${ownerId}:${folder}`) navTo("myday");
     showToast(`You left "${folder}" 👋`);
   };
   const refreshGroups=useCallback(()=>{
@@ -1005,11 +618,6 @@ export default function Freely() {
       .catch(()=>{});
   },[user]);
 
-  useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.c);syncTimers.current.c=setTimeout(()=>db.syncCanvas(canvasNotes,user.id).catch(console.error),1500);},[canvasNotes]);
-  useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.n);syncTimers.current.n=setTimeout(()=>db.syncNotes(notes,user.id).catch(console.error),1500);},[notes]);
-  useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.h);syncTimers.current.h=setTimeout(()=>db.syncHabits(habits,user.id).catch(console.error),1500);},[habits]);
-  useEffect(()=>{if(!user||isLoadingData.current)return;clearTimeout(syncTimers.current.k);syncTimers.current.k=setTimeout(()=>db.syncCats(cats,user.id).catch(console.error),1500);},[cats]);
-
   useEffect(()=>{
     if(!user) return;
     // No user_id filter — RLS limits delivery to rows we can see (own + shared), so shared edits arrive live both ways.
@@ -1025,79 +633,51 @@ export default function Freely() {
       .on("postgres_changes",{event:"*",schema:"public",table:"groups"},()=>{ refreshGroups(); })
       .on("postgres_changes",{event:"*",schema:"public",table:"chat_requests"},()=>{ db.loadChatReqs(user.email).then(setChatReqs).catch(()=>{}); })
       .subscribe();
-    const onVisible=()=>{
-      if(!document.hidden){
-        isLoadingData.current=true;
-        Promise.all([db.loadTasks(),db.loadCanvas(user.id),db.loadNotes(user.id)])
-          .then(([t,c,n])=>{setTasks(t);setCanvasNotes(c);setNotes(n);setTimeout(()=>{isLoadingData.current=false;},200);});
-        db.loadGami(user.id).then(adoptPrefs).catch(()=>{}); // pick up a sidebar re-order made on another device
-      }
-    };
-    document.addEventListener("visibilitychange",onVisible);
-    return ()=>{supabase.removeChannel(ch);document.removeEventListener("visibilitychange",onVisible);};
+    return ()=>{ supabase.removeChannel(ch); };
   },[user]);
 
-  useEffect(()=>{
-    if(!user){ setXp(0); setStreak(0); awardedRef.current=new Set(); lastActiveRef.current=null; return; }
-    let cancelled=false;
-    (async()=>{
-      let g=null;
-      try{ g=await db.loadGami(user.id); }catch{}
-      if(!g){ // migrate any older device-local data, then it'll save to the DB
-        try{ const raw=localStorage.getItem(`fs_gami_${user.id}`); if(raw){ const l=JSON.parse(raw); g={xp:l.xp,streak:l.streak,last_active:l.lastActive,awarded:l.awarded}; } }catch{}
+  // ── XP, streak and preferences, synced between devices (the merge rules: mergeGami in logic.js) ──────
+  const xpBaseRef=useRef(0);   // XP as last agreed with the server — anything above it was earned on this device since
+  const gamiChainRef=useRef(Promise.resolve()), gamiTimerRef=useRef(null);
+  const layout={navOrg,hiddenTabs,sort:sortMode,newAtBottom,dark,scheme};
+  const layoutJson=JSON.stringify(layout);
+  // The layout's `at` moves only when you change the layout HERE — never when another device's layout is
+  // adopted, and never because a task was ticked. That is what stops a phone left open all day from
+  // overwriting the sidebar you just rearranged on your laptop.
+  const layoutSeenRef=useRef(layoutJson);
+  useEffect(()=>{ if(layoutJson===layoutSeenRef.current) return; layoutSeenRef.current=layoutJson; prefsAtRef.current=Date.now(); try{ localStorage.setItem("fs_prefs_at",String(prefsAtRef.current)); }catch{} },[layoutJson]);
+  const gamiLocalRef=useRef(null); gamiLocalRef.current={xp,streak,layout,dayStats,myday:mydayExtra};
+  const syncGami=useCallback(()=>{
+    clearTimeout(gamiTimerRef.current);
+    gamiChainRef.current=gamiChainRef.current.then(async()=>{
+      const u=userRef.current; if(!u) return;
+      const server=await db.loadGami(u.id);
+      const L=gamiLocalRef.current;
+      const m=mergeGami(server,{...L,lastActive:lastActiveRef.current,awarded:[...awardedRef.current],at:prefsAtRef.current,device:DEVICE_ID},xpBaseRef.current,tod());
+      if(gamiRowDiffers(server,m)) await db.saveGami(u.id,m);
+      if(userRef.current?.id!==u.id) return;
+      // Take the merged result. XP earned while this round-trip was in flight stays on top of it.
+      xpBaseRef.current=m.xp; setXp(x=>m.xp+Math.max(0,x-L.xp));
+      m.awarded.forEach(a=>awardedRef.current.add(a));
+      if((m.last_active||"")>=(lastActiveRef.current||"")){ lastActiveRef.current=m.last_active; setStreak(m.last_active===tod()||m.last_active===addDays(-1)?m.streak:0); }
+      if(m.serverLayoutNewer){
+        const p=m.prefs, next={navOrg:p.navOrg??null,hiddenTabs:Array.isArray(p.hiddenTabs)?p.hiddenTabs:[],sort:p.sort==="smart"?"manual":(p.sort||"due"),newAtBottom:p.newAtBottom!==false,dark:p.dark!==false,scheme:PALETTES[p.scheme]?p.scheme:"lavender"};
+        layoutSeenRef.current=JSON.stringify(next); prefsAtRef.current=p.at; try{ localStorage.setItem("fs_prefs_at",String(p.at)); }catch{}
+        setNavOrg(next.navOrg); setHiddenTabs(next.hiddenTabs); setSortMode(next.sort); setNewAtBottom(next.newAtBottom); setDark(next.dark); setScheme(next.scheme);
       }
-      g=g||{xp:0,streak:0,last_active:null,awarded:[]};
-      if(cancelled) return;
-      awardedRef.current=new Set(g.awarded||[]);
-      lastActiveRef.current=g.last_active||null;
-      const yest=addDays(-1);
-      let st=g.streak||0;
-      if(g.last_active && g.last_active!==tod() && g.last_active!==yest) st=0;
-      setStreak(st); setXp(g.xp||0);
-      adoptPrefs(g);
-    })();
-    return ()=>{cancelled=true;};
-  },[user]);
-
-  // Take the server's sidebar order / hidden tabs / sort when they were saved more recently than this device's.
-  const adoptPrefs=useCallback(g=>{
-    const p=g&&g.prefs;
-    if(!p||typeof p!=="object") return;
-    // Other devices' completion counts merge regardless of which prefs are newer: each device owns its
-    // own map, and a count only ever goes up, so the union of the largest values is always right.
-    if(p.stats&&typeof p.stats==="object"){
-      setRemoteStats(cur=>{ const n={...cur};
-        Object.entries(p.stats).forEach(([dev,m])=>{ if(dev===DEVICE_ID||!m||typeof m!=="object") return; const mine={...(n[dev]||{})}; Object.entries(m).forEach(([d,c])=>{ mine[d]=Math.max(mine[d]||0,c||0); }); n[dev]=mine; });
-        try{ localStorage.setItem("fs_stats_remote",JSON.stringify(n)); }catch{} return n; });
-    }
-    if(!((p.at||0)>prefsAtRef.current)) return;
-    prefsAtRef.current=p.at; try{ localStorage.setItem("fs_prefs_at",String(p.at)); }catch{}
-    if(p.navOrg!==undefined) setNavOrg(p.navOrg);
-    if(Array.isArray(p.hiddenTabs)) setHiddenTabs(p.hiddenTabs);
-    if(p.sort) setSortMode(p.sort==="smart"?"manual":p.sort);
-    if(typeof p.newAtBottom==="boolean") setNewAtBottom(p.newAtBottom);
-    if(typeof p.dark==="boolean") setDark(p.dark);
-    if(typeof p.scheme==="string"&&PALETTES[p.scheme]) setScheme(p.scheme);
-  },[]);
-
-  useEffect(()=>{
-    if(!user) return;
-    const t=setTimeout(()=>{ db.saveGami(user.id,{xp,streak,lastActive:lastActiveRef.current,awarded:[...awardedRef.current]}).catch(()=>{}); },1200);
-    return ()=>clearTimeout(t);
-  },[xp,streak,user]);
-
-  // Push layout prefs up whenever they change here (skipping the first run, which is just the load).
-  useEffect(()=>{ prefsReadyRef.current=false; },[user]);
-  useEffect(()=>{
-    if(!user) return;
-    if(!prefsReadyRef.current){ prefsReadyRef.current=true; return; }
-    const t=setTimeout(()=>{
-      const at=Date.now(); prefsAtRef.current=at; try{ localStorage.setItem("fs_prefs_at",String(at)); }catch{}
-      db.saveGami(user.id,{xp,streak,lastActive:lastActiveRef.current,awarded:[...awardedRef.current],prefs:{navOrg,hiddenTabs,sort:sortMode,newAtBottom,dark,scheme,stats:{...remoteStats,[DEVICE_ID]:dayStats},at}}).catch(()=>{});
-    },900);
-    return ()=>clearTimeout(t);
+      const others={...m.prefs.stats}; delete others[DEVICE_ID];
+      setRemoteStats(others); try{ localStorage.setItem("fs_stats_remote",JSON.stringify(others)); }catch{}
+      if(m.prefs.myday&&JSON.stringify(m.prefs.myday)!==JSON.stringify(L.myday)) setMydayExtra(m.prefs.myday);
+    }).catch(e=>console.error("syncing XP / preferences failed",e));
+    return gamiChainRef.current;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[navOrg,hiddenTabs,sortMode,newAtBottom,dark,scheme,dayStats,user]);
+  },[]);
+  const gamiSig=JSON.stringify([xp,streak,layoutJson,dayStats,mydayExtra]);
+  useEffect(()=>{ if(!user) return; clearTimeout(gamiTimerRef.current); gamiTimerRef.current=setTimeout(syncGami,1500); return ()=>clearTimeout(gamiTimerRef.current); },[gamiSig,user,syncGami]);
+  useEffect(()=>{
+    if(user){ syncGami(); return; }
+    setXp(0); setStreak(0); awardedRef.current=new Set(); lastActiveRef.current=null; xpBaseRef.current=0;
+  },[user,syncGami]);
 
   const markActiveDay = useCallback(()=>{
     const today=tod();
@@ -1113,59 +693,79 @@ export default function Freely() {
     setXp(x=>x+amount);
   },[]);
 
-  const addTask = useCallback(()=>{
-    if (!input.trim()) return;
-    let {title,due:parsed,time,endTime,spanEnd,extra,recurring}=parseNL(input);
-    let due=parsed||null;
-    if(time && !due) due=tod();
-    // Upcoming with no date typed → file it as "Date TBD" instead of silently guessing tomorrow.
-    if(view==="upcoming" && !due) due=DUE_TBD;
-    const remindAt=(time && due && !isTbd(due))?`${due}T${time}`:null;
-    const inCat=view.startsWith("cat:")?view.slice(4):null;
-    let ownerId=user?.id, tagForTask=inCat;
-    if(!tagForTask){
-      const hit=matchListName(title,cats);
-      if(hit){ tagForTask=hit; title=stripListName(title,hit); } // "writing essay" → "essay", filed in Writing
-      else tagForTask=guessCat(title,cats);
+  // ── Creating tasks ────────────────────────────────────────────────────────────────────────────────
+  // Every new task is built and saved here, so defaults, placement and failure handling can't drift apart
+  // between the different add boxes (list, matrix, calendar, canvas, repeats, duplicates).
+  const newTask=fields=>{
+    const open=tasks.filter(x=>!x.done).map(x=>x.position||0);
+    return {id:crypto.randomUUID(),title:"",done:false,priority:"medium",tag:null,due:null,starred:false,notes:"",color:null,
+      subtasks:[],recurring:null,quadrant:null,remindAt:null,endTime:null,attachments:[],assignedTo:null,assignPrivate:false,
+      owner:user?.id,mydayDate:null,position:(newAtBottom&&open.length)?Math.min(...open)-1000:Date.now(),...fields};
+  };
+  const createTask=(t,{xp=true}={})=>{
+    setTasks(ts=>[t,...ts]); if(xp) awardXp("add-"+t.id,10);
+    if(user) db.insertTask(t,t.owner||user.id).catch(e=>{ setTasks(ts=>ts.filter(x=>x.id!==t.id)); showToast(`Couldn't save "${t.title}" — ${e.message||e}`); });
+    return t;
+  };
+  // "writing essay" → the task "essay" in your Writing list; otherwise the list is guessed from the words.
+  const fileUnder=title=>{ const hit=matchListName(title,cats); return hit?{tag:hit,title:stripListName(title,hit)}:{tag:guessCat(title,cats),title}; };
+  // A typed sentence → a task. The date, time, repeat and list come out of the words; `over` pins any of
+  // them from context — the calendar day you tapped, the list you're in, the matrix box.
+  const taskFromText=(raw,over={})=>{
+    const p=parseNL(raw);
+    const due=over.due!==undefined?over.due:(p.due||(p.time?tod():null));
+    const filed=over.tag?{tag:over.tag,title:p.title}:fileUnder(p.title);
+    return newTask({...filed,recurring:p.recurring||null,remindAt:p.time&&due&&!isTbd(due)?`${due}T${p.time}`:null,endTime:p.time?(p.endTime||null):null,...over,due});
+  };
+  const addTask=()=>{
+    const raw=input.trim(); if(!raw) return;
+    const p=parseNL(raw), over={starred:view==="flagged",mydayDate:view==="myday"?todStr:null};
+    if(view.startsWith("cat:")) over.tag=view.slice(4);
+    if(view.startsWith("shared:")){
+      const rest=view.slice(7),ci=rest.indexOf(":"); over.owner=rest.slice(0,ci); over.tag=rest.slice(ci+1);
+      const sh=sharedWithMe.find(x=>x.owner_id===over.owner&&x.folder===over.tag);
+      if(sh&&sh.can_edit===false){ showToast("View only — ask the owner for edit access 👀"); return; }
     }
-    if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"); ownerId=rest.slice(0,ci); tagForTask=rest.slice(ci+1);
-      const sh=sharedWithMe.find(x=>x.owner_id===ownerId&&x.folder===tagForTask); if(sh&&sh.can_edit===false){ showToast("View only — ask the owner for edit access 👀"); return; } }
-    // A pasted blurb can carry a multi-day span and extra fields (Location, Cost…) — keep them on the task's notes.
+    if(view==="upcoming"&&!p.due&&!p.time) over.due=DUE_TBD;   // Upcoming with no date typed → Date TBD, not a silent guess
+    // A pasted blurb can carry a multi-day span and extra fields (Location, Cost…) — they go on the notes.
     const abs=s=>new Date(s+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"});
-    const notes=[spanEnd&&due?`📅 Runs ${abs(due)} → ${abs(spanEnd)}`:"",extra||""].filter(Boolean).join("\n");
-    // Cards are ordered by `position`, highest first — so "add to the bottom" means going below the current lowest.
-    const openPos=tasks.filter(x=>!x.done).map(x=>x.position||0);
-    const position=(newAtBottom&&openPos.length)?Math.min(...openPos)-1000:Date.now();
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:tagForTask,due,starred:view==="flagged",notes,color:null,subtasks:[],recurring:recurring||null,quadrant:null,remindAt,endTime:(time&&endTime)?endTime:null,attachments:[],owner:ownerId,position,mydayDate:view==="myday"?todStr:null};
-    setTasks(ts=>[t,...ts]);
-    setInput(""); awardXp("add-"+t.id,10); setNewAnim(t.id);
+    over.notes=[p.spanEnd&&p.due?`📅 Runs ${abs(p.due)} → ${abs(p.spanEnd)}`:"",p.extra||""].filter(Boolean).join("\n");
+    const t=createTask(taskFromText(raw,over));
+    setInput(""); setNewAnim(t.id); setTimeout(()=>setNewAnim(null),600);
     if(view==="myday") markActiveDay();
-    setTimeout(()=>setNewAnim(null),600);
-    if(user) db.insertTask(t,ownerId).catch(e=>{ setTasks(ts=>ts.filter(x=>x.id!==t.id)); showToast("Couldn't save task — database needs the latest SQL. ("+(e.message||e)+")"); });
-  // (todStr is declared further down; it is read inside the callback, never in these deps)
-  },[input,view,user,cats,awardXp,markActiveDay,tasks,newAtBottom]);
+  };
 
+  // Analytics counts a completion on the day it happens. Unticking takes it back only if it was ticked
+  // today on this device — unticking something finished last week must not lower today's count.
+  const doneTodayRef=useRef(null);
+  const countCompletion=(id,done)=>{
+    const today=tod();
+    if(doneTodayRef.current?.date!==today){ try{ const s=JSON.parse(localStorage.getItem("fs_done_today")||"null"); doneTodayRef.current=s&&s.date===today&&Array.isArray(s.ids)?s:{date:today,ids:[]}; }catch{ doneTodayRef.current={date:today,ids:[]}; } }
+    const d=doneTodayRef.current, had=d.ids.includes(id);
+    if(done&&!had){ d.ids.push(id); bumpStat(1); }
+    else if(!done&&had){ d.ids=d.ids.filter(x=>x!==id); bumpStat(-1); }
+    try{ localStorage.setItem("fs_done_today",JSON.stringify(d)); }catch{}
+  };
   const toggleTask = id=>{
     const task=tasks.find(t=>t.id===id);
     if(!task) return;
     if(!canEditTask(task)){ showToast("View only — ask the owner for edit access 👀"); return; }
-    const newDone=!task.done;
-    setTasks(ts=>ts.map(t=>t.id===id?{...t,done:newDone}:t));
-    bumpStat(newDone?1:-1);
-    if(newDone){
-      awardXp("done-"+id,20); markActiveDay(); navigator.vibrate?.(30); playComplete(sound);
-      if(task.recurring && !awardedRef.current.has("recur-"+id)){
-        awardedRef.current.add("recur-"+id);
-        const nd=nextDue(isTbd(task.due)?null:task.due,task.recurring);
-        if(nd){ // carry the reminder's time-of-day onto the next occurrence (weekly 6pm stays 6pm)
-          const oldTime=task.remindAt&&task.remindAt.includes("T")?task.remindAt.split("T")[1]:null;
-          const clone={...task,id:crypto.randomUUID(),done:false,due:nd,quadrant:task.quadrant||null,remindAt:oldTime?`${nd}T${oldTime}`:null,attachments:[],mydayDate:null,subtasks:(task.subtasks||[]).map(s=>({...s,done:false,due:null,time:null}))};
-          setTasks(ts=>[clone,...ts]); if(user) db.insertTask(clone,user.id).catch(console.error);
-          showToast(`↻ Next "${task.title}" scheduled for ${fmtDate(nd)}`);
-        }
+    const done=!task.done;
+    updateTask(id,{done});
+    countCompletion(id,done);
+    if(!done) return;
+    awardXp("done-"+id,20); markActiveDay(); navigator.vibrate?.(30); playComplete(sound);
+    // A repeating task spawns its next occurrence once, however often it's ticked and unticked — in the same
+    // list and under the same owner, so a repeat in a shared list stays in that list.
+    if(task.recurring && !awardedRef.current.has("recur-"+id)){
+      awardedRef.current.add("recur-"+id);
+      const nd=nextDue(isTbd(task.due)?null:task.due,task.recurring);
+      if(nd){
+        createTask({...task,id:crypto.randomUUID(),done:false,attachments:[],mydayDate:null,...moveDuePatch(task,nd),
+          subtasks:(task.subtasks||[]).map(s=>({...s,done:false,due:null,time:null}))},{xp:false});
+        showToast(`↻ Next "${task.title}" scheduled for ${fmtDate(nd)}`);
       }
     }
-    if(user) db.updateTask(id,{done:newDone}).catch(console.error);
   };
   const canDeleteTask=task=>{
     if(!task) return true;
@@ -1182,16 +782,23 @@ export default function Freely() {
     const sh=sharedWithMe.find(s=>s.owner_id===task.owner&&s.folder===task.tag);
     return !sh || sh.can_edit!==false;
   };
+  // Files leave storage only when their task is really gone: after the undo window, or at once for deletes
+  // that can't be undone. Before this, every deleted task left its attachments in storage forever.
+  const purgeFiles=list=>db.deleteAttachments(list.flatMap(t=>(t.attachments||[]).map(a=>a.path))).catch(()=>{});
   const deleteTask = id=>{
     const t=tasks.find(x=>x.id===id);
-    if(t&&!canDeleteTask(t)){ showToast("You don't have permission to delete this shared task"); return; }
+    if(!t) return;
+    if(!canDeleteTask(t)){ showToast("You don't have permission to delete this shared task"); return; }
     setTasks(ts=>ts.filter(x=>x.id!==id)); if(selTask?.id===id)setSelTask(null);
     if(user)db.deleteTask(id)
       .then(r=>{ if(r&&r.deleted===false) reportDroppedWrite("That task didn't delete — you may not have permission to remove it."); })
       .catch(console.error);
-    if(t) showToast("Task deleted", ()=>{ setTasks(ts=>[t,...ts]); if(user) db.insertTask(t,t.owner||user.id).catch(console.error); setToast(null); });
+    let undone=false;
+    const purge=setTimeout(()=>{ if(!undone&&user) purgeFiles([t]); },8000);
+    showToast("Task deleted", ()=>{ undone=true; clearTimeout(purge); setTasks(ts=>[t,...ts]); if(user) db.insertTask(t,t.owner||user.id).catch(console.error); setToast(null); });
   };
-  const duplicateTask = task=>{ const c={...task,id:crypto.randomUUID(),done:false,title:task.title+" (copy)",attachments:[]}; setTasks(ts=>[c,...ts]); if(user) db.insertTask(c,user.id).catch(console.error); showToast("Task duplicated"); };
+  // A copy stays in the same list and under the same owner — including in a list shared with you.
+  const duplicateTask = task=>{ createTask({...task,id:crypto.randomUUID(),done:false,title:task.title+" (copy)",attachments:[]},{xp:false}); showToast("Task duplicated"); };
   // Bring the starter tour tasks back from the guide. Skips any you still have, so tapping it
   // twice doesn't leave you with two of everything.
   const addSamplesAgain = ()=>{
@@ -1201,13 +808,29 @@ export default function Freely() {
     if(!seeds.length){ showToast("The starter tasks are already in your list ✓"); return; }
     setTasks(ts=>[...seeds,...ts]);
     seeds.forEach(s=>db.insertTask(s,user.id).catch(()=>{}));
-    viewPickedRef.current=true; setView("myday");
+    navTo("myday");
     showToast(`Added ${seeds.length} starter task${seeds.length===1?"":"s"} — delete them whenever you're done 👋`);
   };
-  const attachFile = async (task,file)=>{ if(!user) return; const meta=await db.uploadAttachment(file,user.id,task.id); updateTask(task.id,{attachments:[...(task.attachments||[]),meta]}); };
-  const removeAttach = async (task,att)=>{ await db.deleteAttachment(att.path).catch(()=>{}); updateTask(task.id,{attachments:(task.attachments||[]).filter(a=>a.path!==att.path)}); };
-  const setReminder = (id,val)=>{ remindedRef.current?.delete(id); updateTask(id,{remindAt:val||null}); if(val&&"Notification"in window&&Notification.permission==="default") Notification.requestPermission(); };
-  const uploadCatIcon = async file=>{ if(!user) return null; const m=await db.uploadAttachment(file,user.id,"icons"); return m.url; };
+  // Uploads go one after another, then the task is updated once from its LATEST attachment list — reading
+  // the list from before the uploads started made a second file silently replace the first.
+  const tasksRef=useRef(tasks); tasksRef.current=tasks;
+  const attachFiles=async(task,files)=>{
+    if(!user) return;
+    const metas=[];
+    try{ for(const f of files) metas.push(await db.uploadAttachment(f,user.id,task.id)); }
+    finally{ if(metas.length){ const cur=tasksRef.current.find(x=>x.id===task.id)||task; updateTask(task.id,{attachments:[...(cur.attachments||[]),...metas]}); } }
+  };
+  const removeAttach=(task,att)=>{
+    db.deleteAttachments([att.path]).catch(()=>{});
+    const cur=tasksRef.current.find(x=>x.id===task.id)||task;
+    updateTask(task.id,{attachments:(cur.attachments||[]).filter(a=>a.path!==att.path)});
+  };
+  const setReminder = (id,val)=>{ updateTask(id,{remindAt:val||null}); if(val&&"Notification"in window&&Notification.permission==="default") Notification.requestPermission(); };
+  const uploadCatIcon = async file=>{
+    if(!user) return null;
+    try{ return (await db.uploadAttachment(file,user.id,"icons")).url; }
+    catch(e){ showToast("Couldn't upload that image — "+(e.message||e)); return null; }
+  };
   useEffect(()=>{ if(!user){setDeletedCats([]);return;} try{ setDeletedCats(JSON.parse(localStorage.getItem(`fs_delcats_${user.id}`)||"[]")); }catch{ setDeletedCats([]); } },[user]);
   const persistDeleted=arr=>{ setDeletedCats(arr); if(user){ try{localStorage.setItem(`fs_delcats_${user.id}`,JSON.stringify(arr));}catch{} } };
   const deleteCat=name=>{ if(cats[name]) setDelCatModal(name); };
@@ -1215,30 +838,46 @@ export default function Freely() {
     const meta=cats[name]; setDelCatModal(null); if(!meta) return;
     setCats(c=>{ const n={...c}; delete n[name]; return n; });
     persistDeleted([{name,color:meta.color,icon:meta.icon},...deletedCats.filter(d=>d.name!==name)].slice(0,20));
-    if(view===`cat:${name}`) setView("all");
-    if(alsoTasks){ const ids=tasks.filter(t=>t.owner===user?.id&&t.tag===name).map(t=>t.id); if(ids.length){ setTasks(ts=>ts.filter(t=>!ids.includes(t.id))); if(user) ids.forEach(id=>db.deleteTask(id).catch(()=>{})); } showToast(`Deleted "${name}" and ${ids.length} task${ids.length===1?"":"s"}`); }
-    else showToast(`Folder "${name}" deleted — tasks kept`);
+    // Sharing ends with the list — otherwise collaborators are left holding an empty ghost of it.
+    if(user&&ownedShares.some(s=>s.folder===name)) db.removeSharesOfFolder(user.id,name).then(refreshShares).catch(()=>{});
+    if(view===`cat:${name}`) navTo("all");
+    if(alsoTasks){ const n=clearTasks(myTasks.filter(t=>t.tag===name)); showToast(`Deleted "${name}" and ${n} task${n===1?"":"s"}`); }
+    else showToast(`List "${name}" deleted — its tasks were kept`);
   };
   const restoreCat=name=>{ const d=deletedCats.find(x=>x.name===name); if(!d) return; setCats(c=>({...c,[name]:{color:d.color,icon:d.icon}})); persistDeleted(deletedCats.filter(x=>x.name!==name)); showToast(`Folder "${name}" restored`); };
   const purgeCat=name=>{ persistDeleted(deletedCats.filter(x=>x.name!==name)); };
-  const clearCompleted = ()=>{ const done=tasks.filter(t=>t.done); if(!done.length){showToast("No completed tasks");return;} setTasks(ts=>ts.filter(t=>!t.done)); if(user) done.forEach(t=>db.deleteTask(t.id).catch(()=>{})); showToast(`Cleared ${done.length} completed`); };
-  const clearDone = ids=>{ if(!ids||!ids.length)return; setTasks(ts=>ts.filter(t=>!ids.includes(t.id))); if(user) ids.forEach(id=>db.deleteTask(id).catch(()=>{})); showToast(`Cleared ${ids.length} completed`); };
+  // Deletes that can't be undone. Only tasks you may delete: "Clear completed" used to include tasks in
+  // lists shared with you, deleting other people's work without asking.
+  const clearTasks=list=>{
+    if(!list.length) return 0;
+    const ids=new Set(list.map(t=>t.id));
+    setTasks(ts=>ts.filter(t=>!ids.has(t.id)));
+    if(user){ list.forEach(t=>db.deleteTask(t.id).catch(()=>{})); purgeFiles(list); }
+    return list.length;
+  };
+  const clearCompleted=()=>{ const n=clearTasks(myTasks.filter(t=>t.done)); showToast(n?`Cleared ${n} completed`:"No completed tasks"); };
+  const clearDone=ids=>{ const n=clearTasks(tasks.filter(t=>ids?.includes(t.id)&&canDeleteTask(t))); if(n) showToast(`Cleared ${n} completed`); };
   const exportData = ()=>{
-    const data={app:"Freely",exportedAt:new Date().toISOString(),tasks,notes,cats,canvasNotes};
+    const data={app:"Freely",version:2,exportedAt:new Date().toISOString(),tasks:myTasks,notes,canvasNotes,habits,cats};
     const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="freely-backup.json"; a.click(); URL.revokeObjectURL(url);
     showToast("Backup downloaded");
   };
+  // Restoring adds what's missing and never overwrites. Imported rows become yours, with ids the database
+  // accepts (older backups carried numeric note ids).
   const importData = file=>{
     const reader=new FileReader();
     reader.onload=()=>{ try{
       const d=JSON.parse(reader.result);
-      if(Array.isArray(d.tasks)){ const have=new Set(tasks.map(t=>t.id)); const inc=d.tasks.filter(t=>!have.has(t.id)); setTasks(ts=>[...inc,...ts]); if(user) inc.forEach(t=>db.insertTask(t,user.id).catch(()=>{})); }
-      if(Array.isArray(d.notes)){ const have=new Set(notes.map(n=>n.id)); setNotes(ns=>[...d.notes.filter(n=>!have.has(n.id)),...ns]); }
-      if(Array.isArray(d.canvasNotes)){ const have=new Set(canvasNotes.map(n=>n.id)); setCanvasNotes(ns=>[...d.canvasNotes.filter(n=>!have.has(n.id)),...ns]); }
-      if(d.cats&&typeof d.cats==="object"){ setCats(c=>({...c,...d.cats})); }
-      showToast("Data imported ✓");
-    }catch{ showToast("Import failed — invalid file"); } };
+      const isUuid=id=>/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id));
+      const missing=(list,cur)=>{ const have=new Set(cur.map(x=>String(x.id))); return list.filter(x=>x&&!have.has(String(x.id))); };
+      if(Array.isArray(d.tasks)){ const inc=missing(d.tasks,tasks).filter(t=>isUuid(t.id)).map(t=>({...t,owner:user?.id})); setTasks(ts=>[...inc,...ts]); if(user) inc.forEach(t=>db.insertTask(t,user.id).catch(()=>{})); }
+      if(Array.isArray(d.notes)) setNotes(ns=>[...missing(d.notes,ns).map(n=>isUuid(n.id)?n:{...n,id:crypto.randomUUID()}),...ns]);
+      if(Array.isArray(d.canvasNotes)) setCanvasNotes(ns=>[...ns,...missing(d.canvasNotes,ns).map(n=>isUuid(n.id)?n:{...n,id:crypto.randomUUID()})]);
+      if(Array.isArray(d.habits)) setHabits(hs=>[...hs,...missing(d.habits,hs).map((h,i)=>Number.isSafeInteger(Number(h.id))?{...h,id:Number(h.id)}:{...h,id:Date.now()+i})]);
+      if(d.cats&&typeof d.cats==="object") setCats(c=>({...d.cats,...c}));
+      showToast("Backup imported ✓");
+    }catch{ showToast("Import failed — that isn't a Freely backup file"); } };
     reader.readAsText(file);
   };
   // Edits show instantly and reach the server a moment later. If the server refuses one it changes
@@ -1257,7 +896,9 @@ export default function Freely() {
     const cur=tasks.find(t=>t.id===id);
     if(cur&&!canEditTask(cur)){ showToast("View only — ask the owner for edit access 👀"); return; }
     setTasks(ts=>ts.map(t=>t.id===id?{...t,...patch}:t));
-    if(selTask?.id===id)setSelTask(s=>({...s,...patch}));
+    // Decide from the CURRENT selection, not this render's copy: an update that lands after the panel
+    // closed (a finished upload, a title flushed on close) used to reopen it with a half-empty ghost task.
+    setSelTask(s=>s&&s.id===id?{...s,...patch}:s);
     if(user)db.updateTask(id,patch)
       .then(r=>{ if(r&&r.saved===false) reportDroppedWrite("That change didn't save — you may not have permission to edit this shared task."); })
       .catch(console.error);
@@ -1274,8 +915,7 @@ export default function Freely() {
     let newPos;
     if(before){ const above=sorted[toIdx-1]; if(above&&above.id===fromT.id) return; newPos=above?((above.position||0)+(toT.position||0))/2:(toT.position||0)+1; }
     else { const below=sorted[toIdx+1]; if(below&&below.id===fromT.id) return; newPos=below?((toT.position||0)+(below.position||0))/2:(toT.position||0)-1; }
-    setTasks(ts=>ts.map(t=>t.id===fromT.id?{...t,position:newPos}:t));
-    if(user) db.updateTask(fromT.id,{position:newPos}).catch(console.error);
+    updateTask(fromT.id,{position:newPos});
   };
 
   // "Today" follows the device clock: re-checked on a timer and whenever the app regains focus, so crossing
@@ -1288,91 +928,99 @@ export default function Freely() {
     return ()=>{ clearInterval(iv); document.removeEventListener("visibilitychange",tick); window.removeEventListener("focus",tick); };
   },[]);
   const myTasks=tasks.filter(t=>t.owner===user?.id);
-  const myDay=myTasks.filter(t=>t.mydayDate===todStr);
+  // In My Day today? Your own tasks carry it on the task itself; other people's tasks can't (the row is
+  // theirs — writing it put your My Day into theirs), so those live in `mydayExtra`.
+  const inMyDay=t=>t.owner===user?.id?t.mydayDate===todStr:(mydayExtra.date===todStr&&mydayExtra.ids.includes(t.id));
+  const setInMyDay=(t,on)=>{
+    if(!t) return;
+    if(t.owner===user?.id){ updateTask(t.id,{mydayDate:on?todStr:null}); return; }
+    setMydayExtra(m=>{ const ids=m.date===todStr?m.ids.filter(x=>x!==t.id):[]; return {date:todStr,ids:on?[...ids,t.id]:ids,at:Date.now()}; });
+  };
+  const myDay=tasks.filter(inMyDay);
   // Upcoming keeps anything still open, however overdue — a past deadline must never make a task vanish.
   const upcoming=myTasks.filter(t=>t.due&&(!t.done||t.due>todStr));
-  const completed=myTasks.filter(t=>t.done);
-  const overdueTasks=myTasks.filter(t=>!t.done&&t.mydayDate&&t.mydayDate<todStr);
   const myDayAllDone=myDay.length>0&&myDay.every(t=>t.done);
   const prevMyDayDone=useRef(false);
   useEffect(()=>{ if(myDayAllDone&&!prevMyDayDone.current) fireConfetti(); prevMyDayDone.current=myDayAllDone; },[myDayAllDone]);
   // Shortlist that complements My Day: tasks worth pulling in today (overdue → due soon → the rest).
   const mydaySuggestions=myTasks
-    .filter(t=>!t.done && t.mydayDate!==todStr)
+    .filter(t=>!t.done && !inMyDay(t))
     .sort((a,b)=>{
       const ao=a.due&&a.due<todStr, bo=b.due&&b.due<todStr;
       if(ao!==bo) return ao?-1:1;
       if(a.due&&b.due) return dueKey(a).localeCompare(dueKey(b));
       if(a.due) return -1; if(b.due) return 1; return 0;
     }).slice(0,6);
-  const addToMyDay=id=>{ navigator.vibrate?.(10); updateTask(id,{mydayDate:todStr}); markActiveDay(); };
-  const didAutoCarryRef=useRef(false);
+  const addToMyDay=id=>{ navigator.vibrate?.(10); setInMyDay(tasks.find(x=>x.id===id),true); markActiveDay(); };
+  const toggleMyDay=id=>{ const t=tasks.find(x=>x.id===id); if(!t)return; const on=!inMyDay(t); navigator.vibrate?.(15); setInMyDay(t,on); if(on) markActiveDay(); };
+  // Unfinished My Day tasks from an earlier day move to today — once per day, including when the app stays
+  // open past midnight (it used to happen only once per session). The banner offers to undo it.
+  const carriedForRef=useRef("");
   const [carriedIds,setCarriedIds]=useState([]);
-  useEffect(()=>{ didAutoCarryRef.current=false; setCarriedIds([]); },[user]);
+  useEffect(()=>{ carriedForRef.current=""; setCarriedIds([]); },[user]);
   useEffect(()=>{
-    if(!user||didAutoCarryRef.current||!tasks.length) return;
-    didAutoCarryRef.current=true;
-    const leftovers=tasks.filter(t=>t.owner===user.id&&!t.done&&t.mydayDate&&t.mydayDate<todStr);
-    if(leftovers.length){ setCarriedIds(leftovers.map(t=>t.id)); leftovers.forEach(t=>updateTask(t.id,{mydayDate:todStr})); }
+    if(!user||!tasks.length||carriedForRef.current===todStr) return;
+    carriedForRef.current=todStr;
+    const own=tasks.filter(t=>t.owner===user.id&&!t.done&&t.mydayDate&&t.mydayDate<todStr);
+    own.forEach(t=>updateTask(t.id,{mydayDate:todStr}));
+    let others=[];
+    if(mydayExtra.date&&mydayExtra.date<todStr){ others=mydayExtra.ids.filter(id=>{ const t=tasks.find(x=>x.id===id); return t&&!t.done; }); setMydayExtra({date:todStr,ids:others,at:Date.now()}); }
+    const ids=[...own.map(t=>t.id),...others];
+    if(ids.length) setCarriedIds(ids);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[tasks,user]);
-  const undoCarry=()=>{ if(!carriedIds.length)return; navigator.vibrate?.(10); carriedIds.forEach(id=>updateTask(id,{mydayDate:null})); setCarriedIds([]); showToast("Carry-over undone"); };
+  },[tasks,user,todStr]);
+  const undoCarry=()=>{ if(!carriedIds.length)return; navigator.vibrate?.(10); carriedIds.forEach(id=>setInMyDay(tasks.find(x=>x.id===id),false)); setCarriedIds([]); showToast("Carry-over undone"); };
   const shareFolder=async(folder,email,perm)=>{ if(!user||!email.trim())return; try{ await db.addShare(user.id,folder,email,perm); refreshShares(); showToast(`Shared "${folder}" with ${email.trim()}`); }catch(e){ showToast("Share failed: "+(e.message||e)); } };
   const unshareFolder=async id=>{ await db.removeShare(id).catch(()=>{}); refreshShares(); showToast("Collaborator removed"); };
 
-  const remindedRef=useRef();
-  if(!remindedRef.current){ try{ remindedRef.current=new Set(JSON.parse(localStorage.getItem("fs_reminded")||"[]")); }catch{ remindedRef.current=new Set(); } }
+  // A reminder fires once, when its time comes, for work that's yours (owned, or assigned to you — not every
+  // task in lists shared with you). Remembered per task AND time, so moving a reminder re-arms it. One more
+  // than 30 minutes stale is marked handled quietly: a phone opened in the morning must not replay the
+  // night's reminders, and a new device must not replay a year of them.
+  const remindedRef=useRef(null);
+  if(!remindedRef.current){ try{ localStorage.removeItem("fs_reminded"); const r=JSON.parse(localStorage.getItem("fs_reminded2")||"{}"); remindedRef.current=r&&typeof r==="object"&&!Array.isArray(r)?r:{}; }catch{ remindedRef.current={}; } }
   useEffect(()=>{
+    if(!user||!tasksLoadedRef.current) return;   // before tasks load the list is empty — that must not read as "everything was deleted"
+    const me=user.email?.toLowerCase();
     const check=()=>{
-      const now=Date.now();
-      tasks.forEach(t=>{
-        if(t.remindAt && !t.done && !remindedRef.current.has(t.id) && new Date(t.remindAt).getTime()<=now){
-          remindedRef.current.add(t.id);
-          try{ localStorage.setItem("fs_reminded",JSON.stringify([...remindedRef.current])); }catch{}
-          navigator.vibrate?.([30,40,30]); playComplete(localStorage.getItem("fs_sound2")||"soft");
-          try{ if("Notification"in window&&Notification.permission==="granted") new Notification("Freely reminder ⏰",{body:t.title}); }catch{}
-          showToast(`⏰ Reminder: ${t.title}`);
-        }
-      });
+      const now=Date.now(), seen=remindedRef.current, live=new Set(); let changed=false;
+      for(const t of tasks){
+        if(!t.remindAt||t.done||!(t.owner===user.id||assigneesOf(t).includes(me))) continue;
+        const key=t.id+"|"+t.remindAt, at=new Date(t.remindAt).getTime();
+        live.add(key);
+        if(seen[key]||isNaN(at)||at>now) continue;
+        seen[key]=1; changed=true;
+        if(now-at>30*60000) continue;
+        navigator.vibrate?.([30,40,30]); playComplete(sound);
+        try{ if("Notification"in window&&Notification.permission==="granted") new Notification("Freely reminder ⏰",{body:t.title}); }catch{}
+        showToast(`⏰ Reminder: ${t.title}`);
+      }
+      for(const k of Object.keys(seen)) if(!live.has(k)){ delete seen[k]; changed=true; }   // finished, moved or deleted
+      if(changed) try{ localStorage.setItem("fs_reminded2",JSON.stringify(seen)); }catch{}
     };
     check(); const iv=setInterval(check,30000); return ()=>clearInterval(iv);
-  },[tasks]);
-  const carryOver=()=>{
-    if(!overdueTasks.length) return;
-    navigator.vibrate?.(15);
-    overdueTasks.forEach(t=>updateTask(t.id,{mydayDate:todStr}));
-  };
-  const addMatrixTask=(quadrant,text)=>{
-    let title=(text||"").trim(); if(!title) return;
-    const hit=matchListName(title,cats); let tag;
-    if(hit){ tag=hit; title=stripListName(title,hit); } else tag=guessCat(title,cats);
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag,due:null,starred:false,notes:"",color:null,subtasks:[],recurring:null,quadrant,remindAt:null,attachments:[],owner:user?.id,position:Date.now(),mydayDate:null};
-    setTasks(ts=>[t,...ts]); awardXp("add-"+t.id,10);
-    if(user) db.insertTask(t,user.id).catch(e=>showToast("Couldn't save: "+(e.message||e)));
-  };
-  const toggleMyDay=id=>{ const t=tasks.find(x=>x.id===id); if(!t)return; const inDay=t.mydayDate===todStr; navigator.vibrate?.(15); updateTask(id,{mydayDate:inDay?null:todStr}); if(!inDay) markActiveDay(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[tasks,user]);
+  const addMatrixTask=(quadrant,text)=>{ const raw=(text||"").trim(); if(raw) createTask(taskFromText(raw,{quadrant})); };
   const requestLink=cb=>setLinkPick({onPick:cb});
   const linkIdeaToTask=(text,taskId)=>{
     const t=tasks.find(x=>x.id===taskId); if(!t)return;
     const txt=(text||"").trim();
     const ACC=["#3b82f6","#22c55e","#f59e0b","#ef4444","#a855f7","#ec4899","#14b8a6"];
-    const n={id:Date.now(),title:txt||"Linked note",body:"",pinned:false,color:ACC[(notes?.length||0)%ACC.length],drawing:null,taskId,created:tod()};
+    const n={id:crypto.randomUUID(),title:txt||"Linked note",body:"",pinned:false,color:ACC[(notes?.length||0)%ACC.length],drawing:null,taskId,created:tod()};
     setNotes(ns=>[n,...ns]);
     foldNoteIntoTask(n,t);
     showToast(`Linked to "${t.title}" — pulled its date/time into the task`);
   };
-  // When a note links to a task, surface it on the task and parse any date/time out of it.
+  // When a note links to a task, surface it on the task and take any date/time out of it.
   const foldNoteIntoTask=(note,task)=>{
     if(!note||!task) return;
     const raw=(note.title||"").trim();
-    const p=parseNL(raw); const patch={};
-    if(p.due && p.due!==task.due) patch.due=p.due;
-    if(p.time){ const d=p.due||task.due||tod(); const ra=`${d}T${p.time}`; if(ra!==task.remindAt){ patch.remindAt=ra; if(!patch.due&&!task.due) patch.due=d; } if(p.endTime&&p.endTime!==task.endTime) patch.endTime=p.endTime; }
-    // Store the CLEANED text only if the note had actual words left after stripping the date/time
-    // (parseNL falls back to the raw text when nothing remains — that would double the date in the preview).
-    const cleaned=(p.title && p.title!==raw)?p.title:"";
-    const noteText=[cleaned,(note.body||"").trim()].filter(Boolean).join(" — ").trim();
-    if(noteText){ const existing=(task.notes||"").trim(); if(!existing.includes(cleaned||noteText)) patch.notes=(existing?existing+"\n":"")+noteText; }
+    const p=parseNL(raw), patch=whenPatch(task,p);
+    // Keep the note's words — unless they were nothing BUT a date ("tomorrow 3pm"), which the task now carries.
+    const words=(p.due||p.time)&&p.title===raw?"":p.title;
+    const noteText=[words,(note.body||"").trim()].filter(Boolean).join(" — ").trim();
+    if(noteText){ const existing=(task.notes||"").trim(); if(!existing.includes(noteText)) patch.notes=(existing?existing+"\n":"")+noteText; }
     if(Object.keys(patch).length) updateTask(task.id,patch);
   };
   const startFocus=t=>{ setFocusTask({id:t.id,title:t.title}); setPomSecs(pomLen*60); setPomRun(true); setZenOpen(true); navigator.vibrate?.(20); showToast(`🍅 Focusing on "${t.title}" — ${pomLen} min timer started`); };
@@ -1413,9 +1061,9 @@ export default function Freely() {
       const m=await db.sendMessage(user.id,user.email,peer,body.trim());
       setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,m]);
       if(firstContact) showToast(`Friend request sent to ${nickOf(peer).split("@")[0]} 🤝 — they'll see it as a new chat.`);
-    }catch(e){ showToast(setupError(e)?"⚙️ One-time setup needed: open Supabase → SQL Editor and run supabase/collab-setup.sql, then reload.":/policy|violates/i.test(e.message||"")?"They haven't accepted your request yet — one message at a time until they do.":"Message failed: "+(e.message||e)); }
+    }catch(e){ showToast(setupError(e)?"⚙️ One-time setup needed: open Supabase → SQL Editor and run supabase/setup.sql, then reload.":/policy|violates/i.test(e.message||"")?"They haven't accepted your request yet — one message at a time until they do.":"Message failed: "+(e.message||e)); }
   };
-  const openDM=peer=>{ setDmPeer(peer); setView("messages"); setSideOpen(false);
+  const openDM=peer=>{ setDmPeer(peer); navTo("messages"); setSideOpen(false);
     if(typeof peer==="string"&&!peer.startsWith("g:")){
       const unread=messages.filter(m=>m.recipient_email===meEmail&&m.sender_email===peer&&!m.read).map(m=>m.id);
       if(unread.length){ setMessages(ms=>ms.map(m=>unread.includes(m.id)?{...m,read:true}:m)); db.markMessagesRead(unread).catch(()=>{}); }
@@ -1432,7 +1080,7 @@ export default function Freely() {
   const pickAvatar=em=>{ setMyAvatar(em); try{ localStorage.setItem("fs_avatar",em); const a=JSON.parse(localStorage.getItem("fs_avatars")||"{}"); a[meEmail]=em; localStorage.setItem("fs_avatars",JSON.stringify(a)); }catch{} setProfRows(rs=>rs.map(r=>r.email===meEmail?{...r,avatar:em}:r)); if(user) db.upsertProfile(user.id,user.email,em).catch(()=>{}); showToast("Avatar updated "+em); };
   // Teams: create / any member adds members (accounts only) / leave-remove / creator deletes.
   const setupError=e=>/schema cache|find the table|does not exist|infinite recursion|violates row-level security/i.test(e?.message||"");
-  const createTeam=async name=>{ if(!user||!name.trim()) return; try{ await db.createGroup(user.id,name.trim(),guessIcon(name,"👥"),user.email); refreshGroups(); showToast(`Team "${name.trim()}" created ✓`); }catch(e){ showToast(setupError(e)?"⚙️ One-time setup needed: open Supabase → SQL Editor and run supabase/collab-setup.sql, then reload.":"Couldn't create team: "+(e.message||e)); } };
+  const createTeam=async name=>{ if(!user||!name.trim()) return; try{ await db.createGroup(user.id,name.trim(),guessIcon(name,"👥"),user.email); refreshGroups(); showToast(`Team "${name.trim()}" created ✓`); }catch(e){ showToast(setupError(e)?"⚙️ One-time setup needed: open Supabase → SQL Editor and run supabase/setup.sql, then reload.":"Couldn't create team: "+(e.message||e)); } };
   // role "member" = full teammate (chat included) · "assigner" = guest who may only assign work to the team
   const addTeamMember=async(gid,emRaw,role="member")=>{ const em=(emRaw||"").trim().toLowerCase(); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ showToast("Enter a valid email"); return; }
     if(em===meEmail){ showToast("You're already in this team 🙂"); return; }
@@ -1463,21 +1111,14 @@ export default function Freely() {
   const toggleStep=(taskId,subId)=>{ const t=tasks.find(x=>x.id===taskId); if(!t)return; updateTask(taskId,{subtasks:(t.subtasks||[]).map(s=>s.id===subId?{...s,done:!s.done}:s)}); };
   const moveStep=(taskId,subId,day)=>{ const t=tasks.find(x=>x.id===taskId); if(!t)return; navigator.vibrate?.(15); updateTask(taskId,{subtasks:(t.subtasks||[]).map(s=>s.id===subId?{...s,due:day}:s)}); showToast(day?`Step scheduled for ${fmtDate(day)} 📅`:"Step date cleared"); };
   // Dragging a task onto a calendar day: keep its reminder at the same time-of-day on the new date.
-  const moveTaskDay=(id,day)=>{ const t=tasks.find(x=>x.id===id); if(!t||!day)return; navigator.vibrate?.(15); const patch={due:day}; if(t.remindAt&&t.remindAt.includes("T")) patch.remindAt=`${day}T${t.remindAt.split("T")[1]}`; updateTask(id,patch); showToast(`Moved to ${fmtDate(day)} 📅`); };
-  // Quick-add from the Calendar: task lands on the tapped day; a typed time ("dentist 3pm") becomes its reminder.
-  const addCalendarTask=(dateStr,text)=>{
-    const p=parseNL(text); let title=(p.title||text).trim(); if(!title||!dateStr) return;
-    const hit=matchListName(title,cats); let tag;
-    if(hit){ tag=hit; title=stripListName(title,hit); } else tag=guessCat(title,cats);
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag,due:dateStr,starred:false,notes:"",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:p.time?`${dateStr}T${p.time}`:null,endTime:p.endTime||null,attachments:[],owner:user?.id,position:Date.now(),mydayDate:null};
-    setTasks(ts=>[t,...ts]); awardXp("add-"+t.id,10);
-    if(user) db.insertTask(t,user.id).catch(e=>showToast("Couldn't save: "+(e.message||e)));
-  };
+  // Dragging a task onto a calendar day: its reminder moves with it, same time of day.
+  const moveTaskDay=(id,day)=>{ const t=tasks.find(x=>x.id===id); if(!t||!day)return; navigator.vibrate?.(15); updateTask(id,moveDuePatch(t,day)); showToast(`Moved to ${fmtDate(day)} 📅`); };
+  // Quick-add from the Calendar: the task lands on the tapped day; a typed time ("dentist 3pm") becomes its reminder.
+  const addCalendarTask=(dateStr,text)=>{ const raw=(text||"").trim(); if(raw&&dateStr) createTask(taskFromText(raw,{due:dateStr})); };
   const addCanvasTask=(text,myDay)=>{
-    const title=(text||"").trim(); if(!title) return;
-    const t={id:crypto.randomUUID(),title,done:false,priority:"medium",tag:guessCat(title,cats),due:null,starred:false,notes:"From Canvas",color:null,subtasks:[],recurring:null,quadrant:null,remindAt:null,attachments:[],owner:user?.id,position:Date.now(),mydayDate:myDay?todStr:null};
-    setTasks(ts=>[t,...ts]); awardXp("add-"+t.id,10); if(myDay) markActiveDay();
-    if(user) db.insertTask(t,user.id).catch(e=>showToast("Couldn't save: "+(e.message||e)));
+    const raw=(text||"").trim(); if(!raw) return;
+    createTask(taskFromText(raw,{notes:"From Canvas",mydayDate:myDay?todStr:null}));
+    if(myDay) markActiveDay();
     showToast(myDay?"Added to My Day ☀️":"Added as a task ✓");
   };
   const level=Math.floor(xp/100)+1, xpLvl=xp%100;
@@ -1647,7 +1288,7 @@ export default function Freely() {
       {imgView&&<ImgViewer T={T} url={imgView} onClose={()=>setImgView(null)}/>}
       {delCatModal&&<DelCatModal T={T} name={delCatModal} count={tasks.filter(t=>t.owner===user?.id&&t.tag===delCatModal).length} onConfirm={a=>confirmDeleteCat(delCatModal,a)} onClose={()=>setDelCatModal(null)}/>}
       {linkPick&&<LinkPicker T={T} tasks={myTasks.filter(t=>!t.done)} onPick={t=>{linkPick.onPick(t);setLinkPick(null);}} onClose={()=>setLinkPick(null)}/>}
-      {cmdOpen&&<CmdPalette T={T} tasks={tasks} notes={notes} onClose={()=>setCmdOpen(false)} onGo={v=>{setView(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}} onPickTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);setCmdOpen(false);}}/>}
+      {cmdOpen&&<CmdPalette T={T} tasks={tasks} notes={notes} onClose={()=>setCmdOpen(false)} onGo={v=>{navTo(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}} onPickTask={t=>{keepSelRef.current=true;navTo("all");setSelTask(t);setCmdOpen(false);}}/>}
       {/* Drawer backdrop — phone only. Tap anywhere off the sidebar to put it away. */}
       {narrow&&sideOpen&&<div onClick={()=>setSideOpen(false)} style={{position:"fixed",inset:0,zIndex:55,background:"rgba(5,6,12,.55)",animation:"fadeIn .15s ease"}}/>}
       <aside onPointerDown={sideSwipe} style={{width:sideOpen?(narrow?272:224):60,transition:narrow?"none":"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:narrow&&sideOpen?60:30,touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none",
@@ -1727,7 +1368,7 @@ export default function Freely() {
             <span style={{background:T.surface3,border:`1px solid ${T.border}`,padding:"1px 6px",borderRadius:4,fontSize:10,fontWeight:600}}>⌘K</span>
             <span>Command Palette</span>
           </button>
-          <span style={{marginLeft:"auto",fontSize:11,color:T.textMuted}}>{tasks.filter(t=>!t.done).length} tasks remaining</span>
+          <span style={{marginLeft:"auto",fontSize:11,color:T.textMuted}}>{myTasks.filter(t=>!t.done).length} tasks remaining</span>
         </div>
         {showSearch&&(
           <div style={{padding:"8px 18px",borderBottom:`1px solid ${T.border}`,background:T.surface,flexShrink:0,animation:"slideIn .2s ease"}}>
@@ -1739,15 +1380,15 @@ export default function Freely() {
           </div>
         )}
         <div style={{flex:1,overflow:"hidden",display:"flex"}}>
-          {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask} requestLink={requestLink} onCanvasToNote={linkIdeaToTask} onOpenTask={setSelTask} selId={selTask?.id}/>}
-          {view==="matrix"&&selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={id=>{deleteTask(id);setSelTask(null);}} onDuplicate={duplicateTask} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} canDelete={canDeleteTask(selTask)} onViewImage={setImgView} onClose={()=>setSelTask(null)} onFocus={startFocus}/>}
-          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onLinkNote={foldNoteIntoTask} onClearTaskNotes={id=>updateTask(id,{notes:""})} onGoToTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
+          {view==="matrix"&&<MatrixView T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} isInMyDay={inMyDay} canvasNotes={canvasNotes} setCanvasNotes={setCanvasNotes} onCanvasToTask={addCanvasTask} requestLink={requestLink} onCanvasToNote={linkIdeaToTask} onOpenTask={setSelTask} selId={selTask?.id}/>}
+          {view==="matrix"&&selTask&&<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={id=>{deleteTask(id);setSelTask(null);}} onDuplicate={duplicateTask} onAttach={attachFiles} onRemoveAttach={removeAttach} onSetReminder={setReminder} canDelete={canDeleteTask(selTask)} onViewImage={setImgView} onClose={()=>setSelTask(null)} onFocus={startFocus}/>}
+          {view==="notes"&&<NotesView T={T} notes={notes} setNotes={setNotes} tasks={myTasks} requestLink={requestLink} onLinkNote={foldNoteIntoTask} onClearTaskNotes={id=>updateTask(id,{notes:""})} onGoToTask={t=>{keepSelRef.current=true;navTo("all");setSelTask(t);}}/>}
           {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} showToast={showToast} onCheckin={key=>{awardXp("habit-"+key+"-"+todStr,15);markActiveDay();navigator.vibrate?.(20);}}/>}
-          {view==="calendar"&&<CalendarView T={T} tasks={myTasks} cats={cats} todStr={todStr} onToggle={toggleTask} onToggleStep={toggleStep} onQuickAdd={addCalendarTask} onMoveTask={moveTaskDay} onMoveStep={moveStep} onOpenTask={t=>{keepSelRef.current=true;setView("all");setSelTask(t);}}/>}
+          {view==="calendar"&&<CalendarView T={T} tasks={myTasks} cats={cats} todStr={todStr} onToggle={toggleTask} onToggleStep={toggleStep} onQuickAdd={addCalendarTask} onMoveTask={moveTaskDay} onMoveStep={moveStep} onOpenTask={t=>{keepSelRef.current=true;navTo("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={tasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={allStats} todStr={todStr}/>}
-          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} cats={cats} setCats={setCats} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onShareFolder={shareFolder} onUnshare={unshareFolder} onUploadIcon={uploadCatIcon} onDeleteCat={deleteCat} deletedCats={deletedCats} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar} newAtBottom={newAtBottom} setNewAtBottom={setNewAtBottom} onHelp={()=>setHelpOpen(true)}/>}
+          {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onUnshare={unshareFolder} deletedCats={deletedCats} pomLen={pomLen} onPomLen={m=>{ setPomLen(m); if(!pomRun) setPomSecs(m*60); }} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar} newAtBottom={newAtBottom} setNewAtBottom={setNewAtBottom} onHelp={()=>setHelpOpen(true)}/>}
           {(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
-            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFile} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} todStr={todStr} canDeleteFn={canDeleteTask} canEditFn={canEditTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={allGroups} listPeople={collaboratorsOf} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}
+            <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFiles} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} isInMyDay={inMyDay} todStr={todStr} canDeleteFn={canDeleteTask} canEditFn={canEditTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={allGroups} listPeople={collaboratorsOf} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}
               sortMode={sortMode} setSortMode={setSortMode} showToast={showToast} onHelp={()=>setHelpOpen(true)}
               sharedInfo={sharedViewInfo} onLeaveShare={sharedViewInfo?()=>leaveShare(sharedViewInfo.owner,sharedViewInfo.folder):null}
               listManage={{ownedShares, onShare:shareFolder, onUnshare:unshareFolder, onDelete:deleteCat, setCats, onAssignAll:assignAllInLists, assignGroups:allGroups, onUploadIcon:uploadCatIcon}}/>
@@ -1875,25 +1516,26 @@ function ImgViewer({T,url,onClose}) {
 
 function CmdPalette({T,tasks,notes=[],onClose,onGo,onAdd,onPickTask}) {
   const [q,setQ]=useState("");
-  const pages=["myday","upcoming","calendar","all","completed","matrix","habits","notes","analytics","settings"];
+  const PAGES={myday:"My Day",upcoming:"Upcoming",calendar:"Calendar",all:"All Tasks",matrix:"Priority Matrix",habits:"Habits",notes:"Notes",messages:"Messages",analytics:"Analytics",settings:"Settings"};
+  const pages=Object.keys(PAGES);
   const ql=q.toLowerCase();
   const ft=tasks.filter(t=>!t.done&&q&&t.title.toLowerCase().includes(ql)).slice(0,4);
   const fn=notes.filter(n=>q&&((n.title||"").toLowerCase().includes(ql)||(n.body||"").toLowerCase().includes(ql))).slice(0,3);
-  const fp=pages.filter(p=>p.includes(ql));
+  const fp=pages.filter(p=>p.includes(ql)||PAGES[p].toLowerCase().includes(ql));
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.65)",zIndex:1000,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:110}} onClick={onClose}>
-      <div onClick={e=>e.stopPropagation()} style={{width:500,background:T.surface,border:`1px solid ${T.accent}44`,borderRadius:16,overflow:"hidden",boxShadow:"0 24px 60px rgba(0,0,0,.5)",animation:"slideIn .2s ease"}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:500,maxWidth:"94vw",background:T.surface,border:`1px solid ${T.accent}44`,borderRadius:16,overflow:"hidden",boxShadow:"0 24px 60px rgba(0,0,0,.5)",animation:"slideIn .2s ease"}}>
         <div style={{display:"flex",alignItems:"center",gap:10,padding:"13px 16px",borderBottom:`1px solid ${T.border}`}}>
           <Ico n="search" s={16} c={T.textMuted}/>
           <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search tasks, navigate…" style={{flex:1,background:"none",border:"none",outline:"none",color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:15}} onKeyDown={e=>e.key==="Escape"&&onClose()}/>
           <kbd style={{fontSize:10,color:T.textMuted,background:T.surface2,padding:"2px 6px",borderRadius:4,border:`1px solid ${T.border}`}}>ESC</kbd>
         </div>
         <div style={{maxHeight:300,overflowY:"auto"}}>
-          {fp.length>0&&<CS label="Navigate">{fp.slice(0,4).map(p=><CR key={p} icon="arr" label={`Go to ${p}`} T={T} onClick={()=>onGo(p)}/>)}</CS>}
+          {fp.length>0&&<CS label="Navigate">{fp.slice(0,4).map(p=><CR key={p} icon="arr" label={`Go to ${PAGES[p]}`} T={T} onClick={()=>onGo(p)}/>)}</CS>}
           {ft.length>0&&<CS label="Tasks">{ft.map(t=><CR key={t.id} icon="check" label={t.title} sub={t.due?fmtDate(t.due):""} T={T} onClick={()=>{onPickTask?onPickTask(t):onClose();}}/>)}</CS>}
           {fn.length>0&&<CS label="Notes">{fn.map(n=><CR key={n.id} icon="note" label={n.title||"Untitled"} sub={(n.body||"").slice(0,24)} T={T} onClick={()=>onGo("notes")}/>)}</CS>}
           {q&&<CS label="Create"><CR icon="plus" label={`Add task: "${q}"`} T={T} onClick={()=>onAdd(q)}/></CS>}
-          {!q&&<CS label="Quick Nav">{["myday","matrix","analytics","notes"].map(p=><CR key={p} icon="arr" label={`Go to ${p}`} T={T} onClick={()=>onGo(p)}/>)}</CS>}
+          {!q&&<CS label="Quick Nav">{["myday","matrix","analytics","notes"].map(p=><CR key={p} icon="arr" label={`Go to ${PAGES[p]}`} T={T} onClick={()=>onGo(p)}/>)}</CS>}
         </div>
       </div>
     </div>
@@ -1909,7 +1551,7 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],listPeople=null,sharedInfo=null,onLeaveShare=null,listManage=null,sortMode="due",setSortMode,showToast,onHelp,canEditFn=null}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],listPeople=null,sharedInfo=null,onLeaveShare=null,listManage=null,sortMode="due",setSortMode,showToast,onHelp,canEditFn=null,isInMyDay}) {
   const narrow=useNarrow();
   const readOnly=!!(sharedInfo&&sharedInfo.canEdit===false);   // a view-only share: no add box, no ticking, no swiping
   const [manageMode,setManageMode]=useState(null); // "edit" (name/icon/color) | "share" (share/assign)
@@ -1927,7 +1569,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const didDragRef=useRef(false);
   const labels={myday:"My Day",flagged:"Flagged",upcoming:"Upcoming",all:"All Tasks",assigned:"Assigned to me"};
   const catKey=view.startsWith("cat:")?view.slice(4):null;
-  const sharedKey=view.startsWith("shared:")?view.slice(view.lastIndexOf(":")+1):null;
+  const sharedKey=view.startsWith("shared:")?view.slice(view.indexOf(":",7)+1):null;   // "shared:<owner>:<list>" — the list name may itself contain ":"
   const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
   const titleIcon=catKey?(cats[catKey]?.icon||"📁"):sharedKey?"🤝":null;
   const titleText=catKey?cap(catKey):sharedKey?cap(sharedKey):labels[view];
@@ -2045,7 +1687,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
                 </div>
               )}
             </div>
-            {view!=="completed"&&(
+            {(
               <select value={sort} onChange={e=>setSortMode?.(e.target.value)} title="Your choice is remembered on every device" style={{fontSize:11,color:T.textMuted,background:T.surface2,border:`1px solid ${T.border}`,borderRadius:8,padding:"4px 8px",fontFamily:"'DM Sans',sans-serif",outline:"none",cursor:"pointer"}}>
                 <option value="due">By due date</option>
                 <option value="priority">By priority</option>
@@ -2121,7 +1763,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             </div>
           </div>
         );})()}
-        {view!=="completed"&&!readOnly&&(
+        {!readOnly&&(
           <div style={{display:"flex",gap:8,marginBottom:14}}>
             <div style={{flex:1,display:"flex",alignItems:"center",gap:9,background:T.surface,border:`1px solid ${T.border}`,borderRadius:11,padding:"0 12px"}}>
               <Ico n="plus" s={15} c={T.textMuted}/>
@@ -2130,7 +1772,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             <button onClick={addTask} style={{padding:"0 18px",borderRadius:11,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontWeight:700,fontSize:13,fontFamily:"'DM Sans',sans-serif",boxShadow:"0 3px 12px rgba(192,132,252,.35)"}}>Add</button>
           </div>
         )}
-        {view!=="completed"&&(
+        {(
           <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:view==="upcoming"?4:10,marginTop:-4,lineHeight:1.5}}>💡 Swipe ← to delete · → to add to My Day ☀️ · {canReorder?dragHint():"pick “My order” above to drag tasks around"} {onHelp&&<button onClick={onHelp} style={{background:"none",border:"none",padding:0,margin:0,color:T.accent,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif",textDecoration:"underline"}}>How it all works</button>}</div>
         )}
         {view==="upcoming"&&(
@@ -2145,7 +1787,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
         {view==="myday"&&(
           <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>☀️ Today only. Anything left unfinished is carried over tomorrow — and suggestions for what to pull in are at the bottom.</div>
         )}
-        {view!=="completed"&&(
+        {(
           <div style={{display:"flex",gap:5,marginBottom:12}}>
             {["all","active","done"].map(f=>(
               <button key={f} onClick={()=>setFilter(f)} style={{padding:"4px 13px",borderRadius:20,border:`1px solid ${filter===f?T.accent:T.border}`,background:filter===f?T.accent+"22":"transparent",color:filter===f?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:filter===f?700:400,fontFamily:"'DM Sans',sans-serif",transition:"all .15s"}}>{f.charAt(0).toUpperCase()+f.slice(1)}</button>
@@ -2173,7 +1815,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             const card=task=>(
               <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id}
                 dropEdge={drop?.id===String(task.id)?(drop.before?"top":"bottom"):null} canReorder={canReorder}
-                onDown={onCardDown} onGrip={gripDown} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true} canEdit={canEditFn?canEditFn(task):true} onToggleMyDay={onToggleMyDay} myEmail={myEmail}/>
+                onDown={onCardDown} onGrip={gripDown} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true} canEdit={canEditFn?canEditFn(task):true} inMyDay={isInMyDay?.(task)} onToggleMyDay={onToggleMyDay} myEmail={myEmail}/>
             );
             return (<>
               {late.length>0&&<>
@@ -2193,13 +1835,13 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
               <button onClick={()=>onClearDone?.(show.filter(t=>t.done).map(t=>t.id))} style={{marginLeft:"auto",background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:10,fontWeight:700,letterSpacing:".3px",fontFamily:"'DM Sans',sans-serif",textTransform:"none"}}>Clear all</button>
             </div>
             {show.filter(t=>t.done).map(task=>(
-              <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} canDelete={canDeleteFn?canDeleteFn(task):true} onToggleMyDay={onToggleMyDay}/>
+              <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} canDelete={canDeleteFn?canDeleteFn(task):true} inMyDay={isInMyDay?.(task)} onToggleMyDay={onToggleMyDay}/>
             ))}
           </>}
           {show.length===0&&(
             <div style={{textAlign:"center",padding:"50px 20px",color:T.textMuted}}>
-              <div style={{fontSize:36,marginBottom:10}}>{view==="completed"?"🏆":"✨"}</div>
-              <div style={{fontWeight:600}}>{view==="completed"?"Nothing completed yet":"All clear!"}</div>
+              <div style={{fontSize:36,marginBottom:10}}>✨</div>
+              <div style={{fontWeight:600}}>All clear!</div>
               <div style={{fontSize:12,marginTop:4}}>Add a task to get started</div>
             </div>
           )}
@@ -2281,8 +1923,7 @@ function TaskReadOnly({task,T,cats,onClose,ownerNick}) {
   );
 }
 
-function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,dropEdge=null,canReorder=true,onDown,onGrip,swipeX=0,canDelete=true,canEdit=true,onToggleMyDay,myEmail}) {
-  const inMyDay=task.mydayDate===tod();
+function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,dropEdge=null,canReorder=true,onDown,onGrip,swipeX=0,canDelete=true,canEdit=true,inMyDay=false,onToggleMyDay,myEmail}) {
   const assignees=assigneesOf(task);
   const assignedToMe=assignees.includes(myEmail);
   const [hov,setHov]=useState(false);
@@ -2315,7 +1956,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
       <div style={{flex:1,minWidth:0}}>
         <div style={{display:"flex",alignItems:"center",gap:5}}>
           <span style={{fontSize:13,fontWeight:500,color:task.done?T.textMuted:T.text,textDecoration:task.done?"line-through":"none"}}>{task.title}</span>
-          {task.mydayDate===tod()&&<Ico n="sun" s={11} c="#f59e0b" st={{flexShrink:0}}/>}
+          {inMyDay&&<Ico n="sun" s={11} c="#f59e0b" st={{flexShrink:0}}/>}
           {task.starred&&<Ico n="flag" s={11} c="#f59e0b" st={{fill:"#f59e0b",flexShrink:0}}/>}
           {task.recurring&&<Ico n="repeat" s={11} c={T.textMuted} st={{flexShrink:0}}/>}
         </div>
@@ -2352,79 +1993,95 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
   const [assignInput,setAssignInput]=useState("");
   const [uploading,setUploading]=useState(false);
   const fileRef=useRef(null);
-  const doAttach=async files=>{ if(!files?.length)return; setUploading(true);
-    try{ for(const f of files){
-      if(f.size>50*1024*1024){ alert(`"${f.name}" is over the 50 MB per-file limit — try a smaller file.`); continue; }
-      await onAttach?.(task,f);
-    } }catch(e){ alert("Upload failed: "+(e.message||e)); }
-    setUploading(false); };
+  const doAttach=async files=>{
+    const ok=[...(files||[])].filter(f=>{ if(f.size>50*1024*1024){ alert(`"${f.name}" is over the 50 MB per-file limit — try a smaller file.`); return false; } return true; });
+    if(!ok.length) return;
+    setUploading(true);
+    try{ await onAttach?.(task,ok); }catch(e){ alert("Upload failed: "+(e.message||e)); }
+    finally{ setUploading(false); }
+  };
   const [nts,setNts]=useState(task.notes||"");
   const [ttl,setTtl]=useState(task.title||"");
   const [ns,setNs]=useState("");
-  useEffect(()=>{setNts(task.notes||"");setTtl(task.title||"");},[task.id]);
   // Steps can carry their own due date/time: typed right into the text ("outline Jul 12 3pm"),
   // set via the 📅 chip, or dragged onto a day in the Calendar view.
   const addSub=()=>{ const raw=ns.trim(); if(!raw)return; const p=parseNL(raw); const title=(p.title||raw).trim(); onUpdate(task.id,{subtasks:[...(task.subtasks||[]),{id:Date.now(),title,done:false,due:p.due||null,time:p.time||null}]}); setNs(""); };
   const patchSub=(subId,p)=>onUpdate(task.id,{subtasks:task.subtasks.map(s=>s.id===subId?{...s,...p}:s)});
   const [subDateId,setSubDateId]=useState(null);
-  // A short one-line note here also gets parsed for a date/time (like a linked note): sets the reminder + cleans the text.
-  // Live parsing while you type in the title or the notes. The date, time, repeat and list update
-  // within a third of a second of each keystroke; the words themselves are only stripped out of the
-  // text when you finish (Enter / tap away), so nothing vanishes from under your cursor mid-word.
-  // Deleting the date words again puts the task back the way it was before you started editing.
-  const editOrigRef=useRef(null);
+
+  // Notes save a moment after you stop typing, and at once when you leave the box or the panel —
+  // not on every keystroke, which was a database write per letter.
+  const notesTimer=useRef(null), pendingNotes=useRef(null);
+  const flushNotes=()=>{ clearTimeout(notesTimer.current); const p=pendingNotes.current; pendingNotes.current=null; if(p) onUpdate(p.id,{notes:p.v}); };
+  const saveNotesSoon=v=>{ pendingNotes.current={id:task.id,v}; clearTimeout(notesTimer.current); notesTimer.current=setTimeout(flushNotes,700); };
+
+  // Live parsing while you type. The date, time, repeat and list update within a third of a second; the
+  // words themselves leave the text only when you finish, so nothing vanishes under your cursor, and
+  // deleting the date words again puts the task back as it was. What you're typing is remembered WITH
+  // its task, so switching tasks or closing the panel (the drag handle closes it without a blur) still
+  // finishes the edit — on the right task.
+  const editRef=useRef(null);   // {id, raw, orig:{due,remindAt,endTime,tag,recurring}, task}
+  if(editRef.current&&editRef.current.id===task.id) editRef.current.task=task;
+  const beginEdit=()=>{
+    if(!editRef.current||editRef.current.id!==task.id) editRef.current={id:task.id,raw:null,task,orig:{due:task.due,remindAt:task.remindAt,endTime:task.endTime,tag:task.tag,recurring:task.recurring}};
+    return editRef.current;
+  };
   const liveTimer=useRef(null);
-  const liveParse=raw=>{
-    if(!editOrigRef.current) editOrigRef.current={due:task.due,remindAt:task.remindAt,endTime:task.endTime,tag:task.tag,recurring:task.recurring};
+  const liveParse=(raw,{title})=>{
+    const e=beginEdit(); if(title) e.raw=raw;
     clearTimeout(liveTimer.current);
     liveTimer.current=setTimeout(()=>{
-      const o=editOrigRef.current; if(!o) return;
-      const p=parseNL(raw), patch={};
+      const cur=editRef.current; if(!cur||cur.id!==e.id) return;
+      const t=cur.task, o=cur.orig, p=parseNL(raw), patch={};
       let due=p.due||o.due||null;
       if(p.time&&!due) due=tod();                                        // a time with no day means today
-      if((due||null)!==(task.due||null)) patch.due=due;
-      const d=(due&&!isTbd(due))?due:null;
-      const ra=(p.time&&d)?`${d}T${p.time}`:(p.time?null:o.remindAt);
-      if((ra||null)!==(task.remindAt||null)) patch.remindAt=ra||null;
-      const et=p.time?(p.endTime||null):(o.endTime||null);
-      if((et||null)!==(task.endTime||null)) patch.endTime=et||null;
-      const rec=p.recurring||o.recurring||null;
-      if((rec||null)!==(task.recurring||null)) patch.recurring=rec;
-      const hit=matchListName(p.title||raw,cats||{}); const tag=hit||o.tag;
-      if(tag&&tag!==task.tag) patch.tag=tag;
-      if(Object.keys(patch).length) onUpdate(task.id,patch);
+      if((due||null)!==(t.due||null)) patch.due=due;
+      const d=due&&!isTbd(due)?due:null;
+      // With no time typed, the original reminder stays — moved to the new day if the day changed.
+      const moved=due!==(o.due||null)?moveDuePatch({remindAt:o.remindAt,endTime:o.endTime},due):{};
+      const ra=p.time?(d?`${d}T${p.time}`:null):("remindAt" in moved?moved.remindAt:o.remindAt);
+      if((ra||null)!==(t.remindAt||null)) patch.remindAt=ra||null;
+      const et=p.time?(p.endTime||null):("endTime" in moved?moved.endTime:(o.endTime||null));
+      if((et||null)!==(t.endTime||null)) patch.endTime=et;
+      if(title){   // only the TITLE files a task into a list or makes it repeat — "discuss work" in the notes must not move it to Work
+        const rec=p.recurring||o.recurring||null; if((rec||null)!==(t.recurring||null)) patch.recurring=rec;
+        const tag=matchListName(p.title||raw,cats||{})||o.tag; if(tag&&tag!==t.tag) patch.tag=tag;
+      }
+      if(Object.keys(patch).length) onUpdate(cur.id,patch);
     },300);
   };
   const finishTitle=()=>{
-    clearTimeout(liveTimer.current); const o=editOrigRef.current; editOrigRef.current=null;
-    const raw=ttl.trim();
-    if(!raw){setTtl(task.title||"");return;}
-    if(raw===(task.title||"")) return; // unchanged → don't re-parse (avoids stripping a legit word on a no-op blur)
+    clearTimeout(liveTimer.current);
+    const e=editRef.current; editRef.current=null;
+    if(!e||e.raw==null) return;
+    const t=e.task, raw=e.raw.trim();
+    if(!raw){ if(t.id===task.id) setTtl(t.title||""); return; }
+    if(raw===(t.title||"")) return;   // unchanged → don't re-parse (avoids stripping a legit word on a no-op blur)
     // Judge the list-name strip against where the task WAS, not where live parsing already moved it.
-    const base=o?{...task,tag:o.tag}:task;
+    const base={...t,tag:e.orig.tag};
     const patch=titleEditPatch(base,raw,cats);
-    if(Object.keys(patch).length) onUpdate(task.id,patch);
-    // Even when the cleaned title is identical to the old one (you only appended a date), the box
-    // must not keep showing the date words the task itself no longer has.
-    setTtl(patch.title||cleanTitle(raw,cats,base.tag));
+    if(Object.keys(patch).length) onUpdate(t.id,patch);
+    // Even when the cleaned title equals the old one (you only appended a date), the box must not keep
+    // showing date words the task no longer has.
+    if(t.id===task.id) setTtl(patch.title||cleanTitle(raw,cats,base.tag));
   };
   const liveNotes=raw=>{
     const v=raw.trim();
     if(!v||v.includes("\n")||v.length>80) return;   // only short single-line quick notes are read for dates
-    liveParse(v);
+    liveParse(v,{title:false});
   };
   const parseNotesBlur=()=>{
     const raw=nts.trim();
-    if(!raw || raw.includes("\n") || raw.length>80) return; // only auto-parse short single-line quick notes
+    if(!raw||raw.includes("\n")||raw.length>80) return;
     const p=parseNL(raw);
-    if(!p.due && !p.time) return;
-    const patch={};
-    if(p.due && p.due!==task.due) patch.due=p.due;
-    if(p.time){ const d=p.due||task.due||tod(); const ra=`${d}T${p.time}`; if(ra!==task.remindAt){ patch.remindAt=ra; if(!patch.due&&!task.due) patch.due=d; } if(p.endTime&&p.endTime!==task.endTime) patch.endTime=p.endTime; }
-    const cleaned=(p.title && p.title!==raw)?p.title:"";
-    if(cleaned!==raw){ patch.notes=cleaned; setNts(cleaned); }
-    if(Object.keys(patch).length) onUpdate(task.id,patch);
+    if(!p.due&&!p.time) return;
+    const patch=whenPatch(task,p);
+    const words=p.title===raw?"":p.title;   // nothing but a date → the note empties; the task now carries the date
+    patch.notes=words; setNts(words); pendingNotes.current=null; clearTimeout(notesTimer.current);
+    onUpdate(task.id,patch);
   };
+  const flushRef=useRef(null); flushRef.current=()=>{ flushNotes(); finishTitle(); };
+  useEffect(()=>{ setNts(task.notes||""); setTtl(task.title||""); return ()=>flushRef.current(); },[task.id]);
   const COLS=[null,"#ef4444","#f97316","#f59e0b","#22c55e","#3b82f6","#a855f7"];
   const [closeX,setCloseX]=useState(0);
   const narrow=useNarrow();   // phone: the panel takes the screen instead of squeezing the list into a sliver
@@ -2450,12 +2107,12 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
         <div style={{width:42,height:4,borderRadius:2,background:T.surface3}}/>
       </div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-        <input value={ttl} onChange={e=>{setTtl(e.target.value);liveParse(e.target.value);}} onBlur={finishTitle} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();}} placeholder="Task name" title="Tap to rename — retype a date/time or a list name and it re-files itself" style={{fontFamily:"'Sora',sans-serif",fontSize:13,fontWeight:600,flex:1,lineHeight:1.4,background:"transparent",border:"none",borderBottom:`1px dashed ${T.border}`,outline:"none",color:T.text,minWidth:0,padding:"1px 0"}}/>
+        <input value={ttl} onChange={e=>{setTtl(e.target.value);liveParse(e.target.value,{title:true});}} onBlur={finishTitle} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();}} placeholder="Task name" title="Tap to rename — retype a date/time or a list name and it re-files itself" style={{fontFamily:"'Sora',sans-serif",fontSize:13,fontWeight:600,flex:1,lineHeight:1.4,background:"transparent",border:"none",borderBottom:`1px dashed ${T.border}`,outline:"none",color:T.text,minWidth:0,padding:"1px 0"}}/>
         <button onClick={onClose} style={{width:24,height:24,borderRadius:6,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginLeft:6}}><Ico n="x" s={13}/></button>
       </div>
       <DL label="Notes" T={T}>
-        <textarea value={nts} onChange={e=>{setNts(e.target.value);onUpdate(task.id,{notes:e.target.value});liveNotes(e.target.value);}} onBlur={()=>{clearTimeout(liveTimer.current);editOrigRef.current=null;parseNotesBlur();}} placeholder="Notes, links… a date/time here also sets the reminder" style={{marginTop:4,width:"100%",minHeight:52,padding:"6px 9px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"vertical",lineHeight:1.5}}/>
-        {nts&&<button onClick={()=>{setNts("");onUpdate(task.id,{notes:""});}} style={{marginTop:4,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:600,fontFamily:"'DM Sans',sans-serif",display:"inline-flex",alignItems:"center",gap:4}}><Ico n="trash" s={10} c={T.textMuted}/> Clear notes</button>}
+        <textarea value={nts} onChange={e=>{setNts(e.target.value);saveNotesSoon(e.target.value);liveNotes(e.target.value);}} onBlur={()=>{ if(editRef.current?.raw==null){ clearTimeout(liveTimer.current); editRef.current=null; } parseNotesBlur(); flushNotes(); }} placeholder="Notes, links… a date/time here also sets the reminder" style={{marginTop:4,width:"100%",minHeight:52,padding:"6px 9px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",resize:"vertical",lineHeight:1.5}}/>
+        {nts&&<button onClick={()=>{setNts("");pendingNotes.current=null;onUpdate(task.id,{notes:""});}} style={{marginTop:4,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:600,fontFamily:"'DM Sans',sans-serif",display:"inline-flex",alignItems:"center",gap:4}}><Ico n="trash" s={10} c={T.textMuted}/> Clear notes</button>}
       </DL>
       <DL label="Attachments 📎" T={T}>
         <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:5}}>
@@ -2490,12 +2147,12 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
       <DL label="Due · Repeat" T={T}>
         <div style={{display:"flex",gap:4,marginTop:5,marginBottom:5,flexWrap:"wrap"}}>
           {[["Today",tod()],["Tmrw",addDays(1)],["+1wk",addDays(7)],["TBD 🤷",DUE_TBD],["Clear",""]].map(([lbl,val])=>(
-            <button key={lbl} onClick={()=>onUpdate(task.id,{due:val||null})} style={{padding:"3px 9px",borderRadius:7,border:`1px solid ${task.due===val&&val?T.accent:T.border}`,background:task.due===val&&val?T.accentGlow:"transparent",color:task.due===val&&val?T.accent:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{lbl}</button>
+            <button key={lbl} onClick={()=>onUpdate(task.id,moveDuePatch(task,val||null))} style={{padding:"3px 9px",borderRadius:7,border:`1px solid ${task.due===val&&val?T.accent:T.border}`,background:task.due===val&&val?T.accentGlow:"transparent",color:task.due===val&&val?T.accent:T.textMuted,cursor:"pointer",fontSize:10,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>{lbl}</button>
           ))}
         </div>
         <div style={{display:"flex",gap:6,marginBottom:6}}>
-          <input type="date" value={isTbd(task.due)?"":(task.due||"")} onChange={e=>onUpdate(task.id,{due:e.target.value})} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
-          <input type="time" title="Set a time (also sets a reminder)" value={task.remindAt&&task.remindAt.includes("T")?task.remindAt.split("T")[1].slice(0,5):""} onChange={e=>{ const t=e.target.value; if(t){ const d=task.due||tod(); onUpdate(task.id,{remindAt:`${d}T${t}`,...(task.due?{}:{due:d})}); } else onUpdate(task.id,{remindAt:null}); }} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${task.remindAt?T.accent:T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+          <input type="date" value={isTbd(task.due)?"":(task.due||"")} onChange={e=>onUpdate(task.id,moveDuePatch(task,e.target.value||null))} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+          <input type="time" title="Set a time (also sets a reminder)" value={task.remindAt&&task.remindAt.includes("T")?task.remindAt.split("T")[1].slice(0,5):""} onChange={e=>{ const t=e.target.value, dated=task.due&&!isTbd(task.due); if(t){ const d=dated?task.due:tod(); onUpdate(task.id,{remindAt:`${d}T${t}`,...(dated?{}:{due:d})}); } else onUpdate(task.id,{remindAt:null,endTime:null}); }} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${task.remindAt?T.accent:T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
         </div>
         <div style={{display:"flex",gap:6}}>
           <select value={task.recurring&&task.recurring.startsWith("custom:")?"custom":(task.recurring||"")} onChange={e=>onUpdate(task.id,{recurring:e.target.value==="custom"?"custom:1:weeks":(e.target.value||null)})} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",cursor:"pointer"}}>
@@ -2638,7 +2295,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
 }
 const DL=({label,T,children})=><div><span style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted}}>{label}</span>{children}</div>;
 
-function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,canvasNotes,setCanvasNotes,onCanvasToTask,requestLink,onCanvasToNote,onOpenTask,selId}) {
+function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,isInMyDay,canvasNotes,setCanvasNotes,onCanvasToTask,requestLink,onCanvasToNote,onOpenTask,selId}) {
   const [tab,setTab]=useState("matrix");
   const narrow=useNarrow();   // 157px-wide quadrants are unreadable — a phone stacks them instead
   return (
@@ -2659,13 +2316,13 @@ function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDa
         </div>
       </div>
       {tab==="matrix"
-        ?<EisenhowerMatrix T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} onOpenTask={onOpenTask} selId={selId}/>
+        ?<EisenhowerMatrix T={T} tasks={tasks} cats={cats} updateTask={updateTask} deleteTask={deleteTask} addMatrixTask={addMatrixTask} toggleMyDay={toggleMyDay} isInMyDay={isInMyDay} onOpenTask={onOpenTask} selId={selId}/>
         :<FreeformCanvas T={T} notes={canvasNotes} setNotes={setCanvasNotes} onCanvasToTask={onCanvasToTask} requestLink={requestLink} onCanvasToNote={onCanvasToNote}/>}
     </div>
   );
 }
 
-function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,onOpenTask,selId}) {
+function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,isInMyDay,onOpenTask,selId}) {
   const narrow=useNarrow();   // four 157px columns are unreadable on a phone — stack them instead
   const [addingIn,setAddingIn]=useState(null);
   const [newText,setNewText]=useState("");
@@ -2774,7 +2431,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
           }} style={{flex:1,padding:10,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:7,alignContent:"flex-start",cursor:"text"}}>
             {tasks.filter(t=>t.quadrant===qid&&!t.done).sort((a,b)=>(b.position||0)-(a.position||0)).map(task=>(
               <Fragment key={task.id}>
-                <MNote dropEdge={dropCard?.id===String(task.id)?(dropCard.before?"left":"right"):null} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} onClickNote={()=>openNote(task)} dragging={dragId===task.id} sel={selId===task.id} swipeX={swipeId===task.id?swipeX:0} inMyDay={task.mydayDate===tod()} onRemove={()=>updateTask(task.id,{quadrant:null})} onDelete={()=>deleteTask(task.id)} onToMyDay={()=>toggleMyDay(task.id)} editing={editId===task.id} onEdit={()=>setEditId(task.id)} onSave={txt=>{const t=txt.trim();if(t&&t!==task.title){const patch=titleEditPatch(task,t,cats);if(Object.keys(patch).length)updateTask(task.id,patch);}setEditId(null);}}/>
+                <MNote dropEdge={dropCard?.id===String(task.id)?(dropCard.before?"left":"right"):null} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} onClickNote={()=>openNote(task)} dragging={dragId===task.id} sel={selId===task.id} swipeX={swipeId===task.id?swipeX:0} inMyDay={!!isInMyDay?.(task)} onRemove={()=>updateTask(task.id,{quadrant:null})} editing={editId===task.id} onSave={txt=>{const t=txt.trim();if(t&&t!==task.title){const patch=titleEditPatch(task,t,cats);if(Object.keys(patch).length)updateTask(task.id,patch);}setEditId(null);}}/>
               </Fragment>
             ))}
             {addingIn===qid&&(
@@ -2796,7 +2453,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
   );
 }
 
-function MNote({task,qColor,catMeta,T,onDelete,onRemove,onToMyDay,editing,onEdit,onSave,onDown,onClickNote,dragging,inMyDay,sel,swipeX=0,dropEdge=null}) {
+function MNote({task,qColor,catMeta,T,onRemove,editing,onSave,onDown,onClickNote,dragging,inMyDay,sel,swipeX=0,dropEdge=null}) {
   const [hov,setHov]=useState(false);
   const [et,setEt]=useState(task.title);
   if (editing) return (
@@ -2866,7 +2523,7 @@ function FreeformCanvas({T,notes,setNotes,onCanvasToTask,requestLink,onCanvasToN
     const rect = canvasRef.current.getBoundingClientRect();
     const x = Math.max(0, e.clientX - rect.left - 70);
     const y = Math.max(0, e.clientY - rect.top - 40);
-    const newNote = { id: Date.now(), text: "", x, y, color: NOTE_COLS[notes.length % NOTE_COLS.length] }; // stays empty — vanishes on blur if you don't type
+    const newNote = { id: crypto.randomUUID(), text: "", x, y, color: NOTE_COLS[notes.length % NOTE_COLS.length] }; // stays empty — vanishes on blur if you don't type
     setNotes(ns => [...ns, newNote]);
     setEditingId(newNote.id);
   }, [notes.length, setNotes]);
@@ -2901,7 +2558,7 @@ function FreeformCanvas({T,notes,setNotes,onCanvasToTask,requestLink,onCanvasToN
       )}
       {notes.map(note => (
         <FreeNote key={note.id} note={note} T={T} editing={editingId===note.id}
-          onPointerDown={e=>onPointerDown(e,note)} onEdit={()=>setEditingId(note.id)}
+          onPointerDown={e=>onPointerDown(e,note)}
           onSave={txt=>{
             const t=(txt||"").trim();
             if(!t){ // nothing typed → a brand-new note simply disappears; an old note keeps its text
@@ -2922,7 +2579,7 @@ function FreeformCanvas({T,notes,setNotes,onCanvasToTask,requestLink,onCanvasToN
   );
 }
 
-function FreeNote({note,T,editing,onPointerDown,onEdit,onSave,onDelete,onToMyDay,onConvert,onLink,onColorChange}) {
+function FreeNote({note,T,editing,onPointerDown,onSave,onDelete,onToMyDay,onConvert,onLink,onColorChange}) {
   const [hov,setHov]=useState(false);
   const [txt,setTxt]=useState(note.text);
   useEffect(()=>setTxt(note.text),[note.text]);
@@ -3041,7 +2698,7 @@ function NotesView({T,notes,setNotes,tasks,onGoToTask,requestLink,onLinkNote,onC
     window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up);window.addEventListener("pointercancel",up);
   };
   const ACC=["#3b82f6","#22c55e","#f59e0b","#ef4444","#a855f7","#ec4899","#14b8a6"];
-  const addNote=()=>{if(!nt.trim())return;const n={id:Date.now(),title:nt.trim(),body:"",pinned:false,color:ACC[notes.length%ACC.length],created:tod()};setNotes(ns=>[n,...ns]);setSel(n);if(narrow)setListOpen(false);setNt("");};
+  const addNote=()=>{if(!nt.trim())return;const n={id:crypto.randomUUID(),title:nt.trim(),body:"",pinned:false,color:ACC[notes.length%ACC.length],created:tod()};setNotes(ns=>[n,...ns]);setSel(n);if(narrow)setListOpen(false);setNt("");};
   const upNote=(id,patch)=>{setNotes(ns=>ns.map(n=>n.id===id?{...n,...patch}:n));if(sel?.id===id)setSel(s=>({...s,...patch}));};
   const delNote=id=>{setNotes(ns=>ns.filter(n=>n.id!==id));if(sel?.id===id)setSel(null);};
   return (
@@ -3753,9 +3410,6 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
   const dropRef=useRef(null);
   const didDrag=useRef(false);
   const [renaming,setRenaming]=useState(null);
-  const [gAdd,setGAdd]=useState(false);
-  const [gName,setGName]=useState("");
-  const [newList,setNewList]=useState("");
   const [hov,setHov]=useState(null);
   const [manage,setManage]=useState(null); // {type:"list"|"group", id, name}
   const [creating,setCreating]=useState(null); // "list" | "group"
@@ -3803,7 +3457,7 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
       );
     });
   };
-  const addGroup=(name,icon)=>{ const n=(name??gName).trim(); if(!n){setGAdd(false);return null;} const gid="g"+Date.now(); write([...order,gid],parentRaw,[...groups,{id:gid,name:n,icon:icon||null,collapsed:false}]); setGName(""); setGAdd(false); return gid; };
+  const addGroup=(name,icon)=>{ const n=(name||"").trim(); if(!n) return null; const gid="g"+Date.now(); write([...order,gid],parentRaw,[...groups,{id:gid,name:n,icon:icon||null,collapsed:false}]); return gid; };
   const renGroup=(id,n)=>write(order,parentRaw,groups.map(g=>{ if(g.id!==id) return g; const nm=n||g.name;
     // Re-guess the icon on rename when it was auto (null = live-auto, or equals the old name's guess); keep hand-picked ones.
     const icon=(!g.icon||g.icon===guessIcon(g.name))?guessIcon(nm):g.icon;
@@ -4344,9 +3998,9 @@ function HelpGuide({T,onClose,onReplayTour,onSamples}) {
   );
 }
 
-function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSound,onExport,onImport,onClearCompleted,ownedShares,onShareFolder,onUnshare,onUploadIcon,onDeleteCat,deletedCats,onRestoreCat,onPurgeCat,navTabs=[],hiddenTabs=[],setHiddenTabs,knownPeople=[],teams=[],myEmail,myId,onTeamCreate,onTeamAddMember,onTeamRemoveMember,onTeamDelete,myAvatar,onPickAvatar,newAtBottom,setNewAtBottom,onHelp}) {
+function SettingsView({T,dark,setDark,scheme,setScheme,sound,setSound,onExport,onImport,onClearCompleted,ownedShares,onUnshare,deletedCats,onRestoreCat,onPurgeCat,pomLen,onPomLen,navTabs=[],hiddenTabs=[],setHiddenTabs,knownPeople=[],teams=[],myEmail,myId,onTeamCreate,onTeamAddMember,onTeamRemoveMember,onTeamDelete,myAvatar,onPickAvatar,newAtBottom,setNewAtBottom,onHelp}) {
+  const narrow=useNarrow();
   const importRef=useRef(null);
-  const iconFileRef=useRef(null);
   const soundFileRef=useRef(null);
   const onSoundFile=file=>{
     if(!file) return;
@@ -4355,40 +4009,14 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
     r.onload=()=>{ try{ localStorage.setItem("fs_sound_custom",r.result); setSound("custom"); playComplete("custom"); }catch{ alert("Couldn't save that sound — try a smaller clip."); } };
     r.readAsDataURL(file);
   };
-  const [shareFolderName,setShareFolderName]=useState("");
-  const [shareEmail,setShareEmail]=useState("");
-  const [sharePerm,setSharePerm]=useState("edit");
+  // Nicknames for the people you work with — the same store the share panel reads, so a nickname works in both.
   const [contacts,setContacts]=useState(()=>{try{return JSON.parse(localStorage.getItem("fs_contacts")||"{}");}catch{return{};}});
   useEffect(()=>{try{localStorage.setItem("fs_contacts",JSON.stringify(contacts));}catch{}},[contacts]);
-  const knownEmails=[...new Set([...(ownedShares||[]).map(s=>s.shared_with_email),...Object.keys(contacts)])].filter(Boolean);
-  const setNick=(em,nm)=>setContacts(c=>({...c,[em]:nm}));
-  const doInvite=()=>{
-    if(!shareFolderName){ alert("Pick a folder to share first."); return; }
-    const raw=shareEmail.trim(); if(!raw) return;
-    const isEmail=/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw);
-    let em=raw.toLowerCase();
-    if(!isEmail){
-      // Typed a nickname instead of an email? Resolve it to that person's saved email.
-      const match=Object.entries(contacts).find(([mail,nick])=>nick&&nick.trim().toLowerCase()===raw.toLowerCase());
-      if(match) em=match[0];
-      else { alert(`"${raw}" isn't a valid email or a saved nickname. Enter an email like name@example.com.`); return; }
-    }
-    onShareFolder(shareFolderName,em,sharePerm);
-    setContacts(c=>em in c?c:{...c,[em]:""});
-    setShareEmail("");
-  };
-  const [iconPicked,setIconPicked]=useState(false);
-  const [notifs,setNotifs]=useState(true);
-  const [focus,setFocus]=useState(false);
-  const [weekly,setWeekly]=useState(true);
-  const [pomLen,setPomLen]=useState(25);
-  const [newCat,setNewCat]=useState("");
-  const [newCatColor,setNewCatColor]=useState(CAT_COLORS[5]);
-  const [newCatIcon,setNewCatIcon]=useState(CAT_ICONS[0]);
-  const [iconMenuFor,setIconMenuFor]=useState(null);
-  const addCat=()=>{const name=newCat.trim();if(!name||Object.keys(cats).some(k=>k.toLowerCase()===name.toLowerCase()))return;setCats(c=>({...c,[name]:{color:newCatColor,icon:newCatIcon}}));setNewCat("");setNewCatIcon(CAT_ICONS[0]);setIconPicked(false);};
-  const onNameChange=v=>{ const g=guessIcon(v,null), was=guessIcon(newCat,null); setNewCat(v); if(!iconPicked) setNewCatIcon(g||"📁"); else if(g&&g!==was){ setNewCatIcon(g); setIconPicked(false); } };
-  const pickIcon=em=>{if(iconMenuFor==="__new__"){setNewCatIcon(em);setIconPicked(true);}else setCats(c=>({...c,[iconMenuFor]:{...c[iconMenuFor],icon:em}}));setIconMenuFor(null);};
+  const people=[...new Set([...(ownedShares||[]).map(s=>s.shared_with_email),...Object.keys(contacts)])].filter(Boolean);
+  // Reminder notifications are the browser's permission, so this shows the real state and asks for it.
+  const canNotify=typeof window!=="undefined"&&"Notification" in window;
+  const [notifPerm,setNotifPerm]=useState(()=>canNotify?Notification.permission:"unsupported");
+  const askNotify=()=>{ if(canNotify) Notification.requestPermission().then(setNotifPerm).catch(()=>{}); };
   const Toggle=({val,onChange})=>(
     <div onClick={()=>onChange(!val)} style={{width:36,height:20,borderRadius:10,background:val?T.accent:T.surface3,cursor:"pointer",position:"relative",transition:"background .2s",flexShrink:0}}>
       <div style={{width:16,height:16,borderRadius:"50%",background:"#fff",position:"absolute",top:2,left:val?18:2,transition:"left .2s",boxShadow:"0 1px 4px rgba(0,0,0,.3)"}}/>
@@ -4396,12 +4024,12 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
   );
   const Row=({label,desc,children})=>(
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",borderBottom:`1px solid ${T.border}`}}>
-      <div><div style={{fontSize:13,fontWeight:500}}>{label}</div>{desc&&<div style={{fontSize:11,color:T.textMuted,marginTop:1}}>{desc}</div>}</div>
+      <div style={{flex:1,minWidth:0,paddingRight:10}}><div style={{fontSize:13,fontWeight:500}}>{label}</div>{desc&&<div style={{fontSize:11,color:T.textMuted,marginTop:1,lineHeight:1.45}}>{desc}</div>}</div>
       {children}
     </div>
   );
   return (
-    <div style={{flex:1,overflowY:"auto",padding:"22px 26px",maxWidth:580}}>
+    <div style={{flex:1,overflowY:"auto",padding:narrow?"16px 13px":"22px 26px",maxWidth:580}}>
       <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:21,fontWeight:700,letterSpacing:"-.5px",marginBottom:18}}>Settings</h1>
 
       {/* The guide, first thing on the page — it is what a stuck user comes here looking for. */}
@@ -4447,99 +4075,53 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
         </div>
       </div>
 
-      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"0 16px",marginBottom:14}}>
-        <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,padding:"12px 0 6px"}}>Categories</div>
-        <div style={{fontSize:11,color:T.textMuted,marginBottom:8}}>These are your folders in the sidebar. Tap a category's icon to change it.</div>
-        <div style={{display:"flex",flexWrap:"wrap",gap:7,paddingBottom:10}}>
-          {Object.entries(cats).map(([name,meta])=>(
-            <div key={name} style={{display:"flex",alignItems:"center",gap:5,padding:"4px 8px 4px 6px",borderRadius:20,background:meta.color+"22",border:`1px solid ${meta.color}55`}}>
-              <button onClick={()=>setIconMenuFor(iconMenuFor===name?null:name)} title="Change icon" style={{border:"none",background:"transparent",cursor:"pointer",lineHeight:1,padding:0,display:"flex",alignItems:"center"}}><CatIcon icon={meta.icon} size={15}/></button>
-              <span style={{fontSize:12,color:meta.color,fontWeight:600}}>{name}</span>
-              <button onClick={()=>onDeleteCat(name)} title="Delete folder" style={{width:14,height:14,borderRadius:"50%",border:"none",cursor:"pointer",background:T.surface3,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center",marginLeft:1}}><Ico n="x" s={8}/></button>
-            </div>
-          ))}
-        </div>
-        {iconMenuFor&&(
-          <div style={{padding:"4px 0 10px"}}>
-            <input ref={iconFileRef} type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{const f=e.target.files[0]; e.target.value=""; if(f&&onUploadIcon){const url=await onUploadIcon(f); if(url)pickIcon(url);}}}/>
-            <button onClick={()=>iconFileRef.current?.click()} style={{marginBottom:6,padding:"5px 10px",borderRadius:7,border:`1px dashed ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>🖼️ Upload image</button>
-            <div style={{display:"flex",flexWrap:"wrap",gap:3,maxHeight:120,overflowY:"auto"}}>
-              {CAT_ICONS.map(em=>(
-                <button key={em} onClick={()=>pickIcon(em)} style={{width:30,height:30,borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center"}}>{em}</button>
-              ))}
-            </div>
-          </div>
-        )}
-        <div style={{display:"flex",gap:6,paddingBottom:12,alignItems:"center",flexWrap:"wrap"}}>
-          <button onClick={()=>setIconMenuFor(iconMenuFor==="__new__"?null:"__new__")} title="Pick icon" style={{width:32,height:32,borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><CatIcon icon={newCatIcon} size={16}/></button>
-          <div style={{display:"flex",gap:4,flexWrap:"wrap",marginRight:4}}>
-            {CAT_COLORS.map(c=><div key={c} onClick={()=>setNewCatColor(c)} style={{width:16,height:16,borderRadius:"50%",background:c,cursor:"pointer",border:`2px solid ${newCatColor===c?T.text:"transparent"}`,flexShrink:0}}/>)}
-          </div>
-          <input value={newCat} onChange={e=>onNameChange(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCat()} placeholder="New list name…" style={{flexGrow:1,flexBasis:110,minWidth:0,padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
-          <button onClick={addCat} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700,flexShrink:0}}>Add</button>
-        </div>
-        <div style={{fontSize:10,color:T.textMuted,paddingBottom:12,marginTop:-4}}>An icon is auto-picked from the name — tap it above to change.</div>
-        {deletedCats&&deletedCats.length>0&&(
-          <div style={{paddingBottom:12}}>
-            <div style={{fontSize:10,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>Recently deleted</div>
-            <div style={{display:"flex",flexDirection:"column",gap:5}}>
-              {deletedCats.map(d=>(
-                <div key={d.name} style={{display:"flex",alignItems:"center",gap:7,padding:"5px 9px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
-                  <CatIcon icon={d.icon} size={14}/>
-                  <span style={{fontSize:12,fontWeight:600,color:T.textMuted,flex:1,textTransform:"capitalize"}}>{d.name}</span>
-                  <button onClick={()=>onRestoreCat(d.name)} style={{padding:"3px 10px",borderRadius:6,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Restore</button>
-                  <button onClick={()=>onPurgeCat(d.name)} title="Remove permanently" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex"}}><Ico n="x" s={12}/></button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"0 16px",marginBottom:14}}>
-        <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,padding:"12px 0 6px"}}>Share a folder 🤝</div>
-        <div style={{fontSize:11,color:T.textMuted,marginBottom:8,lineHeight:1.5}}>Invite another Freely user by email. They'll see and can edit tasks in that folder. Use the email they signed up with.</div>
-        <div style={{display:"flex",gap:6,flexWrap:"wrap",paddingBottom:10}}>
-          <select value={shareFolderName} onChange={e=>setShareFolderName(e.target.value)} style={{padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",cursor:"pointer"}}>
-            <option value="">Choose folder…</option>
-            {Object.keys(cats).map(n=><option key={n} value={n}>{n}</option>)}
-          </select>
-          <input value={shareEmail} onChange={e=>setShareEmail(e.target.value)} placeholder="their@email.com" type="email" style={{flex:1,minWidth:120,padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
-          <select value={sharePerm} onChange={e=>setSharePerm(e.target.value)} style={{padding:"6px 9px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",cursor:"pointer"}}>
-            <option value="view">View only</option>
-            <option value="edit">Edit & add</option>
-            <option value="delete">Edit, add & delete</option>
-          </select>
-          <button onClick={doInvite} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Invite</button>
-        </div>
-        {knownEmails.length>0&&(
-          <div style={{paddingBottom:12}}>
-            <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>Saved people — tap “Use” to reuse, add a nickname</div>
-            <div style={{display:"flex",flexDirection:"column",gap:5}}>
-              {knownEmails.map(em=>(
-                <div key={em} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 8px",borderRadius:8,background:T.surface2,border:`1px solid ${shareEmail.trim().toLowerCase()===em?T.accent:T.border}`}}>
-                  <span style={{fontSize:14}}>{contacts[em]?"⭐":"👤"}</span>
-                  <div style={{flex:1,minWidth:0}}>
-                    <input value={contacts[em]||""} onChange={e=>setNick(em,e.target.value)} placeholder="Add a nickname…" style={{width:"100%",padding:"2px 0",border:"none",borderBottom:`1px dashed ${T.border}`,background:"transparent",color:T.text,fontSize:12,fontWeight:600,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
-                    <div style={{fontSize:10,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{em}</div>
-                  </div>
-                  <button onClick={()=>setShareEmail(em)} style={{padding:"4px 12px",borderRadius:7,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Use</button>
-                  <button onClick={()=>setContacts(c=>{const n={...c};delete n[em];return n;})} title="Forget this person" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex"}}><Ico n="x" s={11}/></button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        {ownedShares&&ownedShares.length>0&&(
-          <div style={{paddingBottom:12,display:"flex",flexDirection:"column",gap:5}}>
-            {ownedShares.map(s=>(
-              <div key={s.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
-                <span style={{fontSize:14}}>🤝</span>
-                <span style={{fontSize:12,fontWeight:600,textTransform:"capitalize"}}>{s.folder}</span>
-                <span style={{fontSize:11,color:T.textMuted,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {s.shared_with_email}</span>
-                <span style={{fontSize:9,fontWeight:700,color:s.can_delete?T.danger:T.textMuted,background:(s.can_delete?T.danger:T.textMuted)+"22",padding:"1px 6px",borderRadius:10}}>{s.can_edit===false?"view only":s.can_delete?"can delete":"edit"}</span>
-                <button onClick={()=>onUnshare(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>Remove</button>
+      {/* Lists are created, renamed, shared and deleted from the sidebar (⋯ next to a list). What's left here
+          is what has no other home: restoring a deleted list, and one overview of everything you share. */}
+      {deletedCats&&deletedCats.length>0&&(
+        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 16px 14px",marginBottom:14}}>
+          <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,marginBottom:8}}>Recently deleted lists</div>
+          <div style={{display:"flex",flexDirection:"column",gap:5}}>
+            {deletedCats.map(d=>(
+              <div key={d.name} style={{display:"flex",alignItems:"center",gap:7,padding:"5px 9px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
+                <CatIcon icon={d.icon} size={14}/>
+                <span style={{fontSize:12,fontWeight:600,color:T.textMuted,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</span>
+                <button onClick={()=>onRestoreCat(d.name)} style={{padding:"3px 10px",borderRadius:6,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}>Restore</button>
+                <button onClick={()=>onPurgeCat(d.name)} title="Forget it" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0}}><Ico n="x" s={12}/></button>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 16px 14px",marginBottom:14}}>
+        <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>Sharing 🤝</div>
+        <div style={{fontSize:11,color:T.textMuted,marginBottom:10,lineHeight:1.5}}>To share a list, tap 🤝 Share next to its name. Everything you share is listed here.</div>
+        {(!ownedShares||ownedShares.length===0)
+          ? <div style={{fontSize:11,color:T.textMuted,opacity:.7}}>You aren't sharing any lists yet.</div>
+          : <div style={{display:"flex",flexDirection:"column",gap:5}}>
+              {ownedShares.map(s=>(
+                <div key={s.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
+                  <span style={{fontSize:12,fontWeight:600,flexShrink:0,maxWidth:"35%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.folder}</span>
+                  <span style={{fontSize:11,color:T.textMuted,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {contacts[s.shared_with_email]||s.shared_with_email}</span>
+                  <span style={{fontSize:9,fontWeight:700,flexShrink:0,color:s.can_delete?T.danger:T.textMuted,background:(s.can_delete?T.danger:T.textMuted)+"22",padding:"1px 6px",borderRadius:10}}>{s.can_edit===false?"view only":s.can_delete?"can delete":"edit"}</span>
+                  <button onClick={()=>onUnshare(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}>Remove</button>
+                </div>
+              ))}
+            </div>}
+        {people.length>0&&(
+          <div style={{marginTop:12}}>
+            <div style={{fontSize:9,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:T.textMuted,marginBottom:6}}>Nicknames — shown instead of the email everywhere</div>
+            <div style={{display:"flex",flexDirection:"column",gap:5}}>
+              {people.map(em=>(
+                <div key={em} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 8px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
+                  <span style={{fontSize:14}}>{contacts[em]?"⭐":"👤"}</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <input value={contacts[em]||""} onChange={e=>setContacts(c=>({...c,[em]:e.target.value}))} placeholder="Add a nickname…" style={{width:"100%",padding:"2px 0",border:"none",borderBottom:`1px dashed ${T.border}`,background:"transparent",color:T.text,fontSize:12,fontWeight:600,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+                    <div style={{fontSize:10,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{em}</div>
+                  </div>
+                  <button onClick={()=>setContacts(c=>{const n={...c};delete n[em];return n;})} title="Forget this nickname" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0}}><Ico n="x" s={12}/></button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -4565,16 +4147,15 @@ function SettingsView({T,dark,setDark,cats,setCats,scheme,setScheme,sound,setSou
             </div>
           )},
         ]},
-        {title:"Notifications",rows:[
-          {label:"Push Notifications",desc:"Reminders for upcoming tasks",el:<Toggle val={notifs} onChange={setNotifs}/>},
-          {label:"Weekly Summary",desc:"Email digest every Sunday",el:<Toggle val={weekly} onChange={setWeekly}/>},
-          {label:"Focus Mode",desc:"Suppress notifications during Pomodoro",el:<Toggle val={focus} onChange={setFocus}/>},
+        {title:"Reminders",rows:[
+          {label:"Notifications",desc:notifPerm==="granted"?"On — reminders pop up even when Freely is in the background.":notifPerm==="denied"?"Blocked in your browser settings. Reminders still show inside the app.":notifPerm==="unsupported"?"This browser can't show notifications. Reminders show inside the app.":"Off — reminders only show while Freely is open.",
+            el:notifPerm==="default"?<button onClick={askNotify} style={{padding:"5px 11px",borderRadius:7,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0}}>Turn on</button>:<span style={{fontSize:11,fontWeight:700,flexShrink:0,color:notifPerm==="granted"?T.success:T.textMuted}}>{notifPerm==="granted"?"On":"—"}</span>},
         ]},
-        {title:"Pomodoro",rows:[{label:"Session Length (min)",desc:"Focus block duration",el:(
-          <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <button onClick={()=>setPomLen(p=>Math.max(5,p-5))} style={{width:24,height:24,borderRadius:5,border:`1px solid ${T.border}`,background:"transparent",color:T.text,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
+        {title:"Focus timer",rows:[{label:"Session length",desc:"Minutes per focus session",el:(
+          <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+            <button onClick={()=>onPomLen(Math.max(5,pomLen-5))} style={{width:24,height:24,borderRadius:5,border:`1px solid ${T.border}`,background:"transparent",color:T.text,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
             <span style={{fontWeight:700,fontSize:14,minWidth:24,textAlign:"center"}}>{pomLen}</span>
-            <button onClick={()=>setPomLen(p=>Math.min(60,p+5))} style={{width:24,height:24,borderRadius:5,border:`1px solid ${T.border}`,background:"transparent",color:T.text,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+            <button onClick={()=>onPomLen(Math.min(90,pomLen+5))} style={{width:24,height:24,borderRadius:5,border:`1px solid ${T.border}`,background:"transparent",color:T.text,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
           </div>
         )}]},
         {title:"Data",rows:[

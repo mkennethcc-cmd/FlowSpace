@@ -1,5 +1,8 @@
 import { supabase } from "./supabase";
 
+// "YYYY-MM-DD" in the device's own time zone. A timestamp's UTC date is a day ahead every evening in New York.
+const localDay = ts => { if (!ts) return ""; const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+
 export const fromDbTask = r => ({
   id: r.id, title: r.title, done: r.done, priority: r.priority,
   // Dates stay plain "YYYY-MM-DD" strings — sliced so a timestamp-typed column can never shift the day by a timezone.
@@ -21,13 +24,44 @@ const healIcon = (name, icon) => {
 };
 
 const fromDbCanvas = r => ({ id: r.id, text: r.text, x: r.x, y: r.y, color: r.color });
-const fromDbNote = r => ({ id: r.id, title: r.title, body: r.body || "", pinned: r.pinned, color: r.color, drawing: r.drawing || null, taskId: r.task_id != null ? r.task_id : null, created: r.created_at?.split("T")[0] || "" });
-const fromDbHabit = r => ({ id: r.id, name: r.name || "", icon: r.icon || "✅", color: r.color || "#22c55e", cadence: r.cadence != null ? r.cadence : 7, log: Array.isArray(r.log) ? r.log : [], days: Array.isArray(r.days) && r.days.length ? r.days : null, prio: r.prio != null ? r.prio : null, created: r.created_at?.split("T")[0] || "" });
+const fromDbNote = r => ({ id: r.id, title: r.title, body: r.body || "", pinned: r.pinned, color: r.color, drawing: r.drawing || null, taskId: r.task_id != null ? r.task_id : null, created: localDay(r.created_at) });
+const fromDbHabit = r => ({ id: r.id, name: r.name || "", icon: r.icon || "✅", color: r.color || "#22c55e", cadence: r.cadence != null ? r.cadence : 7, log: Array.isArray(r.log) ? r.log : [], days: Array.isArray(r.days) && r.days.length ? r.days : null, prio: r.prio != null ? r.prio : null });
+
+const toDbNote = (n, isNew) => ({ id: n.id, title: n.title, body: n.body || "", pinned: !!n.pinned, color: n.color, drawing: n.drawing || null, task_id: n.taskId != null ? String(n.taskId) : null, ...(isNew ? { created_at: new Date().toISOString() } : {}) });
+const toDbCanvas = n => ({ id: n.id, text: n.text, x: n.x, y: n.y, color: n.color });
+const toDbCat = c => ({ name: c.name, color: c.color, icon: c.icon || "📌" });
+const toDbHabit = (h, _isNew, i) => ({ id: h.id, name: h.name, icon: h.icon, color: h.color, cadence: h.cadence != null ? h.cadence : 7, log: h.log || [], days: h.days && h.days.length ? h.days : null, prio: h.prio != null ? h.prio : null, position: i });
+
+// Write a collection by DIFF against the copy this device last saved or loaded: upsert only rows that
+// changed, delete only rows THIS device removed. Rows another device added in the meantime are never
+// touched. (The old "delete every row, re-insert my copy" erased them — and erased everything if the
+// connection dropped between the delete and the insert.) Throws on failure so the caller keeps `prev`
+// and retries the same diff later.
+async function syncRows(table, uid, prev, next, toRow, { key = "id", conflict = "id" } = {}) {
+  const sig = (r, i) => JSON.stringify(toRow(r, false, i));
+  const before = new Map(prev.map((r, i) => [String(r[key]), sig(r, i)]));
+  const keep = new Set(next.map(r => String(r[key])));
+  const changed = next.map((r, i) => [r, i]).filter(([r, i]) => before.get(String(r[key])) !== sig(r, i));
+  const removed = [...before.keys()].filter(k => !keep.has(k));
+  if (changed.length) {
+    const rows = changed.map(([r, i]) => ({ user_id: uid, ...toRow(r, !before.has(String(r[key])), i) }));
+    const { error } = await supabase.from(table).upsert(rows, { onConflict: conflict });
+    if (error) throw error;
+  }
+  if (removed.length) {
+    const { error } = await supabase.from(table).delete().eq("user_id", uid).in(key, removed);
+    if (error) throw error;
+  }
+}
+
+// Set once per session if the database predates habits.position (supabase/setup.sql not run yet).
+let habitsHavePosition = true;
 
 export const db = {
   async loadTasks() {
     // No user_id filter — RLS returns the user's own tasks plus tasks in folders shared with them.
-    const { data } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
+    if (error) throw error;
     return (data || []).map(fromDbTask);
   },
   async insertTask(t, uid) {
@@ -38,11 +72,8 @@ export const db = {
       subtasks: t.subtasks || [], recurring: t.recurring || null,
       quadrant: t.quadrant || null, remind_at: t.remindAt || null,
       attachments: t.attachments || [], position: t.position != null ? t.position : Date.now(),
-      myday_date: t.mydayDate || null,
-      // Only send time_end / assigned_to when set — keeps inserts working on databases that haven't run those migrations yet.
-      ...(t.endTime ? { time_end: t.endTime } : {}),
-      ...(t.assignedTo ? { assigned_to: t.assignedTo } : {}),
-      ...(t.assignPrivate ? { assign_private: true } : {}),
+      myday_date: t.mydayDate || null, time_end: t.endTime || null,
+      assigned_to: t.assignedTo || null, assign_private: !!t.assignPrivate,
     });
     if (error) throw error;
   },
@@ -72,95 +103,106 @@ export const db = {
     return { deleted: !Array.isArray(data) || data.length > 0 };
   },
 
-  async uploadAttachment(file, uid, taskId) {
+  async uploadAttachment(file, uid, folder) {
     const safe = file.name.replace(/[^\w.\-]/g, "_");
-    const path = `${uid}/${taskId}/${Date.now()}-${safe}`;
+    const path = `${uid}/${folder}/${Date.now()}-${safe}`;
     const { error } = await supabase.storage.from("attachments").upload(path, file, { upsert: false });
     if (error) throw error;
     const { data } = supabase.storage.from("attachments").getPublicUrl(path);
     return { name: file.name, path, url: data.publicUrl, type: file.type };
   },
-  async deleteAttachment(path) {
-    await supabase.storage.from("attachments").remove([path]);
+  // Best effort: storage refuses files under someone else's folder, which is fine — they own them.
+  async deleteAttachments(paths) {
+    const list = (paths || []).filter(Boolean);
+    if (list.length) await supabase.storage.from("attachments").remove(list);
   },
 
   async loadOwnedShares(uid) {
-    const { data } = await supabase.from("folder_shares").select("*").eq("owner_id", uid);
+    const { data, error } = await supabase.from("folder_shares").select("*").eq("owner_id", uid);
+    if (error) throw error;
     return data || [];
   },
   async loadSharedWithMe(email) {
     if (!email) return [];
-    const { data } = await supabase.from("folder_shares").select("*").eq("shared_with_email", email.toLowerCase());
+    const { data, error } = await supabase.from("folder_shares").select("*").eq("shared_with_email", email.toLowerCase());
+    if (error) throw error;
     return data || [];
   },
-  // perm: "view" (look only) · "edit" (edit & add) · "delete" (edit, add & delete). Older callers passed a boolean.
+  // perm: "view" (look only) · "edit" (edit & add) · "delete" (edit, add & delete).
   async addShare(ownerId, folder, email, perm) {
-    if (typeof perm === "boolean") perm = perm ? "delete" : "edit";
-    const row = { owner_id: ownerId, folder, shared_with_email: email.toLowerCase().trim(), can_delete: perm === "delete" };
+    const row = { owner_id: ownerId, folder, shared_with_email: email.toLowerCase().trim(), can_delete: perm === "delete", can_edit: perm !== "view" };
     const attempt = r => supabase.from("folder_shares").upsert(r, { onConflict: "owner_id,folder,shared_with_email" });
-    // can_edit arrived later: a database that hasn't run the latest SQL still accepts the share (as editable).
-    let { error } = await attempt({ ...row, can_edit: perm !== "view" });
-    if (error && /can_edit/.test(error.message || "")) ({ error } = await attempt(row));
+    let { error } = await attempt(row);
+    if (error && /can_edit/.test(error.message || "")) {
+      // The database predates view-only sharing. An editable share is still an editable share — but a
+      // view-only one must NOT quietly become editable, so that case stops here with a clear message.
+      if (perm === "view") throw new Error("View-only sharing needs the latest database setup — run supabase/setup.sql in Supabase, then try again.");
+      const { can_edit, ...legacy } = row;
+      ({ error } = await attempt(legacy));
+    }
     if (error) throw error;
   },
   async removeShare(id) {
-    await supabase.from("folder_shares").delete().eq("id", id);
+    const { error } = await supabase.from("folder_shares").delete().eq("id", id);
+    if (error) throw error;
+  },
+  async removeSharesOfFolder(ownerId, folder) {
+    const { error } = await supabase.from("folder_shares").delete().eq("owner_id", ownerId).eq("folder", folder);
+    if (error) throw error;
   },
 
   async loadGami(uid) {
-    const { data } = await supabase.from("gamification").select("*").eq("user_id", uid).maybeSingle();
+    const { data, error } = await supabase.from("gamification").select("*").eq("user_id", uid).maybeSingle();
+    if (error) throw error;
     return data || null;
   },
   async saveGami(uid, g) {
-    const base = {
+    const { error } = await supabase.from("gamification").upsert({
       user_id: uid, xp: g.xp || 0, streak: g.streak || 0,
-      last_active: g.lastActive || null, awarded: g.awarded || [],
+      last_active: g.last_active || null, awarded: g.awarded || [], prefs: g.prefs || {},
       updated_at: new Date().toISOString(),
-    };
-    const { error } = await supabase.from("gamification").upsert(g.prefs !== undefined ? { ...base, prefs: g.prefs } : base);
-    // `prefs` column missing (migration not run yet) → save the rest so XP/streaks are never lost.
-    if (error && g.prefs !== undefined) await supabase.from("gamification").upsert(base);
+    });
+    if (error) throw error;
   },
 
   async loadCanvas(uid) {
-    const { data } = await supabase.from("canvas_notes").select("*").eq("user_id", uid);
+    const { data, error } = await supabase.from("canvas_notes").select("*").eq("user_id", uid).order("created_at", { ascending: true });
+    if (error) throw error;
     return (data || []).map(fromDbCanvas);
   },
-  async syncCanvas(notes, uid) {
-    await supabase.from("canvas_notes").delete().eq("user_id", uid);
-    if (notes.length) await supabase.from("canvas_notes").insert(
-      notes.map(n => ({ user_id: uid, text: n.text, x: n.x, y: n.y, color: n.color }))
-    );
-  },
+  syncCanvas: (prev, next, uid) => syncRows("canvas_notes", uid, prev, next, toDbCanvas),
 
   async loadNotes(uid) {
-    const { data } = await supabase.from("notes").select("*").eq("user_id", uid);
+    const { data, error } = await supabase.from("notes").select("*").eq("user_id", uid).order("created_at", { ascending: false });
+    if (error) throw error;
     return (data || []).map(fromDbNote);
   },
-  async syncNotes(notes, uid) {
-    await supabase.from("notes").delete().eq("user_id", uid);
-    if (notes.length) await supabase.from("notes").insert(
-      notes.map(n => ({ user_id: uid, title: n.title, body: n.body || "", pinned: n.pinned || false, color: n.color, drawing: n.drawing || null, task_id: n.taskId != null ? n.taskId : null, ...(n.created ? { created_at: new Date(n.created + "T12:00:00").toISOString() } : {}) }))
-    );
-  },
+  syncNotes: (prev, next, uid) => syncRows("notes", uid, prev, next, toDbNote),
 
   async loadHabits(uid) {
-    const { data } = await supabase.from("habits").select("*").eq("user_id", uid).order("created_at", { ascending: true });
-    return (data || []).map(fromDbHabit);
+    let q = await supabase.from("habits").select("*").eq("user_id", uid).order("position", { ascending: true, nullsFirst: false }).order("created_at", { ascending: true });
+    if (q.error && /position/.test(q.error.message || "")) {
+      habitsHavePosition = false;
+      q = await supabase.from("habits").select("*").eq("user_id", uid).order("created_at", { ascending: true });
+    }
+    if (q.error) throw q.error;
+    return (q.data || []).map(fromDbHabit);
   },
-  async syncHabits(habits, uid) {
-    await supabase.from("habits").delete().eq("user_id", uid);
-    if (!habits.length) return;
-    const base = h => ({ id: h.id, user_id: uid, name: h.name, icon: h.icon, color: h.color, cadence: h.cadence != null ? h.cadence : 7, log: h.log || [] });
-    const extra = h => ({ ...(h.days && h.days.length ? { days: h.days } : {}), ...(h.prio != null ? { prio: h.prio } : {}) });
-    const { error } = await supabase.from("habits").insert(habits.map(h => ({ ...base(h), ...extra(h) })));
-    // days/prio columns missing (migration not run yet) → retry without them so habits are never lost.
-    if (error) await supabase.from("habits").insert(habits.map(base));
+  async syncHabits(prev, next, uid) {
+    const toRow = habitsHavePosition ? toDbHabit : (h, isNew, i) => { const { position, ...rest } = toDbHabit(h, isNew, i); return rest; };
+    try {
+      await syncRows("habits", uid, prev, next, toRow);
+    } catch (e) {
+      if (!habitsHavePosition || !/position/.test(e.message || "")) throw e;
+      habitsHavePosition = false;          // order won't persist until the SQL is run, but nothing is lost
+      await db.syncHabits(prev, next, uid);
+    }
   },
 
   // Messages (1:1 DMs + team chats). No filter — RLS returns exactly what this user may see.
   async loadMessages() {
-    const { data } = await supabase.from("messages").select("*").order("created_at", { ascending: true });
+    const { data, error } = await supabase.from("messages").select("*").order("created_at", { ascending: true });
+    if (error) throw error;
     return data || [];
   },
   async sendMessage(senderId, senderEmail, recipientEmail, body, groupId) {
@@ -233,14 +275,14 @@ export const db = {
     await supabase.from("groups").delete().eq("id", id);
   },
 
+  // Lists are keyed by name (unique per user), so a rename is a delete of the old name plus an insert.
   async loadCats(uid) {
-    const { data } = await supabase.from("categories").select("*").eq("user_id", uid);
+    const { data, error } = await supabase.from("categories").select("*").eq("user_id", uid);
+    if (error) throw error;
     if (!data?.length) return null;
     return Object.fromEntries(data.map(r => [r.name, { color: r.color, icon: healIcon(r.name, r.icon) }]));
   },
-  async syncCats(cats, uid) {
-    await supabase.from("categories").delete().eq("user_id", uid);
-    const rows = Object.entries(cats).map(([name, m]) => ({ user_id: uid, name, color: m.color, icon: m.icon || "📌" }));
-    if (rows.length) await supabase.from("categories").insert(rows);
-  },
+  syncCats: (prev, next, uid) => syncRows("categories", uid, catRows(prev), catRows(next), toDbCat, { key: "name", conflict: "user_id,name" }),
 };
+
+const catRows = cats => Object.entries(cats || {}).map(([name, m]) => ({ name, color: m.color, icon: m.icon }));
