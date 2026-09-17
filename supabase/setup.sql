@@ -344,6 +344,20 @@ create policy "shares: owner or invitee removes" on public.folder_shares
   as restrictive for delete to authenticated
   using (owner_id = auth.uid() or lower(shared_with_email) = lower(auth.jwt() ->> 'email'));
 
+-- Attachments: files can only be added, replaced or removed inside your own folder (<your user id>/…),
+-- which is where the app always puts them. Reading stays public so shared photos load. Scoped to the
+-- attachments bucket; RESTRICTIVE, so it holds whatever storage rules the dashboard created.
+drop policy if exists "attachments: write own folder" on storage.objects;
+create policy "attachments: write own folder" on storage.objects as restrictive for insert to authenticated
+  with check (bucket_id <> 'attachments' or (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists "attachments: change own folder" on storage.objects;
+create policy "attachments: change own folder" on storage.objects as restrictive for update to authenticated
+  using (bucket_id <> 'attachments' or (storage.foldername(name))[1] = auth.uid()::text)
+  with check (bucket_id <> 'attachments' or (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists "attachments: remove own folder" on storage.objects;
+create policy "attachments: remove own folder" on storage.objects as restrictive for delete to authenticated
+  using (bucket_id <> 'attachments' or (storage.foldername(name))[1] = auth.uid()::text);
+
 
 -- ╔═══════════════════════════════════════════════════════════════════════╗
 -- ║  STEP 4 · Live updates, then tell the API about everything            ║
