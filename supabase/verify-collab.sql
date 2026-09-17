@@ -311,15 +311,21 @@ begin
         res := res || ('38. B CANNOT take ownership of a task assigned to them | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: B owns it now' end);
       exception when others then res := res || ('38. B CANNOT take ownership of a task assigned to them | ✓ PASS')::text; end;
 
+      begin
+        delete from public.tasks where id = tid2;
+        get diagnostics cnt = row_count;
+        res := res || ('39. B CANNOT delete from the view-only list | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: the task was deleted' end);
+      exception when others then res := res || ('39. B CANNOT delete from the view-only list | ✓ PASS')::text; end;
+
       select count(*) into cnt from public.profiles where id = a_id;
-      res := res || ('39. B CAN see A''s profile (they share a list) | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: hidden' end);
+      res := res || ('40. B CAN see A''s profile (they share a list) | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: hidden' end);
 
       execute 'set local role ' || quote_ident(orig);
       perform set_config('request.jwt.claims',
         json_build_object('sub', '00000000-0000-0000-0000-0000000000ee', 'email', 'nobody@example.com')::text, true);
       execute 'set local role authenticated';
       select count(*) into cnt from public.profiles where id in (a_id, b_id);
-      res := res || ('40. A stranger CANNOT look up A''s or B''s email | ' || case when cnt = 0 then '✓ PASS' else ('✗ FAIL: ' || cnt || ' visible') end);
+      res := res || ('41. A stranger CANNOT look up A''s or B''s email | ' || case when cnt = 0 then '✓ PASS' else ('✗ FAIL: ' || cnt || ' visible') end);
     end if;
   end if;
 

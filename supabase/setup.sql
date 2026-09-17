@@ -14,7 +14,8 @@
 --   · Teammates can message each other directly, no friend request needed.
 --   · A task assigned to you is visible to you even if its list was never
 --     shared with you, and it shows up under "Assigned to me".
---   · A list can be shared view-only: they can read it but not change, add or delete.
+--   · A list can be shared view-only: they can read it but not change, add or delete — enforced
+--     even over older sharing rules.
 --   · Everyone sharing a list sees who a task is assigned to — unless the
 --     assigner marks it private, and then only the assignee can see it.
 --   · Habits keep the order you drag them into, on every device.
@@ -67,6 +68,14 @@ create table if not exists public.group_members (
 -- 'member' = full teammate (reads the team chat) · 'assigner' = guest who may only assign work.
 -- Added separately so an older table without this column is healed rather than skipped.
 alter table public.group_members add column if not exists role text not null default 'member';
+-- Live updates publish deletes, and Postgres refuses to delete from a published table that has no primary
+-- key ("does not have a replica identity") — removing a teammate would fail. Only applies when that's so.
+do $$
+begin
+  if not exists (select 1 from pg_index where indrelid = 'public.group_members'::regclass and indisprimary) then
+    alter table public.group_members replica identity full;
+  end if;
+end $$;
 
 -- Messages — 1:1 DMs and team chats share one table
 create table if not exists public.messages (
@@ -167,6 +176,17 @@ begin
   end if;
   return new;
 end $$;
+
+-- does my share on someone's list allow this? ('edit' or 'delete'; false when it isn't shared with me)
+-- A share from before the can_edit column existed counts as editable, the same as in the app.
+create or replace function public.share_allows(list_owner uuid, list_name text, action text)
+returns boolean language sql security definer stable set search_path = public as $$
+  select exists (select 1 from public.folder_shares fs
+                 where fs.owner_id = list_owner and fs.folder = list_name
+                   and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email')
+                   and case when action = 'delete' then coalesce(fs.can_delete, false)
+                            else coalesce(fs.can_edit, true) end);
+$$;
 
 
 -- ╔═══════════════════════════════════════════════════════════════════════╗
@@ -329,6 +349,21 @@ grant update (status) on public.chat_requests to authenticated;
 drop trigger if exists keep_task_owner on public.tasks;
 create trigger keep_task_owner before update on public.tasks
   for each row execute function public.keep_task_owner();
+
+-- Tasks in someone else's list: view-only really is view-only. Changing a task takes being its owner, being
+-- assigned to it, or an editing share; adding one takes an editing share; deleting takes a "+ delete" share.
+-- These are the same checks the app makes. RESTRICTIVE, so they hold over older sharing rules created
+-- before view-only existed; one of those let every share edit, which self-test checks 29 and 30 caught.
+drop policy if exists "tasks: change only with edit rights" on public.tasks;
+create policy "tasks: change only with edit rights" on public.tasks as restrictive for update to authenticated
+  using      (user_id = auth.uid() or public.is_assigned_to_me(assigned_to) or public.share_allows(user_id, tag, 'edit'))
+  with check (user_id = auth.uid() or public.is_assigned_to_me(assigned_to) or public.share_allows(user_id, tag, 'edit'));
+drop policy if exists "tasks: add only with edit rights" on public.tasks;
+create policy "tasks: add only with edit rights" on public.tasks as restrictive for insert to authenticated
+  with check (user_id = auth.uid() or public.share_allows(user_id, tag, 'edit'));
+drop policy if exists "tasks: delete only with delete rights" on public.tasks;
+create policy "tasks: delete only with delete rights" on public.tasks as restrictive for delete to authenticated
+  using (user_id = auth.uid() or public.share_allows(user_id, tag, 'delete'));
 
 -- Shares: only the list's OWNER creates or changes a share, so a view-only person can't upgrade
 -- themselves and a collaborator can't pass your list on. The invited person may still remove their own
