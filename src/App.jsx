@@ -2314,7 +2314,7 @@ const DL=({label,T,children})=><div><span style={{fontSize:10,fontWeight:700,let
 
 function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,isInMyDay,canvasNotes,setCanvasNotes,onCanvasToTask,requestLink,onCanvasToNote,onOpenTask,selId}) {
   const [tab,setTab]=useState("matrix");
-  const narrow=useNarrow();   // 157px-wide quadrants are unreadable — a phone stacks them instead
+  const narrow=useNarrow();
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
       <div style={{padding:narrow?"12px 13px 0":"14px 22px 0",borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
@@ -2340,7 +2340,7 @@ function MatrixView({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDa
 }
 
 function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,toggleMyDay,isInMyDay,onOpenTask,selId}) {
-  const narrow=useNarrow();   // four 157px columns are unreadable on a phone — stack them instead
+  const narrow=useNarrow();   // same 2×2 on a phone; each quadrant is only ~155px wide, so headers wrap
   const [addingIn,setAddingIn]=useState(null);
   const [newText,setNewText]=useState("");
   const [dragOver,setDragOver]=useState(null);
@@ -2427,16 +2427,16 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
   };
   const openNote=task=>{ if(didDragNote.current){ didDragNote.current=false; return; } onOpenTask?.(task); };
   return (
-    <div style={{flex:1,display:"grid",gridTemplateColumns:(bigQ||narrow)?"1fr":"1fr 1fr",gridTemplateRows:bigQ?"1fr":(narrow?"repeat(4, minmax(190px, auto))":"1fr 1fr"),gap:1,background:T.border,overflow:narrow&&!bigQ?"auto":"hidden"}}>
+    <div style={{flex:1,display:"grid",gridTemplateColumns:bigQ?"1fr":"1fr 1fr",gridTemplateRows:bigQ?"1fr":"1fr 1fr",gap:1,background:T.border,overflow:"hidden"}}>
       {QUAD_ORDER.filter(qid=>!bigQ||bigQ===qid).map(qid=>{const q=QUAD[qid];return(
         <div key={qid} data-quadrant={qid}
           style={{background:dragOver===qid?q.color+"12":T.bg,transition:"background .15s",display:"flex",flexDirection:"column",overflow:"hidden",outline:dragOver===qid?`2px dashed ${q.color}66`:"none",outlineOffset:"-2px"}}>
-          <div style={{padding:narrow?"8px 10px 7px":"9px 14px 7px",borderBottom:`1px solid ${T.border}`,background:q.color+"12",display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,flexShrink:0}}>
-            <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0,flexGrow:1}}>
-              <span style={{fontSize:11,fontWeight:700,color:q.color,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{q.icon} {q.label}</span>
+          <div style={{padding:narrow?"7px 8px 6px":"9px 14px 7px",borderBottom:`1px solid ${T.border}`,background:q.color+"12",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:narrow?"wrap":"nowrap",gap:narrow?"4px 6px":6,flexShrink:0}}>
+            <div style={{display:narrow?"contents":"flex",alignItems:"center",gap:6,minWidth:0,flexGrow:1}}>
+              <span style={narrow?{flexBasis:"100%",fontSize:10.5,fontWeight:700,color:q.color,lineHeight:1.25}:{fontSize:11,fontWeight:700,color:q.color,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{q.icon} {q.label}</span>
               <span style={{fontSize:9,color:T.textMuted,background:T.surface2,padding:"1px 6px",borderRadius:20,border:`1px solid ${T.border}`}}>{q.short}</span>
             </div>
-            <div style={{display:"flex",gap:4,flexShrink:0}}>
+            <div style={{display:"flex",gap:4,flexShrink:0,marginLeft:"auto"}}>
               <button onClick={()=>setBigQ(bigQ===qid?null:qid)} title={bigQ===qid?"Back to all four quadrants":"Enlarge this quadrant"} style={{width:22,height:22,borderRadius:5,border:"none",cursor:"pointer",background:bigQ===qid?q.color:q.color+"22",color:bigQ===qid?"#fff":q.color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,lineHeight:1}}>{bigQ===qid?"🗗":"⛶"}</button>
               <button onClick={()=>{setAddingIn(qid);setNewText("");}} style={{width:22,height:22,borderRadius:5,border:"none",cursor:"pointer",background:q.color+"22",color:q.color,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="plus" s={12} c={q.color}/></button>
             </div>
@@ -2445,7 +2445,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
             if(didDragNote.current){ didDragNote.current=false; return; }        // a swipe/drag release is not a request for a new task
             if(Date.now()-justClosedRef.current<400) return;                      // the click that closed the empty editor shouldn't reopen it
             if(e.target===e.currentTarget&&addingIn!==qid){setAddingIn(qid);setNewText("");}
-          }} style={{flex:1,padding:10,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:7,alignContent:"flex-start",cursor:"text"}}>
+          }} style={{flex:1,padding:narrow?8:10,overflowY:"auto",display:"flex",flexWrap:"wrap",gap:7,alignContent:"flex-start",cursor:"text"}}>
             {tasks.filter(t=>t.quadrant===qid&&!t.done).sort((a,b)=>(b.position||0)-(a.position||0)).map(task=>(
               <Fragment key={task.id}>
                 <MNote dropEdge={dropCard?.id===String(task.id)?(dropCard.before?"left":"right"):null} task={task} qColor={q.color} catMeta={cats[task.tag]} T={T} onDown={onNoteDown} onClickNote={()=>openNote(task)} dragging={dragId===task.id} sel={selId===task.id} swipeX={swipeId===task.id?swipeX:0} inMyDay={!!isInMyDay?.(task)} onRemove={()=>updateTask(task.id,{quadrant:null})} editing={editId===task.id} onSave={txt=>{const t=txt.trim();if(t&&t!==task.title){const patch=titleEditPatch(task,t,cats);if(Object.keys(patch).length)updateTask(task.id,patch);}setEditId(null);}}/>
@@ -2495,7 +2495,7 @@ function MNote({task,qColor,catMeta,T,onRemove,editing,onSave,onDown,onClickNote
       <div data-mnote-id={task.id} onPointerDown={e=>onDown?.(e,task)} onClick={()=>onClickNote?.()}
         onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
         style={{padding:"7px 9px",borderRadius:8,background:swipeX!==0?T.surface:qColor+"1a",border:`1px solid ${swipeX<-30?T.danger:swipeX>30?"#f59e0b":sel?qColor:qColor+"44"}`,boxShadow:sel?`0 0 0 2px ${qColor}55`:dragging?`0 10px 22px ${qColor}55`:hov?`0 6px 14px ${qColor}33`:"none",fontSize:12,color:T.text,lineHeight:1.5,position:"relative",cursor:"grab",transition:swipeX?"none":"transform .15s,box-shadow .15s",transform:swipeX?`translateX(${swipeX}px)`:dragging?"scale(1.05) rotate(1deg)":hov?"translateY(-2px) rotate(.4deg)":"none",opacity:dragging?.85:1,userSelect:"none",WebkitUserSelect:"none",touchAction:"pan-y"}}>
-        <div style={{borderLeft:`3px solid ${qColor}`,paddingLeft:6}}>{task.title}</div>
+        <div style={{borderLeft:`3px solid ${qColor}`,paddingLeft:6,overflowWrap:"anywhere"}}>{task.title}</div>
         {task.notes&&task.notes.trim()&&<div style={{marginTop:4,fontSize:9.5,color:T.textMuted,lineHeight:1.4,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>📝 {task.notes.trim().split("\n")[0].slice(0,90)}</div>}
         {(task.due||task.subtasks?.length>0||task.attachments?.length>0)&&<div style={{marginTop:3,fontSize:8.5,color:T.textMuted,display:"flex",gap:6,flexWrap:"wrap"}}>
           {task.due&&<span style={{color:(!isTbd(task.due)&&task.due<tod()&&!task.done)?T.danger:T.textMuted,fontWeight:(!isTbd(task.due)&&task.due<tod()&&!task.done)?700:500}}>📅 {fmtDate(task.due)}</span>}
