@@ -1086,7 +1086,7 @@ export default function Freely() {
     return [...out];
   };
   // Who shared the list I'm currently looking at (for the "Shared by …" header + Leave button).
-  const sharedViewInfo=view.startsWith("shared:")?(()=>{ const rest=view.slice(7),ci=rest.indexOf(":"),o=rest.slice(0,ci),f=rest.slice(ci+1); const em=idEmail[o]; const sh=sharedWithMe.find(x=>x.owner_id===o&&x.folder===f); return {owner:o,folder:f,email:em||null,nick:em?nickOf(em):null,canEdit:!sh||sh.can_edit!==false}; })():null;
+  const sharedViewInfo=view.startsWith("shared:")?(()=>{ const rest=view.slice(7),ci=rest.indexOf(":"),o=rest.slice(0,ci),f=rest.slice(ci+1); const em=idEmail[o]; const sh=sharedWithMe.find(x=>x.owner_id===o&&x.folder===f); return {owner:o,folder:f,email:em||null,nick:em?nickOf(em):null,canEdit:!sh||sh.can_edit!==false,canDelete:!!(sh&&sh.can_delete)}; })():null;
   // Can I chat freely with them? (trusted, accepted request either way, or they've messaged me)
   const chatLinked=em=>trusted.includes(em)
     ||chatReqs.some(r=>r.status==="accepted"&&((r.from_email===em&&r.to_email===meEmail)||(r.to_email===em&&r.from_email===meEmail)))
@@ -1757,7 +1757,11 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           {sharedKey&&(
             <div style={{fontSize:11,color:T.textMuted,marginTop:4,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
               <span>🤝 Shared by <b style={{color:T.text}}>{sharedInfo?.nick||"a collaborator"}</b>{sharedInfo?.email&&sharedInfo.nick!==sharedInfo.email?` (${sharedInfo.email})`:""}</span>
-              {readOnly&&<span title="You can see this list but not change it" style={{fontSize:9,fontWeight:800,color:T.warning,background:T.warning+"22",padding:"2px 8px",borderRadius:8}}>👀 VIEW ONLY</span>}
+              {/* What you're allowed to do here, always spelled out — not only when the answer is "nothing". */}
+              {(()=>{ const [txt,col,tip]=readOnly?["👀 VIEW ONLY",T.warning,"You can see this list but not change it"]
+                        :sharedInfo?.canDelete?["✏️ EDIT, ADD & DELETE",T.success,"You can change these tasks, add new ones and delete them"]
+                        :["✏️ EDIT & ADD",T.success,"You can change these tasks and add new ones, but not delete them"];
+                return <span title={tip} style={{fontSize:9,fontWeight:800,color:col,background:col+"22",padding:"2px 8px",borderRadius:8}}>{txt}</span>; })()}
               <button onClick={()=>setCollabOpen(true)} style={{padding:"2px 10px",borderRadius:8,border:`1px solid ${T.accent}55`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>👥 Collaborators</button>
               {onLeaveShare&&<button onClick={()=>{ if(window.confirm("Leave this shared list? You'll stop seeing its tasks.")) onLeaveShare(); }} style={{padding:"2px 10px",borderRadius:8,border:`1px solid ${T.danger}44`,background:T.danger+"11",color:T.danger,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Leave ✕</button>}
             </div>
