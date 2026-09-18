@@ -6,6 +6,7 @@ import {
   stripListName, matchListName, guessCat, ymd, tod, addDays, DUE_TBD, isTbd,
   dueKey, fmtDate, fmtClock, parseNL, cleanTitle, titleEditPatch, guessIcon, nextDue,
   mergeGami, gamiRowDiffers, moveDuePatch, whenPatch, inUpcoming, UPCOMING_SHARE, shareLabel, shareCovers,
+  edgeScrollStep,
 } from "./logic";
 
 const FontLink = () => (
@@ -98,16 +99,47 @@ function startPressDrag(e, onActivate) {
   window.addEventListener("pointercancel", up);
 }
 
-// Runs an active drag via window listeners (reliable across re-renders). Blocks text-select/scroll while dragging.
-function runDrag(onMove, onDrop) {
+// Hold something near the top or bottom edge of a scrolling area and it scrolls, faster the nearer the edge.
+// A drag has to block normal scrolling (or the page runs away under your finger), so without this anything
+// past the fold is unreachable on a phone — there's no second finger to scroll with. Each scroll step
+// re-runs the drag's own move handler, so the drop marker keeps pointing where the content now is.
+function dragEdgeScroll(point, onMove) {
+  // The nearest area under the pointer that both scrolls and still has room to go that way.
+  const pick = (x, y) => {
+    for (let el = document.elementFromPoint(x, y); el && el !== document.documentElement; el = el.parentElement) {
+      const cs = getComputedStyle(el);
+      if (!/auto|scroll/.test(cs.overflowY) || el.scrollHeight <= el.clientHeight + 2) continue;
+      const dy = edgeScrollStep(el.getBoundingClientRect(), x, y, el.scrollTop, el.scrollHeight - el.clientHeight);
+      if (dy) return [el, dy];
+    }
+    return null;                             // nothing scrollable under the pointer, or it's already at the end
+  };
+  // A timer rather than requestAnimationFrame: a frame callback only runs while the page is painting, so
+  // the scroll would stall in any view that isn't drawing (and it can't be tested outside a real screen).
+  const timer = setInterval(() => {
+    const p = point.current; if (!p) return;
+    const hit = pick(p.x, p.y); if (!hit) return;
+    const [el, dy] = hit, was = el.scrollTop;
+    el.scrollTop = was + dy;
+    if (el.scrollTop !== was) onMove({ clientX: p.x, clientY: p.y, type: "pointermove" });
+  }, 16);
+  return () => clearInterval(timer);
+}
+
+// Runs an active drag via window listeners (reliable across re-renders). Blocks text-select/scroll while
+// dragging — so anything dragged along a list passes scroll:true for the edge auto-scroll above.
+function runDrag(onMove, onDrop, { scroll = false } = {}) {
   document.body.style.userSelect = "none";
   document.body.style.webkitUserSelect = "none";
   document.body.style.touchAction = "none";
   // Non-passive touchmove preventDefault → stops the browser from scroll-hijacking the touch mid-drag on mobile.
   const blockScroll = e => { e.preventDefault(); };
   document.addEventListener("touchmove", blockScroll, { passive: false });
-  const mv = e => onMove(e);
+  const point = { current: null };
+  const stopScroll = scroll ? dragEdgeScroll(point, onMove) : null;
+  const mv = e => { point.current = { x: e.clientX, y: e.clientY }; onMove(e); };
   const up = e => {
+    if (stopScroll) stopScroll();
     window.removeEventListener("pointermove", mv);
     window.removeEventListener("pointerup", up);
     window.removeEventListener("pointercancel", up);
@@ -1635,7 +1667,8 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
         dropRef.current=hit; setDrop(hit); },
       ()=>{ ghost.remove(); const from=dragIdRef.current,to=dropRef.current;
         if(from!=null&&to) reorderTasks(from,to.id,to.before);
-        dragIdRef.current=null; dropRef.current=null; setDragId(null); setDrop(null); }
+        dragIdRef.current=null; dropRef.current=null; setDragId(null); setDrop(null); },
+      {scroll:true}
     );
   };
   // Swipe travel is capped short (±95). Pulling far past it AND moving vertically hands over to
@@ -2413,7 +2446,8 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
               else { const below=cards[ti+1]; newPos=below?((tgt.position||0)+(below.position||0))/2:(tgt.position||0)-1; }
               updateTask(task.id,{position:newPos,...(quad!==task.quadrant?{quadrant:quad}:{})}); }
           } else if(q&&q!==task.quadrant){ updateTask(task.id,{quadrant:q}); }
-        }
+        },
+        {scroll:true}
       );
     };
     const mv=ev=>{
@@ -2936,7 +2970,7 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
             if(!hit.before) ti++; arr.splice(ti,0,m); return arr; });
         }
       }
-    );
+    ,{scroll:true});
   };
   const gripDown=(e,id)=>{ e.stopPropagation(); e.preventDefault(); beginHabitDrag(id); };
   const [swipe,setSwipe]=useState(null); // {id,x} while a card is being swiped left toward delete
@@ -3162,7 +3196,7 @@ function CalendarView({T,tasks,cats,todStr,onToggle,onToggleStep,onQuickAdd,onOp
         setDrag(null); setHoverDay(null);
         if(day) onDropDay(day);
         setTimeout(()=>{didDragRef.current=false;},0);
-      });
+      },{scroll:true});
     });
   };
   return (
@@ -3487,7 +3521,8 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
           else dropRef.current=null;
           setDrop(dropRef.current);
         },
-        ()=>{ ghost.remove(); const d=dropRef.current; dropRef.current=null; setDrop(null); setDragId(null); applyDrop(id,d); }
+        ()=>{ ghost.remove(); const d=dropRef.current; dropRef.current=null; setDrop(null); setDragId(null); applyDrop(id,d); },
+        {scroll:true}
       );
     });
   };

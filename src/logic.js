@@ -117,6 +117,23 @@ export const inUpcoming = (t, today) => !!t.due && (!t.done || t.due > today);
 // date, from any list: the same rule the database enforces (task_shared_with_me in supabase/setup.sql).
 export const UPCOMING_SHARE = "__upcoming__";
 export const shareLabel = folder => folder === UPCOMING_SHARE ? "Upcoming" : folder;
+// How far a scrolling area should move while something is held near its edge: 0 in the middle, growing to
+// EDGE_SCROLL.max right at the edge, negative upwards, and never past the end of the content. Pure geometry
+// so it can be tested without a browser — App.jsx only finds the area under the pointer and applies this.
+export const EDGE_SCROLL = { edge: 64, max: 18 };
+export const edgeScrollStep = (box, x, y, scrollTop, maxScroll) => {
+  const { edge, max } = EDGE_SCROLL;
+  if (x < box.left - 1 || x > box.right + 1) return 0;          // beside the area, not over it
+  if (y < box.top || y > box.bottom) return 0;                  // above or below it entirely
+  const fromTop = y - box.top, fromBottom = box.bottom - y;
+  const near = fromTop < edge ? -(edge - Math.max(fromTop, 0))
+             : fromBottom < edge ? (edge - Math.max(fromBottom, 0)) : 0;
+  if (!near) return 0;
+  const step = Math.round(near / edge * max);
+  return step < 0 ? -Math.min(-step, Math.max(scrollTop, 0))    // don't scroll past the top…
+                  : Math.min(step, Math.max(maxScroll - scrollTop, 0));   // …or past the bottom
+};
+
 export const shareCovers = (share, t) =>
   share.owner_id === t.owner && (share.folder === t.tag || (share.folder === UPCOMING_SHARE && !!t.due));
 // Sort key for "by due date". The date alone is not enough: two things on the same day then

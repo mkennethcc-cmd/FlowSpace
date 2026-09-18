@@ -92,6 +92,24 @@ section("Sharing rules");
   report(shareLabel(UPCOMING_SHARE) === "Upcoming" && shareLabel("work") === "work", "shareLabel names a shared Upcoming");
 }
 
+section("Auto-scroll while dragging");
+{
+  const { edgeScrollStep, EDGE_SCROLL } = L, box = { top: 100, bottom: 500, left: 0, right: 300 }, MAX = 1000;
+  const step = (x, y, top = 300, max = MAX) => edgeScrollStep(box, x, y, top, max);
+  const E = [
+    [step(150, 300) === 0, "no scrolling from the middle of the area"],
+    [step(150, 499) === EDGE_SCROLL.max, "full speed right at the bottom edge"],
+    [step(150, 101) === -EDGE_SCROLL.max, "full speed, upwards, at the top edge"],
+    [step(150, 460) > 0 && step(150, 460) < step(150, 495), "nearer the edge scrolls faster"],
+    [step(150, 110, 0) === 0, "already at the top → no upward scroll"],
+    [step(150, 495, MAX) === 0, "already at the bottom → no downward scroll"],
+    [step(150, 495, MAX - 5) === 5, "the last step stops exactly at the end"],
+    [step(400, 495) === 0, "a pointer beside the area doesn't scroll it"],
+    [step(150, 90) === 0 && step(150, 520) === 0, "a pointer outside the area's top/bottom doesn't scroll it"],
+  ];
+  for (const [ok, what] of E) report(ok, "edgeScrollStep: " + what);
+}
+
 await import("./check-sync.mjs").then(m => m.run(report, section));
 await import("./check-names.mjs").then(m => m.run(report, section));
 
