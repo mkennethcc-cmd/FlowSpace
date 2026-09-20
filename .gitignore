@@ -8,3 +8,6 @@ dist
 .claude/settings.local.json
 .claude/launch.json
 Original Files/
+
+# Desktop installers built locally
+desktop-builds/

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { supabase } from "./supabase";
 import { db, fromDbTask } from "./db";
 import AuthScreen, { SignupSuccess, ResetPassword } from "./AuthScreen";
+import { saveWidgetSnapshot } from "./native";
 import {
   stripListName, matchListName, guessCat, ymd, tod, addDays, DUE_TBD, isTbd,
   dueKey, fmtDate, fmtClock, parseNL, cleanTitle, titleEditPatch, guessIcon, nextDue,
@@ -346,28 +347,7 @@ const CatIcon = ({icon, size=14}) => isImgIcon(icon)
   : <span style={{fontSize:size+1,lineHeight:1}}>{icon}</span>;
 // The icon gallery, grouped the way people think about their lists. Roughly 190 choices; the
 // picker shows them in this order so related icons sit together.
-const CAT_ICONS = [
-  // work & study
-  "💼","📚","🎓","📝","📋","📊","📈","💻","🖥️","⌨️","🗂️","📁","📎","📌","🧾","📄","📜","🔬","🧪","🔢","🗣️","🧠","💡","🎯","🏁","🚀","🏢","🤝","📨","📧","☎️","📞",
-  // money
-  "💰","💳","🏦","💵","🪙","🧮","🛡️","⚖️",
-  // home & errands
-  "🏠","🛒","🛍️","🧹","🧺","🧼","🔧","🔨","🪴","🌱","🌿","🌸","🌻","📦","🧳","🔑","🚗","🚲","⛽","🛠️","🧰","🪑","🛋️","🛏️","🚿","🧴",
-  // health & body
-  "🏃","🏋️","🧘","🚶","🏊","🚴","🥾","⚽","🏀","🎾","⛳","⛷️","🏄","🥊","🩺","🦷","💊","🩹","🧬","💪","🥗","🍎","💧","😴","🌅",
-  // food
-  "🍔","🍕","🍜","🍣","🍳","🥐","🧁","🍰","🍦","🍫","☕","🍵","🧋","🍷","🍺",
-  // creative & fun
-  "🎨","🎬","🎵","🎸","🎹","🎤","🎧","🎮","🎲","♟️","🎭","📷","📸","✏️","🖌️","🧵","🧶","📖","✍️","🎪","🎡",
-  // people & occasions
-  "❤️","💜","👪","👶","👥","💍","🎂","🎉","🎁","🎄","🎃","🕯️","🙏","⛪","🕌",
-  // travel & places
-  "✈️","🛫","🗺️","🧭","🏖️","🏔️","⛺","🏨","🚆","🚢","🌍","🗽","🎢",
-  // animals & nature
-  "🐶","🐱","🐟","🐦","🐾","🐴","🐢","🦋","🌳","🌊","☀️","🌙","⭐","🌈","❄️","🔥",
-  // symbols & moods
-  "⚡","✨","💎","🏆","🥇","🎖️","🔔","⏰","📅","🗓️","🔒","🔓","✅","❌","⚠️","♻️","🧭","🎈","🪄","🧿","🫶","🤞","🙌",
-];
+const CAT_ICONS = ["💼", "📚", "🎓", "📝", "📋", "📊", "📈", "💻", "🖥️", "⌨️", "🗂️", "📁", "📎", "📌", "🧾", "📄", "📜", "🔬", "🧪", "🔢", "🗣️", "🧠", "💡", "🎯", "🏁", "🚀", "🏢", "🤝", "📨", "📧", "☎️", "📞", "💰", "💳", "🏦", "💵", "🪙", "🧮", "🛡️", "⚖️", "🏠", "🛒", "🛍️", "🧹", "🧺", "🧼", "🔧", "🔨", "🪴", "🌱", "🌿", "🌸", "🌻", "📦", "🧳", "🔑", "🚗", "🚲", "⛽", "🛠️", "🧰", "🪑", "🛋️", "🛏️", "🚿", "🧴", "🏃", "🏋️", "🧘", "🚶", "🏊", "🚴", "🥾", "⚽", "🏀", "🎾", "⛳", "⛷️", "🏄", "🥊", "🩺", "🦷", "💊", "🩹", "🧬", "💪", "🥗", "🍎", "💧", "😴", "🌅", "🍔", "🍕", "🍜", "🍣", "🍳", "🥐", "🧁", "🍰", "🍦", "🍫", "☕", "🍵", "🧋", "🍷", "🍺", "🎨", "🎬", "🎵", "🎸", "🎹", "🎤", "🎧", "🎮", "🎲", "♟️", "🎭", "📷", "📸", "✏️", "🖌️", "🧵", "🧶", "📖", "✍️", "🎪", "🎡", "❤️", "💜", "👪", "👶", "👥", "💍", "🎂", "🎉", "🎁", "🎄", "🎃", "🕯️", "🙏", "⛪", "🕌", "✈️", "🛫", "🗺️", "🧭", "🏖️", "🏔️", "⛺", "🏨", "🚆", "🚢", "🌍", "🗽", "🎢", "🐶", "🐱", "🐟", "🐦", "🐾", "🐴", "🐢", "🦋", "🌳", "🌊", "☀️", "🌙", "⭐", "🌈", "❄️", "🔥", "⚡", "✨", "💎", "🏆", "🥇", "🎖️", "🔔", "⏰", "📅", "🗓️", "🔒", "🔓", "✅", "❌", "⚠️", "♻️", "🎈", "🪄", "🧿", "🫶", "🤞", "🙌"];
 const PALETTES = {
   lavender: {name:"Lavender", accent:"#c084fc", accentAlt:"#818cf8"},
   rose:     {name:"Rose",     accent:"#fda4af", accentAlt:"#f9a8d4"},
@@ -1048,6 +1028,14 @@ export default function Freely() {
   };
   const myDay=tasks.filter(inMyDay);
   const upcoming=myTasks.filter(inUpcoming);
+  // The home-screen widget can't run any of this, so it is handed a small ready-made list: the next few
+  // dated things with their dates already worded, refreshed whenever they change. Web builds ignore it.
+  useEffect(()=>{
+    const next=[...upcoming].filter(t=>!t.done).sort((a,b)=>dueKey(a).localeCompare(dueKey(b))).slice(0,6)
+      .map(t=>({id:String(t.id),title:t.title,when:fmtDate(t.due)||"",time:fmtClock(t.remindAt)||"",late:!!(t.due&&!isTbd(t.due)&&t.due<todStr)}));
+    saveWidgetSnapshot(next);
+  },[upcoming,todStr]);
+
   // Single tasks people handed you, while their share still stands.
   const sharedTaskIds=new Set(taskShares.filter(s=>shareActive(s)).map(s=>String(s.task_id)));
   const sharedSingles=tasks.filter(t=>sharedTaskIds.has(String(t.id)));

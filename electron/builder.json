@@ -1,0 +1,35 @@
+{
+  "appId": "com.freely.app",
+  "productName": "Freely",
+  "directories": {
+    "output": "desktop-builds"
+  },
+  "files": [
+    "dist/**/*",
+    "electron/main.cjs",
+    "package.json"
+  ],
+  "win": {
+    "target": [
+      "nsis"
+    ],
+    "icon": "public/logo.png"
+  },
+  "mac": {
+    "target": [
+      "dmg"
+    ],
+    "category": "public.app-category.productivity",
+    "icon": "public/logo.png"
+  },
+  "linux": {
+    "target": [
+      "AppImage"
+    ],
+    "category": "Office"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  }
+}

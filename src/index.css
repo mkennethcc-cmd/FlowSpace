@@ -1,6 +1,14 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #root { height: 100%; }
 #root { height: 100vh; height: 100dvh; }
+/* In the iOS/Android app the web page owns the whole screen, including the notch and the home bar.
+   These keep content out from under both; in a browser the insets are 0, so nothing changes. */
+body {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
 body { overflow: hidden; }
 
 /* Prevent iOS Safari from auto-zooming when focusing an input (it zooms when font-size < 16px and never zooms back out). */

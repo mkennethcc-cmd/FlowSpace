@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Freely</string>
+    <string name="title_activity_main">Freely</string>
+    <string name="package_name">com.freely.app</string>
+    <string name="custom_url_scheme">com.freely.app</string>
+</resources>
