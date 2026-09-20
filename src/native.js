@@ -1,9 +1,12 @@
 // Everything that is true only when Freely runs as a real app (iOS/Android through Capacitor).
 // In a browser every function here quietly does nothing, so the web build is unaffected.
-import { Capacitor } from "@capacitor/core";
+// Read through the global the native shell injects, rather than importing @capacitor/core: that keeps
+// every byte of Capacitor out of the website's bundle. The plugins below are imported only when needed,
+// which is never in a browser.
+const cap = typeof window !== "undefined" ? window.Capacitor : null;
 
-export const isNative = Capacitor.isNativePlatform?.() === true;
-export const nativePlatform = isNative ? Capacitor.getPlatform() : "web";
+export const isNative = cap?.isNativePlatform?.() === true;
+export const nativePlatform = isNative ? cap.getPlatform() : "web";
 
 // The widget on the home screen reads this key out of the shared App Group container. Keep the shape
 // small and already formatted — a widget cannot run the app's code to work out what "Tomorrow" means.
@@ -21,7 +24,7 @@ export async function saveWidgetSnapshot(items) {
     // …and ask iOS to redraw the widget now rather than at its next half-hourly turn. Only works once
     // WidgetReloadPlugin.swift has been added to the app in Xcode; without it the widget still updates,
     // just a little later.
-    try { await Capacitor.registerPlugin("WidgetReload").reload(); } catch {}
+    try { await cap.registerPlugin("WidgetReload").reload(); } catch {}
   } catch (e) { console.warn("[Freely] could not hand the widget its data", e); }
 }
 
