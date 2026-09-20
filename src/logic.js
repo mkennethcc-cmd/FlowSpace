@@ -158,6 +158,37 @@ export const sortFor = (view, sorts, fallback) =>
 
 export const shareCovers = (share, t) =>
   share.owner_id === t.owner && (share.folder === t.tag || (share.folder === UPCOMING_SHARE && !!t.due));
+// A share can be given an end date. Once it passes the share grants nothing — the same rule the database
+// applies, so the screen and the server always agree about what someone may still do.
+export const shareActive = (s, now = Date.now()) => {
+  if (!s || !s.expires_at) return true;
+  const t = new Date(s.expires_at).getTime();
+  return isNaN(t) || t > now;
+};
+// What someone may do with one task: through a share of its list (or of the owner's Upcoming), or through
+// that single task being handed to them. `shared` says whether it reached them by a share at all.
+export const rightsFor = (task, folderShares = [], taskShares = [], now = Date.now()) => {
+  let shared = false, canEdit = false, canDelete = false;
+  for (const s of folderShares) {
+    if (!shareActive(s, now) || !shareCovers(s, task)) continue;
+    shared = true;
+    if (s.can_edit !== false) canEdit = true;      // a row from before view-only existed counts as editable
+    if (s.can_delete) canDelete = true;
+  }
+  for (const s of taskShares) {
+    if (!shareActive(s, now) || String(s.task_id) !== String(task.id)) continue;
+    shared = true;
+    if (s.can_edit) canEdit = true;
+    if (s.can_delete) canDelete = true;
+  }
+  return { shared, canEdit, canDelete };
+};
+// "until 3 Oct" for a share that ends, nothing for one that doesn't.
+export const shareEndLabel = s => {
+  if (!s || !s.expires_at) return null;
+  const d = new Date(s.expires_at);
+  return isNaN(d.getTime()) ? null : `until ${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+};
 // Sort key for "by due date". The date alone is not enough: two things on the same day then
 // come out in whatever order they were typed, so a 4pm event can sit above a 10am one.
 // Untimed work sorts after timed work on that day.

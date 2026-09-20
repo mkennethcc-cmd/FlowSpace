@@ -129,10 +129,18 @@ export const db = {
     return data || [];
   },
   // perm: "view" (look only) · "edit" (edit & add) · "delete" (edit, add & delete).
-  async addShare(ownerId, folder, email, perm) {
-    const row = { owner_id: ownerId, folder, shared_with_email: email.toLowerCase().trim(), can_delete: perm === "delete", can_edit: perm !== "view" };
+  // expiresAt: an ISO timestamp the share stops working at, or null for no end date.
+  async addShare(ownerId, folder, email, perm, expiresAt = null) {
+    const row = { owner_id: ownerId, folder, shared_with_email: email.toLowerCase().trim(), can_delete: perm === "delete", can_edit: perm !== "view", expires_at: expiresAt || null };
     const attempt = r => supabase.from("folder_shares").upsert(r, { onConflict: "owner_id,folder,shared_with_email" });
     let { error } = await attempt(row);
+    // A database that predates end dates: share without one rather than failing, but never pretend a
+    // share with an end date is limited when it isn't.
+    if (error && /expires_at/.test(error.message || "")) {
+      if (expiresAt) throw new Error("End dates for sharing need the latest database setup — run supabase/setup.sql in Supabase, then try again.");
+      const { expires_at, ...older } = row;
+      ({ error } = await attempt(older));
+    }
     if (error && /can_edit/.test(error.message || "")) {
       // The database predates view-only sharing. An editable share is still an editable share — but a
       // view-only one must NOT quietly become editable, so that case stops here with a clear message.
@@ -146,6 +154,33 @@ export const db = {
     const { error } = await supabase.from("folder_shares").delete().eq("id", id);
     if (error) throw error;
   },
+  // ── one task shared on its own (public.task_shares) ──────────────────────────────────────────────
+  // An older database has no such table; that simply means nobody has shared a single task yet.
+  async loadTaskShares(email) {
+    if (!email) return [];
+    const { data, error } = await supabase.from("task_shares").select("*").eq("shared_with_email", email.toLowerCase());
+    if (error) { if (/task_shares/.test(error.message || "")) return []; throw error; }
+    return data || [];
+  },
+  async loadOwnedTaskShares(uid) {
+    const { data, error } = await supabase.from("task_shares").select("*").eq("owner_id", uid);
+    if (error) { if (/task_shares/.test(error.message || "")) return []; throw error; }
+    return data || [];
+  },
+  async addTaskShare(taskId, ownerId, email, perm, expiresAt = null) {
+    const row = { task_id: taskId, owner_id: ownerId, shared_with_email: email.toLowerCase().trim(),
+      can_edit: perm !== "view", can_delete: perm === "delete", expires_at: expiresAt || null };
+    const { error } = await supabase.from("task_shares").upsert(row, { onConflict: "task_id,shared_with_email" });
+    if (error) {
+      if (/task_shares/.test(error.message || "")) throw new Error("Sharing a single task needs the latest database setup — run supabase/setup.sql in Supabase, then try again.");
+      throw error;
+    }
+  },
+  async removeTaskShare(id) {
+    const { error } = await supabase.from("task_shares").delete().eq("id", id);
+    if (error) throw error;
+  },
+
   async removeSharesOfFolder(ownerId, folder) {
     const { error } = await supabase.from("folder_shares").delete().eq("owner_id", ownerId).eq("folder", folder);
     if (error) throw error;

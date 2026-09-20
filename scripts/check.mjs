@@ -90,6 +90,27 @@ section("Sharing rules");
              [up, { owner: "b", tag: "home", due: "2026-09-20" }, false, "a shared Upcoming doesn't cover someone else's tasks"]];
   for (const [sh, t, want, what] of S) report(shareCovers(sh, t) === want, `shareCovers: ${what}`);
   report(shareLabel(UPCOMING_SHARE) === "Upcoming" && shareLabel("work") === "work", "shareLabel names a shared Upcoming");
+
+  // shares that run out, and single tasks handed to someone
+  const { shareActive, rightsFor, shareEndLabel } = L, NOW = Date.parse("2026-09-16T10:00:00Z");
+  const task = { id: "t1", owner: "a", tag: "work", due: null };
+  const ended = { owner_id: "a", folder: "work", can_edit: true, expires_at: "2026-09-15T10:00:00Z" };
+  const live = { owner_id: "a", folder: "work", can_edit: true, expires_at: "2026-09-30T10:00:00Z" };
+  const E = [
+    [shareActive({ owner_id: "a" }, NOW) === true, "a share with no end date always counts"],
+    [shareActive(live, NOW) === true, "a share that ends later still counts"],
+    [shareActive(ended, NOW) === false, "a share that has run out counts for nothing"],
+    [rightsFor(task, [ended], [], NOW).shared === false, "a list share that ran out shows nothing"],
+    [rightsFor(task, [live], [], NOW).canEdit === true, "a live list share still allows editing"],
+    [rightsFor(task, [], [{ task_id: "t1", can_edit: true }], NOW).canEdit === true, "one task handed over can be edited"],
+    [rightsFor(task, [], [{ task_id: "t1", can_edit: true }], NOW).canDelete === false, "…but not deleted without that right"],
+    [rightsFor(task, [], [{ task_id: "other", can_edit: true }], NOW).shared === false, "a share of a different task grants nothing"],
+    [rightsFor(task, [], [{ task_id: "t1", can_edit: true, expires_at: "2026-09-15T10:00:00Z" }], NOW).shared === false, "a task share that ran out grants nothing"],
+    [rightsFor(task, [{ owner_id: "a", folder: "work" }], [], NOW).canEdit === true, "a share from before view-only existed counts as editable"],
+    [rightsFor(task, [{ owner_id: "a", folder: "work", can_edit: false }], [{ task_id: "t1", can_edit: true }], NOW).canEdit === true, "the more generous of two shares wins"],
+    [shareEndLabel(live) === "until Sep 30" && shareEndLabel({}) === null, "an end date reads as a date"],
+  ];
+  for (const [ok, what] of E) report(ok, "sharing: " + what);
 }
 
 section("Auto-scroll while dragging");

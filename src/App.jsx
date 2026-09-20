@@ -6,7 +6,7 @@ import {
   stripListName, matchListName, guessCat, ymd, tod, addDays, DUE_TBD, isTbd,
   dueKey, fmtDate, fmtClock, parseNL, cleanTitle, titleEditPatch, guessIcon, nextDue,
   mergeGami, gamiRowDiffers, moveDuePatch, whenPatch, inUpcoming, UPCOMING_SHARE, shareLabel, shareCovers,
-  edgeScrollStep, reorderPosition, sortFor,
+  edgeScrollStep, reorderPosition, sortFor, rightsFor, shareActive, shareEndLabel,
 } from "./logic";
 
 const FontLink = () => (
@@ -451,6 +451,8 @@ export default function Freely() {
   const [syncing, setSyncing] = useState(false);
   const [tasks, setTasks] = useState([]);
   const [ownedShares, setOwnedShares] = useState([]);
+  const [taskShares, setTaskShares] = useState([]);        // single tasks other people handed to me
+  const [ownedTaskShares, setOwnedTaskShares] = useState([]);  // single tasks I handed out
   const [sharedWithMe, setSharedWithMe] = useState([]);
   const [deletedCats, setDeletedCats] = useState([]);
   const [delCatModal, setDelCatModal] = useState(null);
@@ -611,7 +613,7 @@ export default function Freely() {
     if(!initial) await flushSaves();
     const start={...latestRef.current};
     if(initial) setSyncing(true);
-    const [t,c,n,h,k,os,sm]=await Promise.allSettled([db.loadTasks(),db.loadCanvas(u.id),db.loadNotes(u.id),db.loadHabits(u.id),db.loadCats(u.id),db.loadOwnedShares(u.id),db.loadSharedWithMe(u.email)]);
+    const [t,c,n,h,k,os,sm,ots,ts]=await Promise.allSettled([db.loadTasks(),db.loadCanvas(u.id),db.loadNotes(u.id),db.loadHabits(u.id),db.loadCats(u.id),db.loadOwnedShares(u.id),db.loadSharedWithMe(u.email),db.loadOwnedTaskShares(u.id),db.loadTaskShares(u.email)]);
     if(initial) setSyncing(false);
     if(userRef.current?.id!==u.id) return;          // signed out or switched accounts meanwhile
     const ok=r=>r.status==="fulfilled";
@@ -636,6 +638,8 @@ export default function Freely() {
     adopt("canvas",c,setCanvasNotes); adopt("notes",n,setNotes); adopt("habits",h,setHabits); adopt("cats",k,setCats);
     if(ok(os)) setOwnedShares(os.value);
     if(ok(sm)) setSharedWithMe(dropLeftShares(sm.value));
+    if(ok(ots)) setOwnedTaskShares(ots.value);
+    if(ok(ts)) setTaskShares(ts.value);
     if([t,c,n,h,k].some(r=>!ok(r))){
       showToast("Couldn't load everything — retrying in a moment…");
       reloadTimerRef.current=setTimeout(()=>loadAll(false),10000);
@@ -644,7 +648,7 @@ export default function Freely() {
 
   useEffect(()=>{
     syncedRef.current={notes:null,canvas:null,habits:null,cats:null}; tasksLoadedRef.current=false;
-    if(!user){setTasks([]);setCanvasNotes([]);setNotes([]);setHabits([]);setCats(DEFAULT_CATS);setOwnedShares([]);setSharedWithMe([]);setMessages([]);setSGroups([]);setChatReqs([]);return;}
+    if(!user){setTasks([]);setCanvasNotes([]);setNotes([]);setHabits([]);setCats(DEFAULT_CATS);setOwnedShares([]);setSharedWithMe([]);setTaskShares([]);setOwnedTaskShares([]);setMessages([]);setSGroups([]);setChatReqs([]);return;}
     db.loadMessages().then(setMessages).catch(()=>{});
     db.loadChatReqs(user.email).then(setChatReqs).catch(()=>{});
     db.loadProfiles().then(rows=>{ setProfRows(rows); try{ localStorage.setItem("fs_avatars",JSON.stringify(Object.fromEntries(rows.map(r=>[r.email,r.avatar||""])))); }catch{} }).catch(()=>{});
@@ -697,6 +701,8 @@ export default function Freely() {
     if(!user) return;
     db.loadOwnedShares(user.id).then(setOwnedShares).catch(()=>{});
     db.loadSharedWithMe(user.email).then(sm=>setSharedWithMe(dropLeftShares(sm))).catch(()=>{});
+    db.loadOwnedTaskShares(user.id).then(setOwnedTaskShares).catch(()=>{});
+    db.loadTaskShares(user.email).then(setTaskShares).catch(()=>{});
   },[user]);
   const leaveShare=async(ownerId,folder)=>{
     const s=sharedWithMe.find(x=>x.owner_id===ownerId&&x.folder===folder);
@@ -731,6 +737,7 @@ export default function Freely() {
         if(eventType==="DELETE") setTasks(ts=>ts.filter(t=>t.id!==o.id));
       })
       .on("postgres_changes",{event:"*",schema:"public",table:"folder_shares"},()=>{ refreshShares(); db.loadTasks().then(setTasks).catch(()=>{}); })   // a new share brings tasks with it
+      .on("postgres_changes",{event:"*",schema:"public",table:"task_shares"},()=>{ refreshShares(); db.loadTasks().then(setTasks).catch(()=>{}); })
       .on("postgres_changes",{event:"INSERT",schema:"public",table:"messages"},({new:m})=>{ setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,m]); }) // RLS only delivers rows we may see (own DMs + our team chats)
       .on("postgres_changes",{event:"*",schema:"public",table:"group_members"},()=>{ refreshGroups(); })
       .on("postgres_changes",{event:"*",schema:"public",table:"groups"},()=>{ refreshGroups(); })
@@ -878,7 +885,7 @@ export default function Freely() {
   const canDeleteTask=task=>{
     if(!task) return true;
     if(task.owner===user?.id) return true;
-    return sharedWithMe.some(s=>shareCovers(s,task)&&s.can_delete);
+    return rightsFor(task,sharedWithMe,taskShares).canDelete;
   };
   // View-only collaborators can look but not touch. Work assigned to you is yours to tick off.
   // A share row from before the can_edit column exists is treated as editable.
@@ -886,8 +893,8 @@ export default function Freely() {
     if(!task) return true;
     if(task.owner===user?.id) return true;
     if(assigneesOf(task).includes(user?.email?.toLowerCase())) return true;
-    const sh=sharedWithMe.filter(s=>shareCovers(s,task));
-    return !sh.length || sh.some(s=>s.can_edit!==false);
+    const r=rightsFor(task,sharedWithMe,taskShares);
+    return r.shared ? r.canEdit : true;   // reached you some other way (assigned, a team) → not restricted here
   };
   // Files leave storage only when their task is really gone: after the undo window, or at once for deletes
   // that can't be undone. Before this, every deleted task left its attachments in storage forever.
@@ -1041,6 +1048,9 @@ export default function Freely() {
   };
   const myDay=tasks.filter(inMyDay);
   const upcoming=myTasks.filter(inUpcoming);
+  // Single tasks people handed you, while their share still stands.
+  const sharedTaskIds=new Set(taskShares.filter(s=>shareActive(s)).map(s=>String(s.task_id)));
+  const sharedSingles=tasks.filter(t=>sharedTaskIds.has(String(t.id)));
   // What a share shows: that list of theirs, or — for a shared Upcoming — everything of theirs with a date.
   const sharedTasks=(owner,folder)=>tasks.filter(t=>t.owner===owner&&(folder===UPCOMING_SHARE?inUpcoming(t):t.tag===folder));
   const myDayAllDone=myDay.length>0&&myDay.every(t=>t.done);
@@ -1074,8 +1084,15 @@ export default function Freely() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[tasks,user,todStr]);
   const undoCarry=()=>{ if(!carriedIds.length)return; navigator.vibrate?.(10); carriedIds.forEach(id=>setInMyDay(tasks.find(x=>x.id===id),false)); setCarriedIds([]); showToast("Carry-over undone"); };
-  const shareFolder=async(folder,email,perm)=>{ if(!user||!email.trim())return; try{ await db.addShare(user.id,folder,email,perm); refreshShares(); showToast(`Shared "${shareLabel(folder)}" with ${email.trim()}`); }catch(e){ showToast("Share failed: "+(e.message||e)); } };
+  const shareFolder=async(folder,email,perm,expiresAt)=>{ if(!user||!email.trim())return; try{ await db.addShare(user.id,folder,email,perm,expiresAt||null); refreshShares(); showToast(`Shared "${shareLabel(folder)}" with ${email.trim()}${expiresAt?` · ${shareEndLabel({expires_at:expiresAt})}`:""}`); }catch(e){ showToast("Share failed: "+(e.message||e)); } };
   const unshareFolder=async id=>{ await db.removeShare(id).catch(()=>{}); refreshShares(); showToast("Collaborator removed"); };
+  // One task, handed to one person, without sharing the list it sits in.
+  const shareTask=async(taskId,email,perm,expiresAt)=>{
+    if(!user||!email.trim())return;
+    try{ await db.addTaskShare(taskId,user.id,email,perm,expiresAt||null); refreshShares(); showToast(`Task shared with ${email.trim()}${expiresAt?` · ${shareEndLabel({expires_at:expiresAt})}`:""}`); }
+    catch(e){ showToast("Share failed: "+(e.message||e)); }
+  };
+  const unshareTask=async id=>{ await db.removeTaskShare(id).catch(()=>{}); refreshShares(); showToast("Stopped sharing that task"); };
 
   // A reminder fires once, when its time comes, for work that's yours (owned, or assigned to you — not every
   // task in lists shared with you). Remembered per task AND time, so moving a reminder re-arms it. One more
@@ -1148,7 +1165,7 @@ export default function Freely() {
     return [...out];
   };
   // Who shared the list I'm currently looking at (for the "Shared by …" header + Leave button).
-  const sharedViewInfo=view.startsWith("shared:")?(()=>{ const rest=view.slice(7),ci=rest.indexOf(":"),o=rest.slice(0,ci),f=rest.slice(ci+1); const em=idEmail[o]; const sh=sharedWithMe.find(x=>x.owner_id===o&&x.folder===f); return {owner:o,folder:f,email:em||null,nick:em?nickOf(em):null,canEdit:!sh||sh.can_edit!==false,canDelete:!!(sh&&sh.can_delete)}; })():null;
+  const sharedViewInfo=view.startsWith("shared:")?(()=>{ const rest=view.slice(7),ci=rest.indexOf(":"),o=rest.slice(0,ci),f=rest.slice(ci+1); const em=idEmail[o]; const sh=sharedWithMe.find(x=>x.owner_id===o&&x.folder===f); return {owner:o,folder:f,email:em||null,nick:em?nickOf(em):null,canEdit:!sh||sh.can_edit!==false,canDelete:!!(sh&&sh.can_delete),ends:shareEndLabel(sh)}; })():null;
   // Can I chat freely with them? (trusted, accepted request either way, or they've messaged me)
   const chatLinked=em=>trusted.includes(em)
     ||chatReqs.some(r=>r.status==="accepted"&&((r.from_email===em&&r.to_email===meEmail)||(r.to_email===em&&r.from_email===meEmail)))
@@ -1250,6 +1267,7 @@ export default function Freely() {
   const getViewTasks=()=>{
     let base;
     if(view.startsWith("cat:")){ const c=view.slice(4); base=tasks.filter(t=>t.tag===c&&t.owner===user?.id); }
+    else if(view==="sharedtasks") base=sharedSingles;
     else if(view.startsWith("shared:")){ const rest=view.slice(7),ci=rest.indexOf(":"); base=sharedTasks(rest.slice(0,ci),rest.slice(ci+1)); }
     else if(view==="flagged") base=myTasks.filter(t=>t.starred);
     else if(view==="assigned"){ const me=user?.email?.toLowerCase(); base=tasks.filter(t=>assigneesOf(t).includes(me)); }
@@ -1274,7 +1292,8 @@ export default function Freely() {
   const sidebarItems=[
     ...navItems.filter(it=>!hiddenTabs.includes(it.id)).map(it=>({id:"n:"+it.id, view:it.id, label:it.label, icon:it.icon, iconType:"ico", badge:it.badge, tint:it.tint})),
     ...Object.entries(cats).map(([name,meta])=>({id:"c:"+name, view:"cat:"+name, label:name, icon:meta.icon, iconType:"cat", cap:true, badge:myTasks.filter(t=>t.tag===name&&!t.done).length})),
-    ...sharedWithMe.map(s=>({id:"s:"+s.owner_id+":"+s.folder, view:"shared:"+s.owner_id+":"+s.folder, label:shareLabel(s.folder), icon:"🤝", iconType:"cat", cap:true, badge:sharedTasks(s.owner_id,s.folder).filter(t=>!t.done).length, owner:s.owner_id, folder:s.folder, sub:idEmail[s.owner_id]?`from ${nickOf(idEmail[s.owner_id]).split("@")[0]}`:null})),
+    ...(sharedSingles.length?[{id:"s:tasks", view:"sharedtasks", label:"Shared tasks", icon:"🤝", iconType:"cat", badge:sharedSingles.filter(t=>!t.done).length, sub:"single tasks"}]:[]),
+    ...sharedWithMe.filter(s=>shareActive(s)).map(s=>({id:"s:"+s.owner_id+":"+s.folder, view:"shared:"+s.owner_id+":"+s.folder, label:shareLabel(s.folder), icon:"🤝", iconType:"cat", cap:true, badge:sharedTasks(s.owner_id,s.folder).filter(t=>!t.done).length, owner:s.owner_id, folder:s.folder, sub:idEmail[s.owner_id]?`from ${nickOf(idEmail[s.owner_id]).split("@")[0]}`:null})),
   ];
   // Whatever sits at the top of your sidebar is your home screen. Drag "Upcoming" above "My Day"
   // and Freely opens on Upcoming — on this device and, once prefs sync, on every other one.
@@ -1511,16 +1530,17 @@ export default function Freely() {
           {view==="calendar"&&<CalendarView T={T} tasks={myTasks} cats={cats} todStr={todStr} onToggle={toggleTask} onToggleStep={toggleStep} onQuickAdd={addCalendarTask} onMoveTask={moveTaskDay} onMoveStep={moveStep} onOpenTask={t=>{keepSelRef.current=true;navTo("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={myTasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={allStats} todStr={todStr}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onUnshare={unshareFolder} deletedCats={deletedCats} pomLen={pomLen} onPomLen={m=>{ setPomLen(m); if(!pomRun) setPomSecs(m*60); }} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar} newAtBottom={newAtBottom} setNewAtBottom={setNewAtBottom} onHelp={()=>setHelpOpen(true)}/>}
-          {(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
+          {(["myday","flagged","upcoming","all","assigned","sharedtasks"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFiles} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} isInMyDay={inMyDay} todStr={todStr} canDeleteFn={canDeleteTask} canEditFn={canEditTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={allGroups} listPeople={collaboratorsOf} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}
               sortMode={viewSort} setSortMode={pickSort} showToast={showToast} onHelp={()=>setHelpOpen(true)}
+              myId={user?.id} myTaskShares={ownedTaskShares} onShareTask={shareTask} onUnshareTask={unshareTask}
               sharedInfo={sharedViewInfo} onLeaveShare={sharedViewInfo?()=>leaveShare(sharedViewInfo.owner,sharedViewInfo.folder):null}
               listManage={{ownedShares, onShare:shareFolder, onUnshare:unshareFolder, onDelete:deleteCat, setCats, onAssignAll:assignAllInLists, assignGroups:allGroups, onUploadIcon:uploadCatIcon}}/>
           )}
           {view==="messages"&&<MessagesView T={T} myEmail={meEmail} messages={messages} people={knownPeople} groups={sGroups} reqs={chatReqs} trusted={trusted} peer={dmPeer} onOpenPeer={openDM} onSend={sendDM} onAnswerReq={answerReq} onStartChat={startChat} onOpenTeams={()=>goView("settings")}/>}
         </div>
       </main>
-      {!selTask&&(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
+      {!selTask&&(["myday","flagged","upcoming","all","assigned","sharedtasks"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
         <button onClick={()=>inputRef.current?.focus()} style={{position:"fixed",bottom:26,right:26,width:50,height:50,borderRadius:"50%",border:"none",cursor:"pointer",background:T.grad,color:"#fff",boxShadow:"0 6px 20px rgba(192,132,252,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:50,transition:"transform .15s"}}
           onMouseEnter={e=>e.currentTarget.style.transform="scale(1.1)"}
           onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
@@ -1675,7 +1695,7 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],listPeople=null,sharedInfo=null,onLeaveShare=null,listManage=null,sortMode="due",setSortMode,showToast,onHelp,canEditFn=null,isInMyDay}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,myId,myTaskShares=[],onShareTask,onUnshareTask,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],listPeople=null,sharedInfo=null,onLeaveShare=null,listManage=null,sortMode="due",setSortMode,showToast,onHelp,canEditFn=null,isInMyDay}) {
   const narrow=useNarrow();
   const readOnly=!!(sharedInfo&&sharedInfo.canEdit===false);   // a view-only share: no add box, no ticking, no swiping
   const [manageMode,setManageMode]=useState(null); // "edit" (name/icon/color) | "share" (share/assign)
@@ -1691,7 +1711,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const dragIdRef=useRef(null);
   const dropRef=useRef(null);
   const didDragRef=useRef(false);
-  const labels={myday:"My Day",flagged:"Flagged",upcoming:"Upcoming",all:"All Tasks",assigned:"Assigned to me"};
+  const labels={myday:"My Day",flagged:"Flagged",upcoming:"Upcoming",all:"All Tasks",assigned:"Assigned to me",sharedtasks:"Shared tasks"};
   const catKey=view.startsWith("cat:")?view.slice(4):null;
   const sharedKey=view.startsWith("shared:")?view.slice(view.indexOf(":",7)+1):null;   // "shared:<owner>:<list>" — the list name may itself contain ":"
   const upcomingLike=view==="upcoming"||sharedKey===UPCOMING_SHARE;   // your Upcoming, or someone's you were given
@@ -1879,6 +1899,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
                         :sharedInfo?.canDelete?["✏️ EDIT, ADD & DELETE",T.success,"You can change these tasks, add new ones and delete them"]
                         :["✏️ EDIT & ADD",T.success,"You can change these tasks and add new ones, but not delete them"];
                 return <span title={tip} style={{fontSize:9,fontWeight:800,color:col,background:col+"22",padding:"2px 8px",borderRadius:8}}>{txt}</span>; })()}
+              {sharedInfo?.ends&&<span title="After this, the list stops appearing for you" style={{fontSize:9,fontWeight:800,color:T.warning,background:T.warning+"22",padding:"2px 8px",borderRadius:8}}>⏳ {sharedInfo.ends}</span>}
               <button onClick={()=>setCollabOpen(true)} style={{padding:"2px 10px",borderRadius:8,border:`1px solid ${T.accent}55`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>👥 Collaborators</button>
               {onLeaveShare&&<button onClick={()=>{ if(window.confirm("Leave this shared list? You'll stop seeing its tasks.")) onLeaveShare(); }} style={{padding:"2px 10px",borderRadius:8,border:`1px solid ${T.danger}44`,background:T.danger+"11",color:T.danger,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Leave ✕</button>}
             </div>
@@ -1957,6 +1978,9 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
         )}
         {upcomingLike&&!readOnly&&(
           <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>📅 Type a date ("friday", "july 30", "next tue") to schedule — no date means it's filed as <b>Date TBD</b> until you decide. "tbd" / "tba" / "unknown" work too.</div>
+        )}
+        {view==="sharedtasks"&&(
+          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>🤝 Single tasks people shared with you, without sharing the whole list. What you may do with each one depends on what they allowed — open it to see.</div>
         )}
         {view==="assigned"&&(
           <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>🤝 Work other people handed to you. Open a task to see who assigned it — ticking it off updates their copy too.</div>
@@ -2071,13 +2095,13 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           </div>
         );
       })()}
-      {selTask&&((canEditFn&&!canEditFn(selTask))?<TaskReadOnly task={selTask} T={T} cats={cats} onClose={()=>setSelTask(null)} ownerNick={sharedInfo?.nick}/>:<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} onClose={()=>setSelTask(null)} onFocus={onFocusTask} myEmail={myEmail} people={people} onAssign={onAssign} peopleGroups={peopleGroups} listPeople={listPeople}/>)}
+      {selTask&&((canEditFn&&!canEditFn(selTask))?<TaskReadOnly task={selTask} T={T} cats={cats} onClose={()=>setSelTask(null)} ownerNick={sharedInfo?.nick}/>:<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} onClose={()=>setSelTask(null)} onFocus={onFocusTask} myEmail={myEmail} showToast={showToast} taskShares={(myTaskShares||[]).filter(sh=>String(sh.task_id)===String(selTask.id))} onShareTask={selTask.owner===myId?onShareTask:null} onUnshareTask={onUnshareTask} people={people} onAssign={onAssign} peopleGroups={peopleGroups} listPeople={listPeople}/>)}
       {manageMode&&catKey&&listManage&&(
         <SidebarManage T={T} target={{type:"list",id:"c:"+catKey,name:catKey}} isGroup={false} childLists={[catKey]}
           shares={(listManage.ownedShares||[]).filter(s=>s.folder===catKey)} meta={cats[catKey]||{}}
           onClose={()=>setManageMode(null)}
           onRename={v=>{ const ok=onRenameList?.(catKey,v)!==false; if(ok) setManageMode(null); return ok; }}
-          onShare={(em,cd)=>listManage.onShare?.(catKey,em,cd)}
+          onShare={(em,perm,ends)=>listManage.onShare?.(catKey,em,perm,ends)}
           onUnshare={listManage.onUnshare}
           onDelete={()=>{ setManageMode(null); listManage.onDelete?.(catKey); }}
           onSetIcon={ic=>listManage.setCats?.(c=>({...c,[catKey]:{...c[catKey],icon:ic}}))}
@@ -2092,7 +2116,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
         <SidebarManage T={T} target={{type:"list",id:"n:upcoming",name:"Upcoming"}} isGroup={false} childLists={[UPCOMING_SHARE]} shareOnly
           shares={(listManage.ownedShares||[]).filter(s=>s.folder===UPCOMING_SHARE)} meta={{icon:"📅"}}
           onClose={()=>setManageMode(null)}
-          onShare={(em,perm)=>listManage.onShare?.(UPCOMING_SHARE,em,perm)}
+          onShare={(em,perm,ends)=>listManage.onShare?.(UPCOMING_SHARE,em,perm,ends)}
           onUnshare={listManage.onUnshare}
           mode="share"/>
       )}
@@ -2199,8 +2223,9 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
   );
 }
 
-function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,canDelete=true,onViewImage,onClose,onFocus,myEmail,people=[],onAssign,peopleGroups=[],listPeople=null}) {
+function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAttach,onSetReminder,canDelete=true,onViewImage,onClose,onFocus,myEmail,taskShares=[],onShareTask,onUnshareTask,showToast,people=[],onAssign,peopleGroups=[],listPeople=null}) {
   const [assignInput,setAssignInput]=useState("");
+  const [shareOpen,setShareOpen]=useState(false);
   const [uploading,setUploading]=useState(false);
   const fileRef=useRef(null);
   const doAttach=async files=>{
@@ -2493,6 +2518,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
         <button onClick={()=>onUpdate(task.id,{starred:!task.starred})} style={{flex:1,padding:"7px",borderRadius:8,border:`1px solid ${task.starred?"#f59e0b":T.border}`,background:task.starred?"#f59e0b22":"transparent",color:task.starred?"#f59e0b":T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
           <Ico n="flag" s={12} c={task.starred?"#f59e0b":undefined} st={task.starred?{fill:"#f59e0b"}:{}}/>{task.starred?"Flagged":"Flag"}
         </button>
+        {onShareTask&&<button onClick={()=>setShareOpen(true)} title="Share just this task with someone" style={{flex:1,padding:"7px",borderRadius:8,border:`1px solid ${taskShares.length?T.accent:T.border}`,background:taskShares.length?T.accentGlow:"transparent",color:taskShares.length?T.accent:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:5,fontFamily:"'DM Sans',sans-serif"}}>🤝 {taskShares.length?`Shared · ${taskShares.length}`:"Share task"}</button>}
         <button onClick={()=>{onDuplicate?.(task);onClose();}} style={{flex:1,padding:"7px",borderRadius:8,border:`1px solid ${T.border}`,background:"transparent",color:T.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
           <Ico n="layers" s={12}/>Copy
         </button>
@@ -2500,6 +2526,12 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
           <Ico n="trash" s={12} c={T.danger}/>Delete
         </button>}
       </div>
+      {shareOpen&&onShareTask&&(
+        <TaskShareBox T={T} task={task} shares={taskShares} showToast={showToast}
+          onShare={(em,perm,ends)=>onShareTask(task.id,em,perm,ends)}
+          onUnshare={id=>onUnshareTask?.(id)}
+          onClose={()=>setShareOpen(false)}/>
+      )}
     </div>
   );
 }
@@ -3696,7 +3728,7 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
           </span>
           {it.badge>0&&<span style={{background:it.tint||(active?T.accent:T.surface3),color:(it.tint||active)?"#fff":T.textMuted,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:10}}>{it.badge}</span>}
         </button>
-        {isShared&&onLeaveShare&&<button onClick={()=>{ if(window.confirm(`Leave "${it.label}"? You'll stop seeing its tasks.`)) onLeaveShare(it.owner,it.folder); }} data-nodrag title="Leave this shared list" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0,padding:"4px 6px",opacity:hov===it.id?.8:.3}}><Ico n="x" s={11}/></button>}
+        {isShared&&it.folder&&onLeaveShare&&<button onClick={()=>{ if(window.confirm(`Leave "${it.label}"? You'll stop seeing its tasks.`)) onLeaveShare(it.owner,it.folder); }} data-nodrag title="Leave this shared list" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0,padding:"4px 6px",opacity:hov===it.id?.8:.3}}><Ico n="x" s={11}/></button>}
         {canRen&&<button onClick={()=>setManage({type:"list",id:it.id,name:it.label})} data-nodrag title="Manage this list — rename, share, icon, delete" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0,padding:"6px 8px 6px 2px",opacity:hov===it.id?.9:.4,fontSize:15,fontWeight:800,lineHeight:1}}>⋯</button>}
       </div>
     );
@@ -3762,12 +3794,90 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
           onAssignAll={onAssignAll?emails=>onAssignAll(childLists,emails):null} assignGroups={assignGroups}
           onClose={()=>setManage(null)}
           onRename={v=>{ if(isG){ renGroup(manage.id,v); return true; } return onRenameList?.(manage.name,v)!==false; }}
-          onShare={(email,canDel)=>{ childLists.forEach(n=>onShareFolder?.(n,email,canDel)); }}
+          onShare={(email,perm,ends)=>{ childLists.forEach(n=>onShareFolder?.(n,email,perm,ends)); }}
           onUnshare={id=>onUnshare?.(id)}
           onDelete={()=>{ if(isG){ delGroup(manage.id); } else { onDeleteList?.(manage.name); } setManage(null); }}
           onSetIcon={ic=>{ if(isG) setGroupIcon(manage.id,ic); else setCats?.(c=>({...c,[manage.name]:{...c[manage.name],icon:ic}})); }}
           onSetColor={col=>!isG&&setCats?.(c=>({...c,[manage.name]:{...c[manage.name],color:col}}))}/>;
       })()}
+    </div>
+  );
+}
+
+// How long a share lasts. "Never" is the default; the rest are counted from now, and "a date" opens a
+// date box. Returns an ISO timestamp (or null), which is what the database stores.
+const SHARE_SPANS = [["never","No end date",0],["1w","For a week",7],["1m","For a month",30],["3m","For three months",90],["date","Until a date…",-1]];
+const spanToIso = (span, dateStr) => {
+  if (span === "never") return null;
+  if (span === "date") { if (!dateStr) return null; const d = new Date(dateStr + "T23:59:59"); return isNaN(d.getTime()) ? null : d.toISOString(); }
+  const days = (SHARE_SPANS.find(x => x[0] === span) || [])[2] || 0;
+  const d = new Date(); d.setDate(d.getDate() + days); return d.toISOString();
+};
+function ShareSpan({ T, span, setSpan, date, setDate }) {
+  return (
+    <>
+      <select value={span} onChange={e=>setSpan(e.target.value)} title="When this share should stop working"
+        style={{padding:"8px 8px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",cursor:"pointer"}}>
+        {SHARE_SPANS.map(([v,label])=><option key={v} value={v}>{label}</option>)}
+      </select>
+      {span==="date"&&<input type="date" value={date} onChange={e=>setDate(e.target.value)} min={tod()}
+        style={{padding:"7px 9px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>}
+    </>
+  );
+}
+
+// Hand ONE task to someone, without sharing the list it lives in. Same three permission levels as a
+// list share, and the same optional end date.
+function TaskShareBox({T,task,shares=[],onShare,onUnshare,onClose,showToast}) {
+  const [contacts]=useContacts();
+  const [email,setEmail]=useState("");
+  const [perm,setPerm]=useState("view");
+  const [span,setSpan]=useState("never");
+  const [spanDate,setSpanDate]=useState("");
+  const go=()=>{
+    const raw=email.trim(); if(!raw) return;
+    let em=raw.toLowerCase();
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){      // a saved nickname works here too
+      const hit=Object.entries(contacts).find(([mail,nick])=>nick&&nick.trim().toLowerCase()===raw.toLowerCase());
+      if(hit) em=hit[0]; else { showToast?.(`"${raw}" isn't an email or a saved nickname`); return; }
+    }
+    onShare(em,perm,spanToIso(span,spanDate)); setEmail("");
+  };
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:2700,background:"rgba(5,6,12,.6)",display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:360,maxWidth:"94vw",maxHeight:"86vh",overflowY:"auto",background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,padding:18,boxShadow:"0 24px 80px rgba(0,0,0,.5)",fontFamily:"'DM Sans',sans-serif"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+          <span style={{fontSize:18}}>🤝</span>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:15,fontWeight:800,fontFamily:"'Sora',sans-serif"}}>Share this task</div>
+            <div style={{fontSize:10,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{task.title}</div>
+          </div>
+          <button onClick={onClose} style={{width:26,height:26,borderRadius:7,border:"none",cursor:"pointer",background:T.surface2,color:T.textMuted,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="x" s={13}/></button>
+        </div>
+        <div style={{fontSize:10,color:T.textMuted,margin:"8px 0 8px",lineHeight:1.5}}>Just this one task — the list it sits in stays private. It turns up under “Shared tasks” for them.</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+          <input value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")go();}} placeholder="their@email.com or nickname"
+            style={{flex:1,minWidth:130,padding:"8px 10px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
+          <select value={perm} onChange={e=>setPerm(e.target.value)} style={{padding:"8px 8px",borderRadius:9,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontSize:12,outline:"none",cursor:"pointer"}}>
+            <option value="view">View only</option><option value="edit">Edit</option><option value="delete">+ delete</option>
+          </select>
+          <ShareSpan T={T} span={span} setSpan={setSpan} date={spanDate} setDate={setSpanDate}/>
+          <button onClick={go} style={{padding:"8px 14px",borderRadius:9,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Share</button>
+        </div>
+        {shares.length>0
+          ? <div style={{display:"flex",flexDirection:"column",gap:4}}>
+              {shares.map(sh=>(
+                <div key={sh.id} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
+                  <span style={{fontSize:11,color:T.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",userSelect:"text"}}>→ {nickOf(sh.shared_with_email)}</span>
+                  <CopyMail email={sh.shared_with_email} T={T} onDone={m=>showToast?.(m)}/>
+                  <span style={{fontSize:8,fontWeight:700,color:sh.can_delete?T.danger:T.textMuted,background:(sh.can_delete?T.danger:T.textMuted)+"22",padding:"1px 5px",borderRadius:8}}>{!sh.can_edit?"view only":sh.can_delete?"can delete":"edit"}</span>
+                  {shareEndLabel(sh)&&<span style={{fontSize:8,fontWeight:700,color:shareActive(sh)?T.warning:T.danger,background:(shareActive(sh)?T.warning:T.danger)+"22",padding:"1px 5px",borderRadius:8,whiteSpace:"nowrap"}}>{shareActive(sh)?shareEndLabel(sh):"ended"}</span>}
+                  <button onClick={()=>onUnshare(sh.id)} title="Stop sharing with them" style={{background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:10,fontWeight:700}}>✕</button>
+                </div>
+              ))}
+            </div>
+          : <div style={{fontSize:11,color:T.textMuted,opacity:.7}}>Not shared with anyone yet.</div>}
+      </div>
     </div>
   );
 }
@@ -3822,6 +3932,7 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
   const [name,setName]=useState(target.name);
   const [email,setEmail]=useState("");
   const [perm,setPerm]=useState("view");   // they can look, not touch — unless you choose otherwise
+  const [span,setSpan]=useState("never"); const [spanDate,setSpanDate]=useState("");
   const [assignEmail,setAssignEmail]=useState("");
   const iconFileRef=useRef(null);
   const nameRef=useRef(null);
@@ -3843,7 +3954,7 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
       else { alert(`"${raw}" isn't a valid email or a saved nickname. Enter an email like name@example.com.`); return; }
     }
     if(isGroup&&childLists.length===0){ alert("This folder has no lists inside it yet — drag a list in first."); return; }
-    onShare(em,perm);
+    onShare(em,perm,spanToIso(span,spanDate));
     setContacts(c=>em in c?c:{...c,[em]:""});
     setEmail("");
   };
@@ -3898,6 +4009,7 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
             <option value="edit">Edit & add</option>
             <option value="delete">+ delete</option>
           </select>
+          <ShareSpan T={T} span={span} setSpan={setSpan} date={spanDate} setDate={setSpanDate}/>
           <button onClick={doShare} style={{padding:"8px 14px",borderRadius:9,border:"none",cursor:"pointer",background:T.grad,color:"#fff",fontSize:12,fontWeight:700}}>Share</button>
         </div>
         {knownEmails.length>0&&<div style={{marginBottom:8}}>
@@ -3923,6 +4035,7 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
               {isGroup&&<span style={{fontSize:9,color:T.textMuted,fontWeight:700,textTransform:"capitalize"}}>{s.folder}</span>}
               <span style={{fontSize:11,color:T.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {s.shared_with_email}</span>
               <span style={{fontSize:8,fontWeight:700,color:s.can_delete?T.danger:T.textMuted,background:(s.can_delete?T.danger:T.textMuted)+"22",padding:"1px 5px",borderRadius:8}}>{s.can_edit===false?"view only":s.can_delete?"can delete":"edit"}</span>
+              {shareEndLabel(s)&&<span style={{fontSize:8,fontWeight:700,color:shareActive(s)?T.warning:T.danger,background:(shareActive(s)?T.warning:T.danger)+"22",padding:"1px 5px",borderRadius:8,whiteSpace:"nowrap"}}>{shareActive(s)?shareEndLabel(s):"ended"}</span>}
               <button onClick={()=>onUnshare(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:10,fontWeight:700}}>✕</button>
             </div>
           ))}
@@ -4320,6 +4433,7 @@ function SettingsView({T,dark,setDark,scheme,setScheme,sound,setSound,onExport,o
                   <span style={{fontSize:11,color:T.textMuted,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",userSelect:"text"}}>→ {contacts[s.shared_with_email]||s.shared_with_email}</span>
                   <CopyMail email={s.shared_with_email} T={T}/>
                   <span style={{fontSize:9,fontWeight:700,flexShrink:0,color:s.can_delete?T.danger:T.textMuted,background:(s.can_delete?T.danger:T.textMuted)+"22",padding:"1px 6px",borderRadius:10}}>{s.can_edit===false?"view only":s.can_delete?"can delete":"edit"}</span>
+                  {shareEndLabel(s)&&<span style={{fontSize:9,fontWeight:700,flexShrink:0,color:shareActive(s)?T.warning:T.danger,background:(shareActive(s)?T.warning:T.danger)+"22",padding:"1px 6px",borderRadius:10,whiteSpace:"nowrap"}}>{shareActive(s)?shareEndLabel(s):"ended"}</span>}
                   <button onClick={()=>onUnshare(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}>Remove</button>
                 </div>
               ))}

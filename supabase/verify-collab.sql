@@ -28,6 +28,9 @@ declare
   nid      uuid := gen_random_uuid();
   c_id     uuid := '00000000-0000-0000-0000-0000000000cc';   -- a made-up account, so no real share is touched
   c_mail   text := 'selftest-upcoming@example.com';
+  d_id     uuid := '00000000-0000-0000-0000-0000000000dd';   -- another made-up account, for one-task shares
+  d_mail   text := 'selftest-task@example.com';
+  tid3     uuid := gen_random_uuid();
   res      text[] := '{}';
 begin
   select id into a_id from auth.users where lower(email) = a_mail;
@@ -372,6 +375,44 @@ begin
         get diagnostics cnt = row_count;
         res := res || ('47. Without delete rights, they CANNOT delete it | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: the task was deleted' end);
       exception when others then res := res || ('47. Without delete rights, they CANNOT delete it | ✓ PASS')::text; end;
+
+      ------------------------------------ one task shared on its own, and shares that run out
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', a_id::text, 'email', a_mail)::text, true);
+      execute 'set local role authenticated';
+      begin
+        insert into public.tasks(id, user_id, title, tag) values (tid3, a_id, mark || ' solo job', mark || ' never shared');
+        insert into public.task_shares(task_id, owner_id, shared_with_email, can_edit) values (tid3, a_id, d_mail, true);
+        -- …and a list share that ran out an hour ago, with a task in it
+        insert into public.folder_shares(owner_id, folder, shared_with_email, can_edit, expires_at)
+        values (a_id, mark || ' expired', d_mail, true, now() - interval '1 hour');
+        insert into public.tasks(id, user_id, title, tag) values (gen_random_uuid(), a_id, mark || ' expired job', mark || ' expired');
+        res := res || ('48. A shares ONE task, and a list share that has run out | ✓ PASS')::text;
+      exception when others then res := res || ('48. A shares ONE task, and a list share that has run out | ✗ FAIL: ' || sqlerrm); end;
+
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', d_id::text, 'email', d_mail)::text, true);
+      execute 'set local role authenticated';
+      select count(*) into cnt from public.tasks where id = tid3;
+      res := res || ('49. They see that one task (its list was never shared) | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: invisible' end);
+      select count(*) into cnt from public.tasks where title = mark || ' someday job';
+      res := res || ('50. …and nothing else of A''s | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: leaked ' || cnt end);
+      begin
+        update public.tasks set done = true where id = tid3;
+        get diagnostics cnt = row_count;
+        res := res || ('51. They CAN tick that one task off | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: blocked' end);
+      exception when others then res := res || ('51. They CAN tick that one task off | ✗ FAIL: ' || sqlerrm); end;
+      begin
+        delete from public.tasks where id = tid3;
+        get diagnostics cnt = row_count;
+        res := res || ('52. …but CANNOT delete it | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: it was deleted' end);
+      exception when others then res := res || ('52. …but CANNOT delete it | ✓ PASS')::text; end;
+      select count(*) into cnt from public.tasks where title = mark || ' expired job';
+      res := res || ('53. A share that has run out shows nothing | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: still visible' end);
+      begin
+        insert into public.task_shares(task_id, owner_id, shared_with_email) values (tid3, a_id, 'nobody@example.com');
+        res := res || ('54. They CANNOT pass that task on to someone else | ✗ FAIL: they shared it')::text;
+      exception when others then res := res || ('54. They CANNOT pass that task on to someone else | ✓ PASS')::text; end;
     end if;
   end if;
 
@@ -380,6 +421,7 @@ begin
   delete from public.tasks    where title like mark || '%';
   delete from public.folder_shares where folder like mark || '%';
   delete from public.folder_shares where folder = '__upcoming__' and shared_with_email = c_mail;
+  delete from public.task_shares where shared_with_email = d_mail;
   delete from public.messages where body like mark || '%' or body = 'rewritten by B';
   delete from public.notes where title like mark || '%';
   delete from public.categories where name like mark || '%';

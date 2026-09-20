@@ -17,6 +17,8 @@
 --   · A list can be shared view-only: they can read it but not change, add or delete — enforced
 --     even over older sharing rules.
 --   · Your Upcoming can be shared too: they see every task you've given a date, from any list.
+--   · A share can be given an end date, after which it simply stops working.
+--   · A single task can be shared on its own, without sharing the list it sits in.
 --   · Everyone sharing a list sees who a task is assigned to — unless the
 --     assigner marks it private, and then only the assignee can see it.
 --   · Habits keep the order you drag them into, on every device.
@@ -99,6 +101,24 @@ alter table public.tasks add column if not exists assign_private boolean default
 
 -- View-only sharing: they see the list, they can't change it. Older rows have no value → editable.
 alter table public.folder_shares add column if not exists can_edit boolean default true;
+
+-- An end date for a share: after it passes the share stops granting anything. NULL = no end date.
+alter table public.folder_shares add column if not exists expires_at timestamptz;
+
+-- Sharing ONE task, without sharing the list it lives in. Same three permission levels as a list share.
+create table if not exists public.task_shares (
+  id                uuid primary key default gen_random_uuid(),
+  task_id           uuid not null references public.tasks on delete cascade,
+  owner_id          uuid not null references auth.users on delete cascade,
+  shared_with_email text not null,
+  can_edit          boolean not null default false,
+  can_delete        boolean not null default false,
+  expires_at        timestamptz,
+  created_at        timestamptz default now(),
+  unique (task_id, shared_with_email)
+);
+create index if not exists task_shares_email_idx on public.task_shares (lower(shared_with_email));
+create index if not exists task_shares_task_idx  on public.task_shares (task_id);
 
 -- Habit order. Without it the order you drag habits into only survived by accident.
 alter table public.habits add column if not exists position double precision;
@@ -188,8 +208,21 @@ returns boolean language sql security definer stable set search_path = public as
                  where fs.owner_id = task_owner
                    and lower(fs.shared_with_email) = lower(auth.jwt() ->> 'email')
                    and (fs.folder = task_list or (fs.folder = '__upcoming__' and dated))
+                   and (fs.expires_at is null or fs.expires_at > now())     -- a share that has run out grants nothing
                    and case action when 'delete' then coalesce(fs.can_delete, false)
                                    when 'edit'   then coalesce(fs.can_edit, true)
+                                   else true end);
+$$;
+
+-- …and the same question for ONE task handed to me directly (public.task_shares).
+create or replace function public.task_shared_directly(tid uuid, action text)
+returns boolean language sql security definer stable set search_path = public as $$
+  select exists (select 1 from public.task_shares ts
+                 where ts.task_id = tid
+                   and lower(ts.shared_with_email) = lower(auth.jwt() ->> 'email')
+                   and (ts.expires_at is null or ts.expires_at > now())
+                   and case action when 'delete' then ts.can_delete
+                                   when 'edit'   then ts.can_edit
                                    else true end);
 $$;
 
@@ -304,8 +337,8 @@ create policy "assignees update" on public.tasks for update to authenticated
 -- saved on their screen but is silently dropped, and the new assignee sees nothing.
 drop policy if exists "collaborators edit shared tasks" on public.tasks;
 create policy "collaborators edit shared tasks" on public.tasks for update to authenticated
-  using      (public.task_shared_with_me(user_id, tag, due is not null, 'edit'))
-  with check (public.task_shared_with_me(user_id, tag, due is not null, 'edit'));
+  using      (public.task_shared_with_me(user_id, tag, due is not null, 'edit') or public.task_shared_directly(id, 'edit'))
+  with check (public.task_shared_with_me(user_id, tag, due is not null, 'edit') or public.task_shared_directly(id, 'edit'));
 
 -- ...and add new work to that shared list (the app files it under the list's owner)
 drop policy if exists "collaborators add to shared lists" on public.tasks;
@@ -315,10 +348,10 @@ create policy "collaborators add to shared lists" on public.tasks for insert to 
 -- Seeing and deleting through a share. Lists already had rules for these; a shared Upcoming needs them.
 drop policy if exists "shared with me: read" on public.tasks;
 create policy "shared with me: read" on public.tasks for select to authenticated
-  using (public.task_shared_with_me(user_id, tag, due is not null, 'view'));
+  using (public.task_shared_with_me(user_id, tag, due is not null, 'view') or public.task_shared_directly(id, 'view'));
 drop policy if exists "shared with me: delete" on public.tasks;
 create policy "shared with me: delete" on public.tasks for delete to authenticated
-  using (public.task_shared_with_me(user_id, tag, due is not null, 'delete'));
+  using (public.task_shared_with_me(user_id, tag, due is not null, 'delete') or public.task_shared_directly(id, 'delete'));
 
 -- RESTRICTIVE: applies on top of every other rule. A private assignment is
 -- visible only to the task's owner and the people it is assigned to.
@@ -353,14 +386,24 @@ create trigger keep_task_owner before update on public.tasks
 -- before view-only existed; one of those let every share edit, which self-test checks 29 and 30 caught.
 drop policy if exists "tasks: change only with edit rights" on public.tasks;
 create policy "tasks: change only with edit rights" on public.tasks as restrictive for update to authenticated
-  using      (user_id = auth.uid() or public.is_assigned_to_me(assigned_to) or public.task_shared_with_me(user_id, tag, due is not null, 'edit'))
-  with check (user_id = auth.uid() or public.is_assigned_to_me(assigned_to) or public.task_shared_with_me(user_id, tag, due is not null, 'edit'));
+  using      (user_id = auth.uid() or public.is_assigned_to_me(assigned_to) or public.task_shared_with_me(user_id, tag, due is not null, 'edit') or public.task_shared_directly(id, 'edit'))
+  with check (user_id = auth.uid() or public.is_assigned_to_me(assigned_to) or public.task_shared_with_me(user_id, tag, due is not null, 'edit') or public.task_shared_directly(id, 'edit'));
+-- What you may SEE of other people's tasks, whatever older rules say: your own, work assigned to you, a
+-- list (or Upcoming) shared with you, or one task handed to you. RESTRICTIVE, which is also what makes a
+-- share with an end date really stop working — the older "shared lists read" rules never checked for one.
+drop policy if exists "tasks: see only yours or shared with you" on public.tasks;
+create policy "tasks: see only yours or shared with you" on public.tasks as restrictive for select to authenticated
+  using (user_id = auth.uid()
+         or public.is_assigned_to_me(assigned_to)
+         or public.task_shared_with_me(user_id, tag, due is not null, 'view')
+         or public.task_shared_directly(id, 'view'));
+
 drop policy if exists "tasks: add only with edit rights" on public.tasks;
 create policy "tasks: add only with edit rights" on public.tasks as restrictive for insert to authenticated
   with check (user_id = auth.uid() or public.task_shared_with_me(user_id, tag, due is not null, 'edit'));
 drop policy if exists "tasks: delete only with delete rights" on public.tasks;
 create policy "tasks: delete only with delete rights" on public.tasks as restrictive for delete to authenticated
-  using (user_id = auth.uid() or public.task_shared_with_me(user_id, tag, due is not null, 'delete'));
+  using (user_id = auth.uid() or public.task_shared_with_me(user_id, tag, due is not null, 'delete') or public.task_shared_directly(id, 'delete'));
 -- (replaced by task_shared_with_me above; nothing uses it any more)
 drop function if exists public.share_allows(uuid, text, text);
 
@@ -377,6 +420,26 @@ drop policy if exists "shares: owner or invitee removes" on public.folder_shares
 create policy "shares: owner or invitee removes" on public.folder_shares
   as restrictive for delete to authenticated
   using (owner_id = auth.uid() or lower(shared_with_email) = lower(auth.jwt() ->> 'email'));
+
+-- Task shares: only the task's owner hands a task out, and only they change or withdraw it. The person it
+-- was shared with can see their own row, and can let it go. RESTRICTIVE insert/update, so this holds
+-- whatever else exists.
+alter table public.task_shares enable row level security;
+drop policy if exists "task shares: owner manages" on public.task_shares;
+create policy "task shares: owner manages" on public.task_shares for all to authenticated
+  using (owner_id = auth.uid()) with check (owner_id = auth.uid());
+drop policy if exists "task shares: invitee sees" on public.task_shares;
+create policy "task shares: invitee sees" on public.task_shares for select to authenticated
+  using (lower(shared_with_email) = lower(auth.jwt() ->> 'email'));
+drop policy if exists "task shares: invitee leaves" on public.task_shares;
+create policy "task shares: invitee leaves" on public.task_shares for delete to authenticated
+  using (lower(shared_with_email) = lower(auth.jwt() ->> 'email'));
+drop policy if exists "task shares: only the owner creates" on public.task_shares;
+create policy "task shares: only the owner creates" on public.task_shares as restrictive for insert to authenticated
+  with check (owner_id = auth.uid() and exists (select 1 from public.tasks t where t.id = task_id and t.user_id = auth.uid()));
+drop policy if exists "task shares: only the owner changes" on public.task_shares;
+create policy "task shares: only the owner changes" on public.task_shares as restrictive for update to authenticated
+  using (owner_id = auth.uid()) with check (owner_id = auth.uid());
 
 -- Attachments: files can only be added, replaced or removed inside your own folder (<your user id>/…),
 -- which is where the app always puts them. Reading stays public so shared photos load. Scoped to the
@@ -399,7 +462,7 @@ create policy "attachments: remove own folder" on storage.objects as restrictive
 do $$
 declare t text;
 begin
-  foreach t in array array['messages','groups','group_members','chat_requests'] loop
+  foreach t in array array['messages','groups','group_members','chat_requests','task_shares'] loop
     begin
       execute format('alter publication supabase_realtime add table public.%I', t);
     exception when duplicate_object then null;
