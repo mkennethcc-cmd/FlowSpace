@@ -75,7 +75,7 @@ section("Sharing rules");
 {
   const { inUpcoming, shareCovers, shareLabel, UPCOMING_SHARE } = L, today = "2026-09-16";
   const U = [[{ due: "2026-09-01", done: false }, true, "an overdue open task stays in Upcoming"],
-             [{ due: "2026-09-01", done: true }, false, "a finished past task leaves Upcoming"],
+             [{ due: "2026-09-01", done: true }, true, "a task ticked off in Upcoming stays (under Completed)"],
              [{ due: "2026-09-20", done: true }, true, "a finished task whose day hasn't come stays"],
              [{ due: "9999-12-31", done: false }, true, "Date TBD is in Upcoming"],
              [{ due: null, done: false }, false, "no date, not in Upcoming"]];
@@ -108,6 +108,33 @@ section("Auto-scroll while dragging");
     [step(150, 90) === 0 && step(150, 520) === 0, "a pointer outside the area's top/bottom doesn't scroll it"],
   ];
   for (const [ok, what] of E) report(ok, "edgeScrollStep: " + what);
+}
+
+section("Dragging a card to a new place");
+{
+  const { reorderPosition, sortFor } = L;
+  const mk = (id, position) => ({ id, position });
+  const list = [mk("a", 400), mk("b", 300), mk("c", 200), mk("d", 100)];   // as shown, top first
+  const R = [
+    [reorderPosition(list, "d", "c", true) === 250, "the last card moves above the one before it"],
+    [reorderPosition(list, "a", "d", false) === 99, "dropping below the last card puts it at the end"],
+    [reorderPosition(list, "d", "a", true) === 401, "dropping above the first card puts it at the top"],
+    [reorderPosition(list, "b", "c", true) === null, "dropping where it already is does nothing"],
+    [reorderPosition(list, "c", "b", false) === null, "…from the other side too"],
+    [reorderPosition(list, "b", "b", true) === null, "a card dropped on itself does nothing"],
+    [reorderPosition(list, "b", "zz", true) === null, "an unknown target does nothing"],
+    [reorderPosition([mk("a", 0), mk("b", 0), mk("c", 0)], "c", "a", true) === 1, "cards sharing a position still move"],
+    [reorderPosition([mk("a", 0), mk("b", 0), mk("c", 0)], "a", "b", false) === -0.5, "…in both directions"],
+  ];
+  for (const [ok, what] of R) report(ok, "reorderPosition: " + what);
+  const S = [
+    [sortFor("myday", {}, "due") === "manual", "My Day is hand-arranged unless you say otherwise"],
+    [sortFor("myday", { myday: "az" }, "due") === "az", "…and your own choice for it wins"],
+    [sortFor("cat:Work", {}, "priority") === "priority", "another list falls back to your last overall choice"],
+    [sortFor("cat:Work", { "cat:Work": "manual" }, "due") === "manual", "each list remembers its own sort"],
+    [sortFor("upcoming", {}, null) === "due", "with no choice at all, by due date"],
+  ];
+  for (const [ok, what] of S) report(ok, "sortFor: " + what);
 }
 
 await import("./check-sync.mjs").then(m => m.run(report, section));

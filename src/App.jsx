@@ -6,7 +6,7 @@ import {
   stripListName, matchListName, guessCat, ymd, tod, addDays, DUE_TBD, isTbd,
   dueKey, fmtDate, fmtClock, parseNL, cleanTitle, titleEditPatch, guessIcon, nextDue,
   mergeGami, gamiRowDiffers, moveDuePatch, whenPatch, inUpcoming, UPCOMING_SHARE, shareLabel, shareCovers,
-  edgeScrollStep,
+  edgeScrollStep, reorderPosition, sortFor,
 } from "./logic";
 
 const FontLink = () => (
@@ -103,7 +103,24 @@ function startPressDrag(e, onActivate) {
 // A drag has to block normal scrolling (or the page runs away under your finger), so without this anything
 // past the fold is unreachable on a phone — there's no second finger to scroll with. Each scroll step
 // re-runs the drag's own move handler, so the drop marker keeps pointing where the content now is.
-function dragEdgeScroll(point, onMove) {
+const scrollerAround = el => {
+  for (let e = el; e && e !== document.documentElement; e = e.parentElement) {
+    const cs = getComputedStyle(e);
+    if (/auto|scroll/.test(cs.overflowY) && e.scrollHeight > e.clientHeight + 2) return e;
+  }
+  return null;
+};
+function dragEdgeScroll(point, onMove, fromEl) {
+  // The nearest scrolling area under the pointer, edge or no edge — remembered so the drag keeps
+  // scrolling the list it started in even once the finger wanders off it (past the bottom of the
+  // sidebar, over a toolbar, off the side of the screen).
+  const areaAt = (x, y) => {
+    for (let el = document.elementFromPoint(x, y); el && el !== document.documentElement; el = el.parentElement) {
+      const cs = getComputedStyle(el);
+      if (/auto|scroll/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 2) return el;
+    }
+    return null;
+  };
   // The nearest area under the pointer that both scrolls and still has room to go that way.
   const pick = (x, y) => {
     for (let el = document.elementFromPoint(x, y); el && el !== document.documentElement; el = el.parentElement) {
@@ -116,9 +133,20 @@ function dragEdgeScroll(point, onMove) {
   };
   // A timer rather than requestAnimationFrame: a frame callback only runs while the page is painting, so
   // the scroll would stall in any view that isn't drawing (and it can't be tested outside a real screen).
+  let home = scrollerAround(fromEl);                 // the list this drag belongs to, known from the start
   const timer = setInterval(() => {
     const p = point.current; if (!p) return;
-    const hit = pick(p.x, p.y); if (!hit) return;
+    const over = areaAt(p.x, p.y); if (over) home = over;
+    let hit = pick(p.x, p.y);
+    if (!hit && home) {                              // off the list: if we're past its top or bottom, keep going that way
+      const r = home.getBoundingClientRect();
+      const y = p.y > r.bottom ? r.bottom - 1 : p.y < r.top ? r.top + 1 : null;
+      if (y !== null) {
+        const dy = edgeScrollStep(r, Math.min(Math.max(p.x, r.left + 1), r.right - 1), y, home.scrollTop, home.scrollHeight - home.clientHeight);
+        if (dy) hit = [home, dy];
+      }
+    }
+    if (!hit) return;
     const [el, dy] = hit, was = el.scrollTop;
     el.scrollTop = was + dy;
     if (el.scrollTop !== was) onMove({ clientX: p.x, clientY: p.y, type: "pointermove" });
@@ -128,7 +156,7 @@ function dragEdgeScroll(point, onMove) {
 
 // Runs an active drag via window listeners (reliable across re-renders). Blocks text-select/scroll while
 // dragging — so anything dragged along a list passes scroll:true for the edge auto-scroll above.
-function runDrag(onMove, onDrop, { scroll = false } = {}) {
+function runDrag(onMove, onDrop, { scroll = false, from = null } = {}) {
   document.body.style.userSelect = "none";
   document.body.style.webkitUserSelect = "none";
   document.body.style.touchAction = "none";
@@ -136,7 +164,7 @@ function runDrag(onMove, onDrop, { scroll = false } = {}) {
   const blockScroll = e => { e.preventDefault(); };
   document.addEventListener("touchmove", blockScroll, { passive: false });
   const point = { current: null };
-  const stopScroll = scroll ? dragEdgeScroll(point, onMove) : null;
+  const stopScroll = scroll ? dragEdgeScroll(point, onMove, from) : null;
   const mv = e => { point.current = { x: e.clientX, y: e.clientY }; onMove(e); };
   const up = e => {
     if (stopScroll) stopScroll();
@@ -158,6 +186,38 @@ function runDrag(onMove, onDrop, { scroll = false } = {}) {
 const assigneesOf = task => (task?.assignedTo||"").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean);
 // System notices in a team chat (e.g. "X was added") are normal messages prefixed with this marker.
 const SYS_MARK = "⁣sys⁣";
+// Nicknames for people, kept on the device AND in your synced preferences, so a name you give someone on
+// the laptop shows on the phone too. Every screen that edits them goes through useContacts, and the
+// "fs-contacts" event tells the others (and App, which saves them) that they changed.
+const readContacts = () => { try { return JSON.parse(localStorage.getItem("fs_contacts") || "{}"); } catch { return {}; } };
+const writeContacts = c => { try { localStorage.setItem("fs_contacts", JSON.stringify(c || {})); } catch {} window.dispatchEvent(new Event("fs-contacts")); };
+function useContacts() {
+  const [c, setC] = useState(readContacts);
+  useEffect(() => { const f = () => setC(readContacts()); window.addEventListener("fs-contacts", f); return () => window.removeEventListener("fs-contacts", f); }, []);
+  return [c, next => writeContacts(typeof next === "function" ? next(readContacts()) : next)];
+}
+// Copy something to the clipboard, with the old-fashioned fallback for browsers that refuse the modern one.
+async function copyText(t) {
+  if (!t) return false;
+  try { await navigator.clipboard.writeText(t); return true; }
+  catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = t; ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand("copy"); ta.remove(); return ok;
+    } catch { return false; }
+  }
+}
+// A small 📋 next to an address, so a collaborator's email can be copied instead of only read.
+function CopyMail({ email, T, onDone }) {
+  const [hit, setHit] = useState(false);
+  if (!email) return null;
+  return (
+    <button data-nodrag title={`Copy ${email}`} onClick={async e => { e.stopPropagation(); const ok = await copyText(email); setHit(true); setTimeout(() => setHit(false), 1200); onDone?.(ok ? `Copied ${email}` : "Couldn't copy — select the address instead"); }}
+      style={{ background: "none", border: "none", cursor: "pointer", padding: "0 3px", fontSize: 11, color: hit ? T.success : T.textMuted, flexShrink: 0, lineHeight: 1 }}>{hit ? "✓" : "📋"}</button>
+  );
+}
 // Display a person by their saved nickname (fs_contacts) when there is one, else their email.
 const nickOf = email => { if(!email) return ""; try{ const c=JSON.parse(localStorage.getItem("fs_contacts")||"{}"); return (c[email]&&c[email].trim())||email; }catch{ return email; } };
 const initialOf = email => (nickOf(email)||"?").trim().charAt(0).toUpperCase();
@@ -418,8 +478,12 @@ export default function Freely() {
   const [hiddenTabs, setHiddenTabs] = useState(()=>{ try{ return JSON.parse(localStorage.getItem("fs_hidden_tabs")||"[]"); }catch{ return []; } });
   // Sidebar order + hidden tabs + sort choice ride along with the gamification row so every device agrees.
   // Last write wins, decided by the `at` stamp saved next to them.
+  // Your last overall choice, kept as the fallback for a list you've never sorted by hand…
   const [sortMode, setSortMode] = useState(()=>{ const v=localStorage.getItem("fs_sort")||"due"; return v==="smart"?"manual":v; });
   useEffect(()=>{ try{ localStorage.setItem("fs_sort",sortMode); }catch{} },[sortMode]);
+  // …and the choice each list remembers on its own, so arranging My Day by hand doesn't re-sort Groceries.
+  const [sortBy, setSortBy] = useState(()=>{ try{ const v=JSON.parse(localStorage.getItem("fs_sorts")||"{}"); return v&&typeof v==="object"&&!Array.isArray(v)?v:{}; }catch{ return {}; } });
+  useEffect(()=>{ try{ localStorage.setItem("fs_sorts",JSON.stringify(sortBy)); }catch{} },[sortBy]);
   // New tasks join the END of the list, the way a to-do list is normally written. Settings can flip it back.
   const [newAtBottom, setNewAtBottom] = useState(()=>localStorage.getItem("fs_new_bottom")!=="0");
   useEffect(()=>{ try{ localStorage.setItem("fs_new_bottom",newAtBottom?"1":"0"); }catch{} },[newAtBottom]);
@@ -678,7 +742,8 @@ export default function Freely() {
   // ── XP, streak and preferences, synced between devices (the merge rules: mergeGami in logic.js) ──────
   const xpBaseRef=useRef(0);   // XP as last agreed with the server — anything above it was earned on this device since
   const gamiChainRef=useRef(Promise.resolve()), gamiTimerRef=useRef(null);
-  const layout={navOrg,hiddenTabs,sort:sortMode,newAtBottom,dark,scheme};
+  const [contacts,setContacts]=useContacts();
+  const layout={navOrg,hiddenTabs,sort:sortMode,sorts:sortBy,contacts,newAtBottom,dark,scheme};
   const layoutJson=JSON.stringify(layout);
   // The layout's `at` moves only when you change the layout HERE — never when another device's layout is
   // adopted, and never because a task was ticked. That is what stops a phone left open all day from
@@ -700,9 +765,10 @@ export default function Freely() {
       m.awarded.forEach(a=>awardedRef.current.add(a));
       if((m.last_active||"")>=(lastActiveRef.current||"")){ lastActiveRef.current=m.last_active; setStreak(m.last_active===tod()||m.last_active===addDays(-1)?m.streak:0); }
       if(m.serverLayoutNewer){
-        const p=m.prefs, next={navOrg:p.navOrg??null,hiddenTabs:Array.isArray(p.hiddenTabs)?p.hiddenTabs:[],sort:p.sort==="smart"?"manual":(p.sort||"due"),newAtBottom:p.newAtBottom!==false,dark:p.dark!==false,scheme:PALETTES[p.scheme]?p.scheme:"lavender"};
+        const p=m.prefs, next={navOrg:p.navOrg??null,hiddenTabs:Array.isArray(p.hiddenTabs)?p.hiddenTabs:[],sort:p.sort==="smart"?"manual":(p.sort||"due"),sorts:(p.sorts&&typeof p.sorts==="object"&&!Array.isArray(p.sorts))?p.sorts:{},contacts:(p.contacts&&typeof p.contacts==="object"&&!Array.isArray(p.contacts))?p.contacts:{},newAtBottom:p.newAtBottom!==false,dark:p.dark!==false,scheme:PALETTES[p.scheme]?p.scheme:"lavender"};
         layoutSeenRef.current=JSON.stringify(next); prefsAtRef.current=p.at; try{ localStorage.setItem("fs_prefs_at",String(p.at)); }catch{}
-        setNavOrg(next.navOrg); setHiddenTabs(next.hiddenTabs); setSortMode(next.sort); setNewAtBottom(next.newAtBottom); setDark(next.dark); setScheme(next.scheme);
+        setNavOrg(next.navOrg); setHiddenTabs(next.hiddenTabs); setSortMode(next.sort); setSortBy(next.sorts); setNewAtBottom(next.newAtBottom); setDark(next.dark); setScheme(next.scheme);
+        writeContacts(next.contacts);   // nicknames another device gave people
       }
       const others={...m.prefs.stats}; delete others[DEVICE_ID];
       setRemoteStats(others); try{ localStorage.setItem("fs_stats_remote",JSON.stringify(others)); }catch{}
@@ -946,17 +1012,13 @@ export default function Freely() {
   };
   // Drop-position aware reorder: `before` says whether the card lands above or below the target
   // (from the pointer's position over the target's midpoint) — so first/last slots work too.
-  const reorderTasks = (fromId,toId,before)=>{
-    if(String(fromId)===String(toId)) return;
-    const sorted=tasks.filter(t=>!t.done).sort((a,b)=>(b.position||0)-(a.position||0));
-    const fromIdx=sorted.findIndex(t=>String(t.id)===String(fromId)), toIdx=sorted.findIndex(t=>String(t.id)===String(toId));
-    if(fromIdx<0||toIdx<0) return;
-    if(before===undefined) before=fromIdx>toIdx; // legacy callers: infer from drag direction
-    const toT=sorted[toIdx], fromT=sorted[fromIdx];
-    let newPos;
-    if(before){ const above=sorted[toIdx-1]; if(above&&above.id===fromT.id) return; newPos=above?((above.position||0)+(toT.position||0))/2:(toT.position||0)+1; }
-    else { const below=sorted[toIdx+1]; if(below&&below.id===fromT.id) return; newPos=below?((toT.position||0)+(below.position||0))/2:(toT.position||0)-1; }
-    updateTask(fromT.id,{position:newPos});
+  // `shown` is the order the person is looking at. Without it the neighbours were taken from every open
+  // task you own, so two cards that sit next to each other in some other list refused to swap here.
+  const reorderTasks = (fromId,toId,before,shown)=>{
+    const list=(shown&&shown.length)?shown:tasks.filter(t=>!t.done).sort((a,b)=>(b.position||0)-(a.position||0));
+    const pos=reorderPosition(list,fromId,toId,before);
+    if(pos===null) return;
+    updateTask(fromId,{position:pos});
   };
 
   // "Today" follows the device clock: re-checked on a timer and whenever the app regains focus, so crossing
@@ -978,9 +1040,9 @@ export default function Freely() {
     setMydayExtra(m=>{ const ids=m.date===todStr?m.ids.filter(x=>x!==t.id):[]; return {date:todStr,ids:on?[...ids,t.id]:ids,at:Date.now()}; });
   };
   const myDay=tasks.filter(inMyDay);
-  const upcoming=myTasks.filter(t=>inUpcoming(t,todStr));
+  const upcoming=myTasks.filter(inUpcoming);
   // What a share shows: that list of theirs, or — for a shared Upcoming — everything of theirs with a date.
-  const sharedTasks=(owner,folder)=>tasks.filter(t=>t.owner===owner&&(folder===UPCOMING_SHARE?inUpcoming(t,todStr):t.tag===folder));
+  const sharedTasks=(owner,folder)=>tasks.filter(t=>t.owner===owner&&(folder===UPCOMING_SHARE?inUpcoming(t):t.tag===folder));
   const myDayAllDone=myDay.length>0&&myDay.every(t=>t.done);
   const prevMyDayDone=useRef(false);
   useEffect(()=>{ if(myDayAllDone&&!prevMyDayDone.current) fireConfetti(); prevMyDayDone.current=myDayAllDone; },[myDayAllDone]);
@@ -1181,6 +1243,10 @@ export default function Freely() {
     return (b.position||0)-(a.position||0);
   });
 
+  // Each list keeps its own sort; a list you've never sorted follows your last overall choice, except
+  // My Day, which is hand-arranged by default (see sortFor). Changing it here sets both.
+  const viewSort=sortFor(view,sortBy,sortMode);
+  const pickSort=v=>{ setSortBy(s=>({...s,[view]:v})); setSortMode(v); };
   const getViewTasks=()=>{
     let base;
     if(view.startsWith("cat:")){ const c=view.slice(4); base=tasks.filter(t=>t.tag===c&&t.owner===user?.id); }
@@ -1343,7 +1409,7 @@ export default function Freely() {
       {cmdOpen&&<CmdPalette T={T} tasks={tasks} notes={notes} onClose={()=>setCmdOpen(false)} onGo={v=>{navTo(v);setCmdOpen(false);}} onAdd={t=>{setInput(t);setCmdOpen(false);setTimeout(()=>inputRef.current?.focus(),80);}} onPickTask={t=>{keepSelRef.current=true;navTo("all");setSelTask(t);setCmdOpen(false);}}/>}
       {/* Drawer backdrop — phone only. Tap anywhere off the sidebar to put it away. */}
       {narrow&&sideOpen&&<div onClick={()=>setSideOpen(false)} style={{position:"fixed",inset:0,zIndex:55,background:"rgba(5,6,12,.55)",animation:"fadeIn .15s ease"}}/>}
-      <aside onPointerDown={sideSwipe} style={{width:sideOpen?(narrow?272:224):60,transition:narrow?"none":"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0,zIndex:narrow&&sideOpen?60:30,touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none",
+      <aside onPointerDown={sideSwipe} style={{width:sideOpen?(narrow?272:224):60,transition:narrow?"none":"width .3s cubic-bezier(.4,0,.2,1)",background:T.sidebar,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",flexShrink:0,position:"relative",overflow:"hidden",zIndex:narrow&&sideOpen?60:30,touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none",
         ...(narrow&&sideOpen?{position:"fixed",top:0,bottom:0,left:0,maxWidth:"84vw",boxShadow:"0 0 48px rgba(0,0,0,.6)",animation:"slideIn .18s ease"}:null)}}>
         <div style={{padding:"18px 14px",display:"flex",alignItems:"center",gap:9}}>
           <button onClick={()=>setAboutOpen(true)} title="About Freely" style={{display:"flex",alignItems:"center",gap:9,background:"none",border:"none",cursor:"pointer",padding:0,flex:1,minWidth:0}}>
@@ -1375,6 +1441,12 @@ export default function Freely() {
             </div>
           </div>
         )}
+        {/* The swipe was the only way in or out, and nothing said so. This handle sits on the sidebar's
+            edge at all times: tap it to open or close, and its arrow shows which way it goes. */}
+        <button onClick={()=>setSideOpen(o=>!o)} data-nodrag title={sideOpen?"Hide the sidebar (or swipe it left)":"Show your tabs and lists (or swipe right)"}
+          style={{position:"absolute",top:"50%",right:0,transform:"translateY(-50%)",width:15,height:48,borderRadius:"9px 0 0 9px",border:`1px solid ${T.border}`,borderRight:"none",background:T.sidebar,color:T.textMuted,cursor:"pointer",zIndex:62,display:"flex",alignItems:"center",justifyContent:"center",padding:0,boxShadow:"2px 0 10px rgba(0,0,0,.25)"}}>
+          <Ico n="chevron" s={13} c={T.textMuted} st={{transform:sideOpen?"rotate(180deg)":"none",transition:"transform .2s"}}/>
+        </button>
         <nav style={{flex:1,minHeight:0,padding:"0 6px",overflowY:"auto",overflowX:"hidden"}}>
           <SidebarTree T={T} sideOpen={sideOpen} items={sidebarItems} view={view} onOpen={goView} org={navOrg} setOrg={setNavOrg} onAddList={addSidebarList} onRenameList={renameCat} onShareFolder={shareFolder} onUnshare={unshareFolder} ownedShares={ownedShares} onDeleteList={deleteCat} setCats={setCats} cats={cats} onAssignAll={assignAllInLists} assignGroups={allGroups} onUploadIcon={uploadCatIcon} onLeaveShare={leaveShare}/>
         </nav>
@@ -1441,7 +1513,7 @@ export default function Freely() {
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onUnshare={unshareFolder} deletedCats={deletedCats} pomLen={pomLen} onPomLen={m=>{ setPomLen(m); if(!pomRun) setPomSecs(m*60); }} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar} newAtBottom={newAtBottom} setNewAtBottom={setNewAtBottom} onHelp={()=>setHelpOpen(true)}/>}
           {(["myday","flagged","upcoming","all","assigned"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFiles} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} isInMyDay={inMyDay} todStr={todStr} canDeleteFn={canDeleteTask} canEditFn={canEditTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={allGroups} listPeople={collaboratorsOf} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}
-              sortMode={sortMode} setSortMode={setSortMode} showToast={showToast} onHelp={()=>setHelpOpen(true)}
+              sortMode={viewSort} setSortMode={pickSort} showToast={showToast} onHelp={()=>setHelpOpen(true)}
               sharedInfo={sharedViewInfo} onLeaveShare={sharedViewInfo?()=>leaveShare(sharedViewInfo.owner,sharedViewInfo.folder):null}
               listManage={{ownedShares, onShare:shareFolder, onUnshare:unshareFolder, onDelete:deleteCat, setCats, onAssignAll:assignAllInLists, assignGroups:allGroups, onUploadIcon:uploadCatIcon}}/>
           )}
@@ -1640,8 +1712,52 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const dayDone=view==="myday"?tasks.filter(t=>t.done).length:0;
   const dayPct=dayTotal?Math.round(dayDone/dayTotal*100):0;
 
+  // The order the cards are actually in, top to bottom — overdue first in Upcoming, then the rest.
+  // The render below and a dropped card both read this, so they can never disagree about neighbours.
+  const isLate=t=>t.due&&!isTbd(t.due)&&t.due<todStr;
+  const shownOrder=()=>{
+    const open=sortList(show.filter(t=>!t.done));
+    if(!upcomingLike) return open;
+    const late=open.filter(isLate);
+    return late.length?[...late,...open.filter(t=>!isLate(t))]:open;
+  };
+  // Right-click (or two-finger click) on a card: the handful of things you'd otherwise open the task for.
+  // Mouse and trackpad only — on a touchscreen a long press is already "pick the card up".
+  const [menu,setMenu]=useState(null);   // {x,y,task}
+  const openMenu=(e,task)=>{
+    if(COARSE) return;
+    if(canEditFn&&!canEditFn(task)) return;
+    e.preventDefault(); e.stopPropagation();
+    setMenu({x:e.clientX,y:e.clientY,task});
+  };
+  useEffect(()=>{
+    if(!menu) return;
+    const close=()=>setMenu(null);
+    const esc=e=>{ if(e.key==="Escape") setMenu(null); };
+    window.addEventListener("resize",close); window.addEventListener("scroll",close,true); window.addEventListener("keydown",esc);
+    return ()=>{ window.removeEventListener("resize",close); window.removeEventListener("scroll",close,true); window.removeEventListener("keydown",esc); };
+  },[menu]);
+
+  // A two-finger sideways swipe on a trackpad is a wheel event with sideways movement — the same gesture
+  // a finger makes on the phone, so it does the same things: left deletes, right adds to My Day.
+  const wheelRef=useRef({id:null,dx:0,at:0,timer:null});
+  const onWheelSwipe=(e,id)=>{
+    if(Math.abs(e.deltaX)<=Math.abs(e.deltaY)) return;      // that's ordinary scrolling
+    if(canEditFn){ const tk=tasks.find(x=>String(x.id)===String(id)); if(tk&&!canEditFn(tk)) return; }
+    const w=wheelRef.current, now=Date.now();
+    if(w.id!==id||now-w.at>500) w.dx=0;                      // a new gesture, or a new card
+    w.id=id; w.at=now; w.dx=Math.max(-110,Math.min(110,w.dx-e.deltaX));   // fingers left → negative, like a swipe left
+    setSwipeId(id); setSwipeX(w.dx);
+    clearTimeout(w.timer);
+    const finish=()=>{ const dx=w.dx; w.dx=0; w.id=null; setSwipeId(null); setSwipeX(0);
+      if(dx<=-60) deleteTask(id); else if(dx>=60) onToggleMyDay?.(id); };
+    if(Math.abs(w.dx)>=95) finish();                         // far enough: act without waiting
+    else w.timer=setTimeout(finish,260);                     // fingers lifted: act if it went far enough
+  };
+
   const canReorder = sort==="manual";
   const beginReorder=id=>{
+    const fromEl=document.querySelector(`[data-task-id="${CSS.escape(String(id))}"]`);
     // Hand-arranging is only meaningful in "My order". In any other sort the list re-sorts itself
     // the moment you let go, so the drag is refused outright rather than quietly changing your sort.
     if(!canReorder){ navigator.vibrate?.(8); showToast?.("Dragging only works in “My order” — change the sort above to arrange by hand ✋"); return; }
@@ -1666,9 +1782,9 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           } }
         dropRef.current=hit; setDrop(hit); },
       ()=>{ ghost.remove(); const from=dragIdRef.current,to=dropRef.current;
-        if(from!=null&&to) reorderTasks(from,to.id,to.before);
+        if(from!=null&&to) reorderTasks(from,to.id,to.before,shownOrder());
         dragIdRef.current=null; dropRef.current=null; setDragId(null); setDrop(null); },
-      {scroll:true}
+      {scroll:true,from:fromEl}
     );
   };
   // Swipe travel is capped short (±95). Pulling far past it AND moving vertically hands over to
@@ -1756,7 +1872,8 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           <div style={{fontSize:12,color:T.textMuted,marginTop:2}}>{new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}{view==="myday"&&` · ${tasks.filter(t=>!t.done).length} remaining`}</div>
           {sharedKey&&(
             <div style={{fontSize:11,color:T.textMuted,marginTop:4,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-              <span>🤝 Shared by <b style={{color:T.text}}>{sharedInfo?.nick||"a collaborator"}</b>{sharedInfo?.email&&sharedInfo.nick!==sharedInfo.email?` (${sharedInfo.email})`:""}</span>
+              <span style={{userSelect:"text"}}>🤝 Shared by <b style={{color:T.text}}>{sharedInfo?.nick||"a collaborator"}</b>{sharedInfo?.email&&sharedInfo.nick!==sharedInfo.email?` (${sharedInfo.email})`:""}</span>
+              <CopyMail email={sharedInfo?.email} T={T} onDone={m=>showToast?.(m)}/>
               {/* What you're allowed to do here, always spelled out — not only when the answer is "nothing". */}
               {(()=>{ const [txt,col,tip]=readOnly?["👀 VIEW ONLY",T.warning,"You can see this list but not change it"]
                         :sharedInfo?.canDelete?["✏️ EDIT, ADD & DELETE",T.success,"You can change these tasks, add new ones and delete them"]
@@ -1782,6 +1899,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
                     <div style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",borderRadius:9,background:T.surface2,border:`1px solid ${T.border}`}}>
                       <Avatar email={sharedInfo.email} size={24}/>
                       <div style={{flex:1,minWidth:0}}><div style={{fontSize:12,fontWeight:700,color:T.text}}>{sharedInfo.nick}</div><div style={{fontSize:9,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sharedInfo.email}</div></div>
+                      <CopyMail email={sharedInfo.email} T={T} onDone={m=>showToast?.(m)}/>
                       <span style={{fontSize:8,fontWeight:700,color:T.accent,background:T.accentGlow,padding:"2px 7px",borderRadius:8}}>OWNER</span>
                     </div>
                   )}
@@ -1795,6 +1913,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
                     <div key={em} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",borderRadius:9,background:T.surface2,border:`1px solid ${T.border}`}}>
                       <Avatar email={em} size={24}/>
                       <div style={{flex:1,minWidth:0}}><div style={{fontSize:12,fontWeight:700,color:T.text}}>{nickOf(em).split("@")[0]}</div><div style={{fontSize:9,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{em}</div></div>
+                      <CopyMail email={em} T={T} onDone={m=>showToast?.(m)}/>
                       <span style={{fontSize:8,fontWeight:700,color:T.textMuted,background:T.surface3,padding:"2px 7px",borderRadius:8}}>ASSIGNED</span>
                     </div>
                   ))}
@@ -1834,7 +1953,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           </div>
         )}
         {(
-          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:upcomingLike?4:10,marginTop:-4,lineHeight:1.5}}>{readOnly?"👀 View only — tap anything to read it. Ask the owner if you need to make changes.":<>💡 Swipe ← to delete · → to add to My Day ☀️ · {canReorder?dragHint():"pick “My order” above to drag tasks around"}</>} {onHelp&&<button onClick={onHelp} style={{background:"none",border:"none",padding:0,margin:0,color:T.accent,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif",textDecoration:"underline"}}>How it all works</button>}</div>
+          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:upcomingLike?4:10,marginTop:-4,lineHeight:1.5}}>{readOnly?"👀 View only — tap anything to read it. Ask the owner if you need to make changes.":<>💡 {COARSE?"Swipe":"Swipe (or two fingers on a trackpad)"} ← to delete · → to add to My Day ☀️ · {canReorder?dragHint():"pick “My order” above to drag tasks around"}{COARSE?"":" · right-click a task for quick actions"}</>} {onHelp&&<button onClick={onHelp} style={{background:"none",border:"none",padding:0,margin:0,color:T.accent,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif",textDecoration:"underline"}}>How it all works</button>}</div>
         )}
         {upcomingLike&&!readOnly&&(
           <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>📅 Type a date ("friday", "july 30", "next tue") to schedule — no date means it's filed as <b>Date TBD</b> until you decide. "tbd" / "tba" / "unknown" work too.</div>
@@ -1865,18 +1984,17 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
         )}
         <div style={{display:"flex",flexDirection:"column",gap:4}}>
           {(()=>{
-            const open=sortList(show.filter(t=>!t.done));
-            const isLate=t=>t.due&&!isTbd(t.due)&&t.due<todStr;
             // A missed deadline floats to the top of Upcoming instead of getting buried (or looking lost).
-            const late=upcomingLike?open.filter(isLate):[];
-            const rest=late.length?open.filter(t=>!isLate(t)):open;
+            const shown=shownOrder();
+            const late=upcomingLike?shown.filter(isLate):[];
+            const rest=late.length?shown.filter(t=>!isLate(t)):shown;
             // The drop marker is drawn ON the card it points at, not inserted between cards.
             // Inserting it used to push every card below it down by its own height, which moved
             // the card under your finger, which moved the marker — the list jittered as you held it.
             const card=task=>(
               <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id}
                 dropEdge={drop?.id===String(task.id)?(drop.before?"top":"bottom"):null} canReorder={canReorder}
-                onDown={onCardDown} onGrip={gripDown} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true} canEdit={canEditFn?canEditFn(task):true} inMyDay={isInMyDay?.(task)} onToggleMyDay={onToggleMyDay} myEmail={myEmail}/>
+                onDown={onCardDown} onGrip={gripDown} onMenu={openMenu} onWheelSwipe={onWheelSwipe} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true} canEdit={canEditFn?canEditFn(task):true} inMyDay={isInMyDay?.(task)} onToggleMyDay={onToggleMyDay} myEmail={myEmail}/>
             );
             return (<>
               {late.length>0&&<>
@@ -1932,6 +2050,27 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           </div>
         )}
       </div>
+      {menu&&(()=>{
+        const t=menu.task, W=194, H=196;
+        const x=Math.min(menu.x,(typeof window!=="undefined"?window.innerWidth:400)-W-8), y=Math.min(menu.y,(typeof window!=="undefined"?window.innerHeight:600)-H-8);
+        const row=(label,fn,danger)=>(
+          <button key={label} onClick={()=>{ fn(); setMenu(null); }} style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"7px 11px",border:"none",background:"transparent",color:danger?T.danger:T.text,cursor:"pointer",fontSize:12,fontFamily:"'DM Sans',sans-serif",textAlign:"left"}}
+            onMouseEnter={e=>e.currentTarget.style.background=T.surface2} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>{label}</button>
+        );
+        return (
+          <div onClick={()=>setMenu(null)} onContextMenu={e=>{e.preventDefault();setMenu(null);}} style={{position:"fixed",inset:0,zIndex:2700}}>
+            <div onClick={e=>e.stopPropagation()} style={{position:"fixed",left:x,top:y,width:W,background:T.surface,border:`1px solid ${T.border}`,borderRadius:11,padding:"5px 0",boxShadow:"0 14px 40px rgba(0,0,0,.45)",fontFamily:"'DM Sans',sans-serif"}}>
+              <div style={{padding:"3px 11px 6px",fontSize:10,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.title}</div>
+              {row("📅 Due today",()=>updateTask(t.id,moveDuePatch(t,todStr)))}
+              {row("🌤 Due tomorrow",()=>updateTask(t.id,moveDuePatch(t,addDays(1))))}
+              {row(isInMyDay?.(t)?"☀️ Remove from My Day":"☀️ Add to My Day",()=>onToggleMyDay?.(t.id))}
+              {row(t.starred?"🚩 Remove flag":"🚩 Flag it",()=>updateTask(t.id,{starred:!t.starred}))}
+              {row(t.done?"↩️ Mark unfinished":"✓ Mark done",()=>toggleTask(t.id))}
+              {(canDeleteFn?canDeleteFn(t):true)&&row("🗑 Delete",()=>deleteTask(t.id),true)}
+            </div>
+          </div>
+        );
+      })()}
       {selTask&&((canEditFn&&!canEditFn(selTask))?<TaskReadOnly task={selTask} T={T} cats={cats} onClose={()=>setSelTask(null)} ownerNick={sharedInfo?.nick}/>:<TDetail task={selTask} T={T} cats={cats} onUpdate={updateTask} onDelete={deleteTask} onDuplicate={duplicateTask} onAttach={onAttach} onRemoveAttach={onRemoveAttach} onSetReminder={onSetReminder} canDelete={canDeleteFn?canDeleteFn(selTask):true} onViewImage={onViewImage} onClose={()=>setSelTask(null)} onFocus={onFocusTask} myEmail={myEmail} people={people} onAssign={onAssign} peopleGroups={peopleGroups} listPeople={listPeople}/>)}
       {manageMode&&catKey&&listManage&&(
         <SidebarManage T={T} target={{type:"list",id:"c:"+catKey,name:catKey}} isGroup={false} childLists={[catKey]}
@@ -1992,7 +2131,7 @@ function TaskReadOnly({task,T,cats,onClose,ownerNick}) {
   );
 }
 
-function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,dropEdge=null,canReorder=true,onDown,onGrip,swipeX=0,canDelete=true,canEdit=true,inMyDay=false,onToggleMyDay,myEmail}) {
+function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,dropEdge=null,canReorder=true,onDown,onGrip,onMenu,onWheelSwipe,swipeX=0,canDelete=true,canEdit=true,inMyDay=false,onToggleMyDay,myEmail}) {
   const assignees=assigneesOf(task);
   const assignedToMe=assignees.includes(myEmail);
   const [hov,setHov]=useState(false);
@@ -2015,6 +2154,8 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
     )}
     <div className={entering?"te":""} data-task-id={task.id}
       onPointerDown={onDown?e=>onDown(e,task.id):undefined}
+      onContextMenu={onMenu?e=>onMenu(e,task):undefined}
+      onWheel={onWheelSwipe?e=>onWheelSwipe(e,task.id):undefined}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)} onClick={()=>onSel(task)}
       style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:swipeX!==0?T.bg:(sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent"),border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:swipeX!==0?"none":"all .12s",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:swipeX!==0?`translateX(${swipeX}px)`:dragging?"scale(.98)":"scale(1)",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none",touchAction:"pan-y"}}>
       {task.color&&<div style={{position:"absolute",left:0,top:8,bottom:8,width:3,borderRadius:2,background:task.color}}/>}
@@ -2451,7 +2592,7 @@ function EisenhowerMatrix({T,tasks,cats,updateTask,deleteTask,addMatrixTask,togg
               updateTask(task.id,{position:newPos,...(quad!==task.quadrant?{quadrant:quad}:{})}); }
           } else if(q&&q!==task.quadrant){ updateTask(task.id,{quadrant:q}); }
         },
-        {scroll:true}
+        {scroll:true,from:document.querySelector(`[data-mnote-id="${CSS.escape(String(task.id))}"]`)}
       );
     };
     const mv=ev=>{
@@ -2974,7 +3115,7 @@ function HabitsView({T,habits,setHabits,todStr,onCheckin,showToast}) {
             if(!hit.before) ti++; arr.splice(ti,0,m); return arr; });
         }
       }
-    ,{scroll:true});
+    ,{scroll:true,from:document.querySelector(`[data-habit-id="${CSS.escape(String(id))}"]`)});
   };
   const gripDown=(e,id)=>{ e.stopPropagation(); e.preventDefault(); beginHabitDrag(id); };
   const [swipe,setSwipe]=useState(null); // {id,x} while a card is being swiped left toward delete
@@ -3184,6 +3325,7 @@ function CalendarView({T,tasks,cats,todStr,onToggle,onToggleStep,onQuickAdd,onOp
   // the day under it lights up, and elementFromPoint→[data-calday] resolves the drop target.
   const dragEntry=(e,label,color,onDropDay,fromCell)=>{
     if(!fromCell&&e.target.closest("button,input,a")) return;
+    const fromEl=e.currentTarget;
     let overDay=null;   // the day last seen under the finger — a cancelled touch reports no usable position
     const move=ev=>{
       setDrag({label,color,x:ev.clientX,y:ev.clientY});
@@ -3200,7 +3342,7 @@ function CalendarView({T,tasks,cats,todStr,onToggle,onToggleStep,onQuickAdd,onOp
         setDrag(null); setHoverDay(null);
         if(day) onDropDay(day);
         setTimeout(()=>{didDragRef.current=false;},0);
-      },{scroll:true});
+      },{scroll:true,from:fromEl});
     });
   };
   return (
@@ -3507,6 +3649,7 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
   const startDrag=(e,id)=>{
     if(e.target.closest("[data-nodrag]")) return;
     didDrag.current=false; // reset each press so a tap right after a drag still navigates
+    const fromEl=e.currentTarget;
     startPressDrag(e,()=>{
       didDrag.current=true; setDragId(id); navigator.vibrate?.(15);
       const label=itemMap[id]?.label||gmap[id]?.name||"Item";
@@ -3526,7 +3669,7 @@ function SidebarTree({T,sideOpen,items,view,onOpen,org,setOrg,onAddList,onRename
           setDrop(dropRef.current);
         },
         ()=>{ ghost.remove(); const d=dropRef.current; dropRef.current=null; setDrop(null); setDragId(null); applyDrop(id,d); },
-        {scroll:true}
+        {scroll:true,from:fromEl}
       );
     });
   };
@@ -3686,8 +3829,7 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
   useEffect(()=>{ if(autoFocusName) setTimeout(()=>{ nameRef.current?.focus(); nameRef.current?.select(); },60); // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
   // Nickname/contact book — same localStorage store as Settings, so nicknames work in both places.
-  const [contacts,setContacts]=useState(()=>{try{return JSON.parse(localStorage.getItem("fs_contacts")||"{}");}catch{return{};}});
-  useEffect(()=>{try{localStorage.setItem("fs_contacts",JSON.stringify(contacts));}catch{}},[contacts]);
+  const [contacts,setContacts]=useContacts();
   const setNick=(em,nm)=>setContacts(c=>({...c,[em]:nm}));
   const knownEmails=[...new Set([...(shares||[]).map(s=>s.shared_with_email),...Object.keys(contacts)])].filter(Boolean);
   const saveName=()=>{ const v=name.trim(); if(v&&v!==target.name){ if(onRename(v)===false) return; } onClose(); };
@@ -3766,8 +3908,9 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
                 <span style={{fontSize:13}}>{contacts[em]?"⭐":"👤"}</span>
                 <div style={{flex:1,minWidth:0}}>
                   <input value={contacts[em]||""} onChange={e=>setNick(em,e.target.value)} placeholder="Add a nickname…" style={{width:"100%",padding:"1px 0",border:"none",borderBottom:`1px dashed ${T.border}`,background:"transparent",color:T.text,fontSize:11,fontWeight:600,outline:"none",fontFamily:"'DM Sans',sans-serif"}}/>
-                  <div style={{fontSize:9,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{em}</div>
+                  <div style={{fontSize:9,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",userSelect:"text"}}>{em}</div>
                 </div>
+                <CopyMail email={em} T={T}/>
                 <button onClick={()=>setEmail(em)} style={{padding:"3px 10px",borderRadius:6,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>Use</button>
                 <button onClick={()=>setContacts(c=>{const n={...c};delete n[em];return n;})} title="Forget this person" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex"}}><Ico n="x" s={10}/></button>
               </div>
@@ -4084,8 +4227,7 @@ function SettingsView({T,dark,setDark,scheme,setScheme,sound,setSound,onExport,o
     r.readAsDataURL(file);
   };
   // Nicknames for the people you work with — the same store the share panel reads, so a nickname works in both.
-  const [contacts,setContacts]=useState(()=>{try{return JSON.parse(localStorage.getItem("fs_contacts")||"{}");}catch{return{};}});
-  useEffect(()=>{try{localStorage.setItem("fs_contacts",JSON.stringify(contacts));}catch{}},[contacts]);
+  const [contacts,setContacts]=useContacts();
   const people=[...new Set([...(ownedShares||[]).map(s=>s.shared_with_email),...Object.keys(contacts)])].filter(Boolean);
   // Reminder notifications are the browser's permission, so this shows the real state and asks for it.
   const canNotify=typeof window!=="undefined"&&"Notification" in window;
@@ -4175,7 +4317,8 @@ function SettingsView({T,dark,setDark,scheme,setScheme,sound,setSound,onExport,o
               {ownedShares.map(s=>(
                 <div key={s.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
                   <span style={{fontSize:12,fontWeight:600,flexShrink:0,maxWidth:"35%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{shareLabel(s.folder)}</span>
-                  <span style={{fontSize:11,color:T.textMuted,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {contacts[s.shared_with_email]||s.shared_with_email}</span>
+                  <span style={{fontSize:11,color:T.textMuted,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",userSelect:"text"}}>→ {contacts[s.shared_with_email]||s.shared_with_email}</span>
+                  <CopyMail email={s.shared_with_email} T={T}/>
                   <span style={{fontSize:9,fontWeight:700,flexShrink:0,color:s.can_delete?T.danger:T.textMuted,background:(s.can_delete?T.danger:T.textMuted)+"22",padding:"1px 6px",borderRadius:10}}>{s.can_edit===false?"view only":s.can_delete?"can delete":"edit"}</span>
                   <button onClick={()=>onUnshare(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:11,fontWeight:600,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}>Remove</button>
                 </div>

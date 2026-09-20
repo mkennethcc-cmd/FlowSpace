@@ -12,7 +12,7 @@ const traverse = require("@babel/traverse").default;
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 // Things the browser (or Vite) provides.
-const GLOBALS = new Set(`window document navigator localStorage sessionStorage console setTimeout clearTimeout setInterval
+const GLOBALS = new Set(`window document navigator localStorage sessionStorage console CSS setTimeout clearTimeout setInterval
   clearInterval requestAnimationFrame cancelAnimationFrame fetch URL Blob File FileReader Image Audio Notification Date Math
   JSON Object Array String Number Boolean Promise Set Map WeakMap Symbol Error TypeError RegExp Intl crypto alert confirm prompt
   undefined NaN Infinity isNaN parseInt parseFloat encodeURIComponent decodeURIComponent structuredClone globalThis

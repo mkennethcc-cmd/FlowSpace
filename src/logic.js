@@ -110,9 +110,10 @@ export const addDays = n => { const d=new Date(); d.setDate(d.getDate()+n); retu
 // sorts to the end of Upcoming, and never counts as overdue.
 export const DUE_TBD = "9999-12-31";
 export const isTbd = d => d === DUE_TBD;
-// Upcoming: everything with a date that's still open — however overdue, a missed deadline must never make
-// a task vanish — plus finished ones whose day hasn't come yet.
-export const inUpcoming = (t, today) => !!t.due && (!t.done || t.due > today);
+// Upcoming is everything with a date — open work however overdue (a missed deadline must never make a task
+// vanish) and finished work too, which the list shows under "Completed" like every other list does. It used
+// to drop anything done and past, so ticking a task off in Upcoming looked like it had been deleted.
+export const inUpcoming = t => !!t.due;
 // Someone's whole Upcoming is shared as this reserved list name. It covers every task of theirs that has a
 // date, from any list: the same rule the database enforces (task_shared_with_me in supabase/setup.sql).
 export const UPCOMING_SHARE = "__upcoming__";
@@ -133,6 +134,27 @@ export const edgeScrollStep = (box, x, y, scrollTop, maxScroll) => {
   return step < 0 ? -Math.min(-step, Math.max(scrollTop, 0))    // don't scroll past the top…
                   : Math.min(step, Math.max(maxScroll - scrollTop, 0));   // …or past the bottom
 };
+
+// Where a dragged card lands: `list` is the order actually on screen (top first), so a task's neighbours are
+// the ones the person can see. Working this out from every open task instead — which is what it used to do —
+// made two cards that happen to be neighbours somewhere else refuse to swap: the last two in My Day, say.
+// Returns the new position, or null when the move is a no-op.
+export const reorderPosition = (list, fromId, toId, before) => {
+  const at = id => list.findIndex(t => String(t.id) === String(id));
+  const fromIdx = at(fromId), toIdx = at(toId);
+  if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return null;
+  const to = list[toIdx], nb = list[before ? toIdx - 1 : toIdx + 1];   // the card on the side you're dropping into
+  if (nb && String(nb.id) === String(fromId)) return null;             // it is already exactly there
+  const pos = t => (t.position || 0);
+  if (!nb) return before ? pos(to) + 1 : pos(to) - 1;                  // dropped past the first/last card
+  if (pos(nb) === pos(to)) return before ? pos(to) + 0.5 : pos(to) - 0.5;   // two cards sharing a position
+  return (pos(nb) + pos(to)) / 2;
+};
+
+// Which sort a view uses: your choice for that particular list if you made one, otherwise My Day is hand-
+// arranged (that's what a day plan is) and everything else falls back to your last overall choice.
+export const sortFor = (view, sorts, fallback) =>
+  (sorts && sorts[view]) || (view === "myday" ? "manual" : (fallback || "due"));
 
 export const shareCovers = (share, t) =>
   share.owner_id === t.owner && (share.folder === t.tag || (share.folder === UPCOMING_SHARE && !!t.due));
@@ -533,7 +555,9 @@ export const whenPatch = (task, p) => {
 //   stats    completions per device per day; this device's own counts are authoritative, the rest are
 //            kept as the server has them; anything older than STATS_DAYS is dropped
 //   myday    tasks from other people's lists that you put in My Day — today's newest copy wins
-export const LAYOUT_KEYS = ["navOrg", "hiddenTabs", "sort", "newAtBottom", "dark", "scheme"];
+// Everything that travels between your devices as "preferences". `sorts` is the sort each list
+// remembers, `contacts` the nicknames you gave people — both used to live only on one device.
+export const LAYOUT_KEYS = ["navOrg", "hiddenTabs", "sort", "sorts", "contacts", "newAtBottom", "dark", "scheme"];
 export const STATS_DAYS = 70;
 export const shiftDay = (day, n) => { const [y, m, d] = day.split("-").map(Number); return ymd(new Date(y, m - 1, d + n)); };
 export function mergeGami(server, local, xpBase, today) {

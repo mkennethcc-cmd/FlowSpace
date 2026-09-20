@@ -92,6 +92,15 @@ export async function run(report, section) {
     report(stale.serverLayoutNewer && stale.prefs.navOrg.order[0] === "n:upcoming", "a stale device overwrote a newer sidebar order just by completing a task");
     report(stale.prefs.stats.P?.[today] === 1, "the stale device's completion count was lost");
 
+    // Nicknames and each list's sort travel with the rest of the preferences (they used to sit on one device).
+    const named = mergeGami({ xp: 0, prefs: { at: 300, ...lay({ contacts: { "a@b.c": "Sam" }, sorts: { upcoming: "az" } }) } },
+      { xp: 0, layout: lay({ contacts: {}, sorts: {} }), at: 100, dayStats: {}, device: "P" }, 0, today);
+    report(named.prefs.contacts?.["a@b.c"] === "Sam", "a nickname from another device did not arrive");
+    report(named.prefs.sorts?.upcoming === "az", "a list's sort from another device did not arrive");
+    const mine = mergeGami({ xp: 0, prefs: { at: 100, ...lay({ contacts: { "a@b.c": "old" } }) } },
+      { xp: 0, layout: lay({ contacts: { "a@b.c": "Sam" } }), at: 300, dayStats: {}, device: "P" }, 0, today);
+    report(mine.prefs.contacts?.["a@b.c"] === "Sam", "my newer nickname was overwritten by an older one");
+
     const merged = mergeGami({ prefs: { at: 1, stats: { OLD: { "2026-01-01": 4, [today]: 2 }, P: { [today]: 9 } } } }, { layout: lay(), at: 1, dayStats: { [today]: 1 }, device: "P" }, 0, today);
     report(!merged.prefs.stats.OLD["2026-01-01"] && merged.prefs.stats.OLD[today] === 2, "old per-day counts were not trimmed, or another device's counts were dropped");
     report(merged.prefs.stats.P[today] === 1, "this device's own count must win (an un-tick has to stick)");
