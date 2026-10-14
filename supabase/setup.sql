@@ -101,8 +101,11 @@ alter table public.tasks add column if not exists assign_private boolean default
 
 -- When a task was ticked off, so "Completed" lists the most recent first. Empty for older tasks.
 alter table public.tasks add column if not exists done_at timestamptz;
--- Which part of My Day a task sits in: 'morning', 'afternoon' or 'evening'. Empty = decided by its time.
+-- Which part of My Day a task sits in: 'morning', 'afternoon' or 'evening'. Empty = not placed yet.
 alter table public.tasks add column if not exists myday_part text;
+-- Recently deleted: a deleted task keeps its row for 30 days with this set, so it can be restored on any
+-- device. Empty = not deleted.
+alter table public.tasks add column if not exists deleted_at timestamptz;
 
 -- View-only sharing: they see the list, they can't change it. Older rows have no value → editable.
 alter table public.folder_shares add column if not exists can_edit boolean default true;
@@ -193,12 +196,18 @@ returns boolean language sql security definer stable set search_path = public as
                   or (lower(r.to_email) = lower(auth.jwt() ->> 'email') and lower(r.from_email) = lower(other_email)));
 $$;
 
--- a task's owner never changes (nothing in the app does it) — so nobody can take someone else's task
+-- a task's owner never changes (nothing in the app does it) — so nobody can take someone else's task.
+-- And moving a task into or out of Recently deleted counts as deleting it: someone allowed only to EDIT
+-- can't "delete" a task by setting deleted_at. (No user — the SQL editor — is not held back.)
 create or replace function public.keep_task_owner()
 returns trigger language plpgsql as $$
 begin
   if new.user_id is distinct from old.user_id then
     raise exception 'A task''s owner can''t be changed';
+  end if;
+  if new.deleted_at is distinct from old.deleted_at and auth.uid() is not null and old.user_id <> auth.uid()
+     and not public.task_access(old.user_id, old.tag, old.due is not null, old.id, 'delete') then
+    raise exception 'Only someone allowed to delete this task can move it to Recently deleted';
   end if;
   return new;
 end $$;
@@ -230,6 +239,44 @@ returns boolean language sql security definer stable set search_path = public as
                                    when 'edit'   then ts.can_edit
                                    else true end);
 $$;
+
+-- What may I do with this task? The MOST SPECIFIC share decides — never the most generous one:
+--   1. this task shared on its own (if that share has ended, the list's share still applies)
+--   2. otherwise, the share of the list it sits in — and once that has ended, nothing of the list is
+--      reachable through a wider Upcoming share either
+--   3. otherwise, the owner's whole Upcoming, for tasks with a date
+-- Before 2026-10 any covering share was enough, so in a list shared view-only for a day, a task with a
+-- date could still be edited through an Upcoming share that allowed editing.
+-- action: 'view' · 'edit' · 'delete'
+create or replace function public.task_access(task_owner uuid, task_list text, dated boolean, tid uuid, action text)
+returns boolean language plpgsql security definer stable set search_path = public as $$
+declare
+  me text := lower(auth.jwt() ->> 'email');
+  t  public.task_shares%rowtype;
+  f  public.folder_shares%rowtype;
+begin
+  if me is null then return false; end if;
+  select * into t from public.task_shares
+    where task_id = tid and lower(shared_with_email) = me and (expires_at is null or expires_at > now()) limit 1;
+  if found then
+    return case action when 'delete' then t.can_delete when 'edit' then t.can_edit else true end;
+  end if;
+  select * into f from public.folder_shares
+    where owner_id = task_owner and folder = task_list and lower(shared_with_email) = me limit 1;
+  if found then
+    if f.expires_at is not null and f.expires_at <= now() then return false; end if;
+    return case action when 'delete' then coalesce(f.can_delete, false) when 'edit' then coalesce(f.can_edit, true) else true end;
+  end if;
+  if dated then
+    select * into f from public.folder_shares
+      where owner_id = task_owner and folder = '__upcoming__' and lower(shared_with_email) = me
+        and (expires_at is null or expires_at > now()) limit 1;
+    if found then
+      return case action when 'delete' then coalesce(f.can_delete, false) when 'edit' then coalesce(f.can_edit, true) else true end;
+    end if;
+  end if;
+  return false;
+end $$;
 
 
 -- ╔═══════════════════════════════════════════════════════════════════════╗
@@ -342,21 +389,21 @@ create policy "assignees update" on public.tasks for update to authenticated
 -- saved on their screen but is silently dropped, and the new assignee sees nothing.
 drop policy if exists "collaborators edit shared tasks" on public.tasks;
 create policy "collaborators edit shared tasks" on public.tasks for update to authenticated
-  using      (public.task_shared_with_me(user_id, tag, due is not null, 'edit') or public.task_shared_directly(id, 'edit'))
-  with check (public.task_shared_with_me(user_id, tag, due is not null, 'edit') or public.task_shared_directly(id, 'edit'));
+  using      (public.task_access(user_id, tag, due is not null, id, 'edit'))
+  with check (public.task_access(user_id, tag, due is not null, id, 'edit'));
 
 -- ...and add new work to that shared list (the app files it under the list's owner)
 drop policy if exists "collaborators add to shared lists" on public.tasks;
 create policy "collaborators add to shared lists" on public.tasks for insert to authenticated
-  with check (user_id = auth.uid() or public.task_shared_with_me(user_id, tag, due is not null, 'edit'));
+  with check (user_id = auth.uid() or public.task_access(user_id, tag, due is not null, id, 'edit'));
 
 -- Seeing and deleting through a share. Lists already had rules for these; a shared Upcoming needs them.
 drop policy if exists "shared with me: read" on public.tasks;
 create policy "shared with me: read" on public.tasks for select to authenticated
-  using (public.task_shared_with_me(user_id, tag, due is not null, 'view') or public.task_shared_directly(id, 'view'));
+  using (public.task_access(user_id, tag, due is not null, id, 'view'));
 drop policy if exists "shared with me: delete" on public.tasks;
 create policy "shared with me: delete" on public.tasks for delete to authenticated
-  using (public.task_shared_with_me(user_id, tag, due is not null, 'delete') or public.task_shared_directly(id, 'delete'));
+  using (public.task_access(user_id, tag, due is not null, id, 'delete'));
 
 -- RESTRICTIVE: applies on top of every other rule. A private assignment is
 -- visible only to the task's owner and the people it is assigned to.
@@ -391,8 +438,8 @@ create trigger keep_task_owner before update on public.tasks
 -- before view-only existed; one of those let every share edit, which self-test checks 29 and 30 caught.
 drop policy if exists "tasks: change only with edit rights" on public.tasks;
 create policy "tasks: change only with edit rights" on public.tasks as restrictive for update to authenticated
-  using      (user_id = auth.uid() or public.is_assigned_to_me(assigned_to) or public.task_shared_with_me(user_id, tag, due is not null, 'edit') or public.task_shared_directly(id, 'edit'))
-  with check (user_id = auth.uid() or public.is_assigned_to_me(assigned_to) or public.task_shared_with_me(user_id, tag, due is not null, 'edit') or public.task_shared_directly(id, 'edit'));
+  using      (user_id = auth.uid() or public.is_assigned_to_me(assigned_to) or public.task_access(user_id, tag, due is not null, id, 'edit'))
+  with check (user_id = auth.uid() or public.is_assigned_to_me(assigned_to) or public.task_access(user_id, tag, due is not null, id, 'edit'));
 -- What you may SEE of other people's tasks, whatever older rules say: your own, work assigned to you, a
 -- list (or Upcoming) shared with you, or one task handed to you. RESTRICTIVE, which is also what makes a
 -- share with an end date really stop working — the older "shared lists read" rules never checked for one.
@@ -400,15 +447,14 @@ drop policy if exists "tasks: see only yours or shared with you" on public.tasks
 create policy "tasks: see only yours or shared with you" on public.tasks as restrictive for select to authenticated
   using (user_id = auth.uid()
          or public.is_assigned_to_me(assigned_to)
-         or public.task_shared_with_me(user_id, tag, due is not null, 'view')
-         or public.task_shared_directly(id, 'view'));
+         or public.task_access(user_id, tag, due is not null, id, 'view'));
 
 drop policy if exists "tasks: add only with edit rights" on public.tasks;
 create policy "tasks: add only with edit rights" on public.tasks as restrictive for insert to authenticated
-  with check (user_id = auth.uid() or public.task_shared_with_me(user_id, tag, due is not null, 'edit'));
+  with check (user_id = auth.uid() or public.task_access(user_id, tag, due is not null, id, 'edit'));
 drop policy if exists "tasks: delete only with delete rights" on public.tasks;
 create policy "tasks: delete only with delete rights" on public.tasks as restrictive for delete to authenticated
-  using (user_id = auth.uid() or public.task_shared_with_me(user_id, tag, due is not null, 'delete') or public.task_shared_directly(id, 'delete'));
+  using (user_id = auth.uid() or public.task_access(user_id, tag, due is not null, id, 'delete'));
 -- (replaced by task_shared_with_me above; nothing uses it any more)
 drop function if exists public.share_allows(uuid, text, text);
 

@@ -31,6 +31,12 @@ declare
   d_id     uuid := '00000000-0000-0000-0000-0000000000dd';   -- another made-up account, for one-task shares
   d_mail   text := 'selftest-task@example.com';
   tid3     uuid := gen_random_uuid();
+  e_id     uuid := '00000000-0000-0000-0000-0000000000ee';   -- made-up account for overlapping shares
+  e_mail   text := 'selftest-overlap@example.com';
+  tid4     uuid := gen_random_uuid();
+  tid5     uuid := gen_random_uuid();
+  tid6     uuid := gen_random_uuid();
+  tid7     uuid := gen_random_uuid();
   res      text[] := '{}';
 begin
   select id into a_id from auth.users where lower(email) = a_mail;
@@ -413,6 +419,94 @@ begin
         insert into public.task_shares(task_id, owner_id, shared_with_email) values (tid3, a_id, 'nobody@example.com');
         res := res || ('54. They CANNOT pass that task on to someone else | ✗ FAIL: they shared it')::text;
       exception when others then res := res || ('54. They CANNOT pass that task on to someone else | ✓ PASS')::text; end;
+
+      ------------------------------------ overlapping shares: the most specific one decides
+      -- A shares a list VIEW-ONLY for a day, AND their whole Upcoming WITH EDITING, with the same person.
+      -- That is the leak reported in 2026-10: the dated task in the view-only list was editable.
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', a_id::text, 'email', a_mail)::text, true);
+      execute 'set local role authenticated';
+      begin
+        insert into public.folder_shares(owner_id, folder, shared_with_email, can_edit, can_delete, expires_at)
+        values (a_id, mark || ' day pass', e_mail, false, false, now() + interval '1 day');
+        insert into public.folder_shares(owner_id, folder, shared_with_email, can_edit, can_delete)
+        values (a_id, '__upcoming__', e_mail, true, false);
+        insert into public.tasks(id, user_id, title, tag, due) values (tid4, a_id, mark || ' dated in day pass', mark || ' day pass', current_date + 2);
+        insert into public.tasks(id, user_id, title, tag) values (tid5, a_id, mark || ' undated in day pass', mark || ' day pass');
+        insert into public.tasks(id, user_id, title, tag, due) values (tid6, a_id, mark || ' dated elsewhere', mark || ' private', current_date + 2);
+        res := res || ('55. A shares a list view-only for a day AND Upcoming with editing | ✓ PASS')::text;
+      exception when others then res := res || ('55. A shares a list view-only for a day AND Upcoming with editing | ✗ FAIL: ' || sqlerrm); end;
+
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', e_id::text, 'email', e_mail)::text, true);
+      execute 'set local role authenticated';
+      begin
+        update public.tasks set done = true where id = tid4;
+        get diagnostics cnt = row_count;
+        res := res || ('56. The view-only list wins: its DATED task can''t be changed | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: changed through the Upcoming share' end);
+      exception when others then res := res || ('56. The view-only list wins: its DATED task can''t be changed | ✓ PASS')::text; end;
+      begin
+        update public.tasks set done = true where id = tid5;
+        get diagnostics cnt = row_count;
+        res := res || ('57. …nor its undated task | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: changed' end);
+      exception when others then res := res || ('57. …nor its undated task | ✓ PASS')::text; end;
+      begin
+        update public.tasks set done = true where id = tid6;
+        get diagnostics cnt = row_count;
+        res := res || ('58. A dated task in a list NOT shared can be ticked via Upcoming | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: blocked' end);
+      exception when others then res := res || ('58. A dated task in a list NOT shared can be ticked via Upcoming | ✗ FAIL: ' || sqlerrm); end;
+
+      -- the day passes: the list share has ended
+      execute 'set local role ' || quote_ident(orig);
+      update public.folder_shares set expires_at = now() - interval '1 minute' where owner_id = a_id and folder = mark || ' day pass' and shared_with_email = e_mail;
+      perform set_config('request.jwt.claims', json_build_object('sub', e_id::text, 'email', e_mail)::text, true);
+      execute 'set local role authenticated';
+      select count(*) into cnt from public.tasks where id in (tid4, tid5);
+      res := res || ('59. Once the day is up, nothing of that list shows — not even via Upcoming | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: ' || cnt || ' still visible' end);
+
+      -- one task of that list handed over on its own, with editing: the most specific share decides
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', a_id::text, 'email', a_mail)::text, true);
+      execute 'set local role authenticated';
+      begin
+        insert into public.task_shares(task_id, owner_id, shared_with_email, can_edit) values (tid5, a_id, e_mail, true);
+      exception when others then null; end;
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', e_id::text, 'email', e_mail)::text, true);
+      execute 'set local role authenticated';
+      begin
+        update public.tasks set notes = 'edited' where id = tid5;
+        get diagnostics cnt = row_count;
+        res := res || ('60. A task shared on its own with editing can be edited | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: blocked' end);
+      exception when others then res := res || ('60. A task shared on its own with editing can be edited | ✗ FAIL: ' || sqlerrm); end;
+
+      ------------------------------------ Recently deleted: moving a task there counts as deleting it
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', a_id::text, 'email', a_mail)::text, true);
+      execute 'set local role authenticated';
+      begin
+        insert into public.folder_shares(owner_id, folder, shared_with_email, can_edit, can_delete)
+        values (a_id, mark || ' editors', e_mail, true, false);
+        insert into public.tasks(id, user_id, title, tag) values (tid7, a_id, mark || ' editable not deletable', mark || ' editors');
+        update public.tasks set deleted_at = now() where id = tid6;
+        get diagnostics cnt = row_count;
+        res := res || ('61. The owner moves their own task to Recently deleted | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: blocked' end);
+        update public.tasks set deleted_at = null where id = tid6;
+      exception when others then res := res || ('61. The owner moves their own task to Recently deleted | ✗ FAIL: ' || sqlerrm); end;
+
+      execute 'set local role ' || quote_ident(orig);
+      perform set_config('request.jwt.claims', json_build_object('sub', e_id::text, 'email', e_mail)::text, true);
+      execute 'set local role authenticated';
+      begin
+        update public.tasks set title = mark || ' renamed by editor' where id = tid7;
+        get diagnostics cnt = row_count;
+        res := res || ('62. Someone who may only edit CAN still rename it | ' || case when cnt > 0 then '✓ PASS' else '✗ FAIL: blocked' end);
+      exception when others then res := res || ('62. Someone who may only edit CAN still rename it | ✗ FAIL: ' || sqlerrm); end;
+      begin
+        update public.tasks set deleted_at = now() where id = tid7;
+        get diagnostics cnt = row_count;
+        res := res || ('63. …but CANNOT move it to Recently deleted (that is deleting) | ' || case when cnt = 0 then '✓ PASS' else '✗ FAIL: they deleted it' end);
+      exception when others then res := res || ('63. …but CANNOT move it to Recently deleted (that is deleting) | ✓ PASS')::text; end;
     end if;
   end if;
 
@@ -422,6 +516,8 @@ begin
   delete from public.folder_shares where folder like mark || '%';
   delete from public.folder_shares where folder = '__upcoming__' and shared_with_email = c_mail;
   delete from public.task_shares where shared_with_email = d_mail;
+  delete from public.task_shares where shared_with_email = e_mail;
+  delete from public.folder_shares where shared_with_email = e_mail;
   delete from public.messages where body like mark || '%' or body = 'rewritten by B';
   delete from public.notes where title like mark || '%';
   delete from public.categories where name like mark || '%';

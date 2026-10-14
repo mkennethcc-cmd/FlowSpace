@@ -122,7 +122,12 @@ section("Sharing rules");
     [rightsFor(task, [], [{ task_id: "other", can_edit: true }], NOW).shared === false, "a share of a different task grants nothing"],
     [rightsFor(task, [], [{ task_id: "t1", can_edit: true, expires_at: "2026-09-15T10:00:00Z" }], NOW).shared === false, "a task share that ran out grants nothing"],
     [rightsFor(task, [{ owner_id: "a", folder: "work" }], [], NOW).canEdit === true, "a share from before view-only existed counts as editable"],
-    [rightsFor(task, [{ owner_id: "a", folder: "work", can_edit: false }], [{ task_id: "t1", can_edit: true }], NOW).canEdit === true, "the more generous of two shares wins"],
+    [rightsFor(task, [{ owner_id: "a", folder: "work", can_edit: false }], [{ task_id: "t1", can_edit: true }], NOW).canEdit === true, "a task shared on its own beats its list's share"],
+    // the leak reported 2026-10: list view-only for a day + Upcoming with editing
+    [rightsFor({ ...task, due: "2026-09-20" }, [{ owner_id: "a", folder: "work", can_edit: false, expires_at: "2026-09-17T10:00:00Z" }, { owner_id: "a", folder: "__upcoming__", can_edit: true }], [], NOW).canEdit === false, "a view-only list share is NOT overridden by an Upcoming share that allows editing"],
+    [rightsFor({ ...task, due: "2026-09-20" }, [{ owner_id: "a", folder: "work", can_edit: false, expires_at: "2026-09-15T10:00:00Z" }, { owner_id: "a", folder: "__upcoming__", can_edit: true }], [], NOW).shared === false, "once the list's share ends, its tasks don't come back through Upcoming"],
+    [rightsFor({ ...task, tag: "home", due: "2026-09-20" }, [{ owner_id: "a", folder: "work", can_edit: false }, { owner_id: "a", folder: "__upcoming__", can_edit: true }], [], NOW).canEdit === true, "a dated task in a list that ISN'T shared follows the Upcoming share"],
+    [rightsFor(task, [], [{ task_id: "t1", can_edit: true, expires_at: "2026-09-15T10:00:00Z" }, ], NOW).shared === false && rightsFor(task, [{ owner_id: "a", folder: "work", can_edit: false }], [{ task_id: "t1", can_edit: true, expires_at: "2026-09-15T10:00:00Z" }], NOW).canEdit === false, "an ended task share falls back to the list's share"],
     [shareEndLabel(live) === "until Sep 30" && shareEndLabel({}) === null, "an end date reads as a date"],
   ];
   for (const [ok, what] of E) report(ok, "sharing: " + what);
@@ -208,17 +213,12 @@ section("Offline — changes waiting for a connection");
 
 section("My Day parts and Completed order");
 {
-  const { dayPartOfTime, partOfTask, byRecentlyDone, partNow } = L;
+  const { partOfTask, byRecentlyDone } = L;
   const D = [
-    [dayPartOfTime("2026-09-16T09:30") === "morning", "9:30 is morning"],
-    [dayPartOfTime("12:00") === "afternoon", "noon starts the afternoon"],
-    [dayPartOfTime("16:59") === "afternoon", "4:59pm is still afternoon"],
-    [dayPartOfTime("17:00") === "evening", "5pm starts the evening"],
-    [partOfTask({ remindAt: "2026-09-16T19:00" }, "morning") === "morning", "where you put a task beats its time"],
-    [partOfTask({ remindAt: "2026-09-16T19:00" }, null) === "evening", "with no choice, its time decides"],
-    [partOfTask({}, null) === "morning", "with neither, it starts in the morning"],
-    [partOfTask({}, "lunchtime") === "morning", "a part that doesn't exist is ignored"],
-    [partNow() === "morning", "10am (the frozen clock) is morning"],
+    [partOfTask({ remindAt: "2026-09-16T19:00" }, "morning") === "morning", "a task stays in the part you put it in, whatever its time"],
+    [partOfTask({ remindAt: "2026-09-16T19:00" }, null) === null, "nothing is placed for you — not even by its time"],
+    [partOfTask({}, null) === null, "a new task starts unplaced"],
+    [partOfTask({}, "lunchtime") === null, "a part that doesn't exist counts as unplaced"],
   ];
   for (const [ok, what] of D) report(ok, "My Day parts: " + what);
   const done = [{ id: "old", position: 9 }, { id: "b", doneAt: "2026-09-16T09:00:00Z", position: 1 }, { id: "a", doneAt: "2026-09-16T10:00:00Z", position: 5 }];

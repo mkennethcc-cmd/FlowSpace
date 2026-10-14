@@ -151,16 +151,10 @@ export const reorderPosition = (list, fromId, toId, before) => {
   return (pos(nb) + pos(to)) / 2;
 };
 
-// My Day comes in three parts. A task you placed yourself stays where you put it; otherwise its time
-// decides (before noon = morning, before 5pm = afternoon); with neither, it's in the morning.
+// My Day comes in three parts. Nothing is placed for you: a task sits below them, unplaced, until you drag
+// it into one — and then it stays there, including when it carries over to the next day.
 export const DAY_PARTS = ["morning", "afternoon", "evening"];
-export const dayPartOfTime = hm => {
-  if (!hm) return null;
-  const h = parseInt(String(hm).split("T").pop().split(":")[0], 10);
-  return isNaN(h) ? null : h < 12 ? "morning" : h < 17 ? "afternoon" : "evening";
-};
-export const partNow = (d = new Date()) => dayPartOfTime(String(d.getHours()));
-export const partOfTask = (t, chosen) => (DAY_PARTS.includes(chosen) ? chosen : null) || dayPartOfTime(t && t.remindAt) || "morning";
+export const partOfTask = (t, chosen) => (DAY_PARTS.includes(chosen) ? chosen : null);
 // Completed work, most recently finished first. Tasks finished before the time was recorded follow, in
 // their list order.
 export const byRecentlyDone = (a, b) => (b.doneAt || "").localeCompare(a.doneAt || "") || ((b.position || 0) - (a.position || 0));
@@ -273,23 +267,22 @@ export const shareActive = (s, now = Date.now()) => {
   const t = new Date(s.expires_at).getTime();
   return isNaN(t) || t > now;
 };
-// What someone may do with one task: through a share of its list (or of the owner's Upcoming), or through
-// that single task being handed to them. `shared` says whether it reached them by a share at all.
+// What someone may do with one task. The MOST SPECIFIC share decides, never the most generous:
+//   1. that task shared on its own (once ended, the list's share applies again)
+//   2. else the share of the list it sits in — and once that has ended, nothing of that list comes
+//      through a wider Upcoming share either
+//   3. else the owner's whole Upcoming, for tasks with a date
+// Same rule as task_access() in supabase/setup.sql. It used to be "any covering share", so a dated task
+// in a list shared view-only for a day was editable through an Upcoming share that allowed editing.
+const NO_RIGHTS = { shared: false, canEdit: false, canDelete: false };
+const rightsOf = (s, editDefault) => ({ shared: true, canEdit: s.can_edit == null ? editDefault : !!s.can_edit, canDelete: !!s.can_delete });
 export const rightsFor = (task, folderShares = [], taskShares = [], now = Date.now()) => {
-  let shared = false, canEdit = false, canDelete = false;
-  for (const s of folderShares) {
-    if (!shareActive(s, now) || !shareCovers(s, task)) continue;
-    shared = true;
-    if (s.can_edit !== false) canEdit = true;      // a row from before view-only existed counts as editable
-    if (s.can_delete) canDelete = true;
-  }
-  for (const s of taskShares) {
-    if (!shareActive(s, now) || String(s.task_id) !== String(task.id)) continue;
-    shared = true;
-    if (s.can_edit) canEdit = true;
-    if (s.can_delete) canDelete = true;
-  }
-  return { shared, canEdit, canDelete };
+  const own = taskShares.find(s => String(s.task_id) === String(task.id) && shareActive(s, now));
+  if (own) return rightsOf(own, false);
+  const list = folderShares.find(s => s.owner_id === task.owner && s.folder === task.tag);
+  if (list) return shareActive(list, now) ? rightsOf(list, true) : NO_RIGHTS;   // a list row from before view-only existed counts as editable
+  const up = task.due ? folderShares.find(s => s.owner_id === task.owner && s.folder === UPCOMING_SHARE && shareActive(s, now)) : null;
+  return up ? rightsOf(up, true) : NO_RIGHTS;
 };
 // "until 3 Oct" for a share that ends, nothing for one that doesn't.
 export const shareEndLabel = s => {

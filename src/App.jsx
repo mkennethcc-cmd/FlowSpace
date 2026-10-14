@@ -10,7 +10,7 @@ import {
   mergeGami, gamiRowDiffers, moveDuePatch, whenPatch, inUpcoming, UPCOMING_SHARE, shareLabel, shareCovers,
   edgeScrollStep, reorderPosition, sortFor, rightsFor, shareActive, shareEndLabel,
   normEmail, uniquePeople, resolvePerson, foldContacts,
-  DAY_PARTS, partNow, partOfTask, byRecentlyDone, applyQueued, isNetworkError, mergeLoaded,
+  DAY_PARTS, partOfTask, byRecentlyDone, applyQueued, isNetworkError, mergeLoaded,
 } from "./logic";
 
 const FontLink = () => (
@@ -427,7 +427,7 @@ export default function Freely() {
   const [linkPick, setLinkPick] = useState(null);
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
-  const showToast = (msg, undo) => { setToast({msg, undo}); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(()=>setToast(null), 5000); };
+  const showToast = (msg, undo, ms=5000) => { setToast({msg, undo}); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(()=>setToast(null), ms); };
   const [view, setView] = useState("myday");
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -441,6 +441,7 @@ export default function Freely() {
   const outboxRef = useRef(null);
   const [tasks, setTasks] = useState([]);
   const [ownedShares, setOwnedShares] = useState([]);
+  const [trash, setTrash] = useState([]);   // Recently deleted: tasks with deletedAt, kept 30 days
   const [taskShares, setTaskShares] = useState([]);        // single tasks other people handed to me
   const [ownedTaskShares, setOwnedTaskShares] = useState([]);  // single tasks I handed out
   const [sharedWithMe, setSharedWithMe] = useState([]);
@@ -611,7 +612,11 @@ export default function Freely() {
       // existing account signs in on, just because it happens to have no tasks.
       const newAccount=u.created_at&&Date.now()-new Date(u.created_at).getTime()<86400000;
       if(initial&&!list.length&&newAccount){ try{ if(!localStorage.getItem("fs_seed_"+u.id)){ localStorage.setItem("fs_seed_"+u.id,"1"); list=sampleTasks(u.id); list.forEach(s=>db.insertTask(s,u.id).catch(()=>{})); } }catch{} }
-      setTasks(applyQueued(list,readOutbox(u.id))); tasksLoadedRef.current=true;   // anything not yet sent stays as you left it
+      const all=applyQueued(list,readOutbox(u.id));                               // anything not yet sent stays as you left it
+      setTasks(all.filter(x=>!x.deletedAt)); setTrash(all.filter(x=>x.deletedAt)); tasksLoadedRef.current=true;
+      // Recently deleted keeps things 30 days; after that, your own are deleted for good.
+      const old=all.filter(x=>x.deletedAt&&x.owner===u.id&&Date.now()-new Date(x.deletedAt).getTime()>30*86400000);
+      if(old.length){ setTrash(tr=>tr.filter(x=>!old.some(o=>o.id===x.id))); old.forEach(x=>outboxRef.current?.add({kind:"delete",id:x.id})); db.deleteAttachments(old.flatMap(x=>(x.attachments||[]).map(a=>a.path))).catch(()=>{}); }
     }
     const adopt=(name,res,set)=>{
       if(!ok(res)) return;
@@ -646,7 +651,8 @@ export default function Freely() {
       const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
       const local={notes:c.notes||[],canvas:c.canvas||[],habits:c.habits||[],cats:c.cats||DEFAULT_CATS};
       const synced=c.synced||{};
-      setTasks(applyQueued(c.tasks||[],readOutbox(u.id))); tasksLoadedRef.current=true;
+      const all=applyQueued([...(c.tasks||[]),...(c.trash||[])],readOutbox(u.id));
+      setTasks(all.filter(x=>!x.deletedAt)); setTrash(all.filter(x=>x.deletedAt)); tasksLoadedRef.current=true;
       setNotes(local.notes); setCanvasNotes(local.canvas); setHabits(local.habits); setCats(local.cats);
       setOwnedShares(c.ownedShares||[]); setSharedWithMe(c.sharedWithMe||[]); setTaskShares(c.taskShares||[]); setOwnedTaskShares(c.ownedTaskShares||[]);
       if(Array.isArray(c.profRows)) setProfRows(c.profRows);
@@ -662,7 +668,7 @@ export default function Freely() {
 
   useEffect(()=>{
     syncedRef.current={notes:null,canvas:null,habits:null,cats:null}; tasksLoadedRef.current=false; hydrateStartRef.current=null;
-    if(!user){setTasks([]);setCanvasNotes([]);setNotes([]);setHabits([]);setCats(DEFAULT_CATS);setOwnedShares([]);setSharedWithMe([]);setTaskShares([]);setOwnedTaskShares([]);setMessages([]);setSGroups([]);setChatReqs([]);return;}
+    if(!user){setTasks([]);setTrash([]);setCanvasNotes([]);setNotes([]);setHabits([]);setCats(DEFAULT_CATS);setOwnedShares([]);setSharedWithMe([]);setTaskShares([]);setOwnedTaskShares([]);setMessages([]);setSGroups([]);setChatReqs([]);return;}
     db.loadMessages().then(setMessages).catch(()=>{});
     db.loadChatReqs(user.email).then(setChatReqs).catch(()=>{});
     db.loadProfiles().then(rows=>{ setProfRows(rows); try{ localStorage.setItem("fs_avatars",JSON.stringify(Object.fromEntries(rows.map(r=>[r.email,r.avatar||""])))); }catch{} }).catch(()=>{});
@@ -708,12 +714,12 @@ export default function Freely() {
   useEffect(()=>{
     if(!user||!tasksLoadedRef.current) return;
     const h=setTimeout(()=>{
-      try{ localStorage.setItem(cacheKey(user.id),JSON.stringify({v:1,at:Date.now(),tasks,notes,canvas:canvasNotes,habits,cats,
+      try{ localStorage.setItem(cacheKey(user.id),JSON.stringify({v:1,at:Date.now(),tasks,trash,notes,canvas:canvasNotes,habits,cats,
         synced:syncedRef.current,ownedShares,sharedWithMe,taskShares,ownedTaskShares,profRows})); }catch{}   // a full device just means no offline copy
     },800);
     return ()=>clearTimeout(h);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[user,tasks,notes,canvasNotes,habits,cats,ownedShares,sharedWithMe,taskShares,ownedTaskShares,profRows]);
+  },[user,tasks,trash,notes,canvasNotes,habits,cats,ownedShares,sharedWithMe,taskShares,ownedTaskShares,profRows]);
 
   // Leaving the app saves anything pending at once; coming back picks up what other devices changed.
   useEffect(()=>{
@@ -750,10 +756,11 @@ export default function Freely() {
     if(t.closest?.("[data-task-id],[data-mnote-id],[data-habit-id],input,textarea,select")) return;
     for(let el=t; el&&el!==e.currentTarget; el=el.parentElement){ const cs=getComputedStyle(el); if(/auto|scroll/.test(cs.overflowX)&&el.scrollWidth>el.clientWidth+2) return; }
     const w=sideWheelRef.current, now=Date.now();
-    if(now-w.at>350) w.dx=0;                 // a pause means a new gesture
+    if(now<(w.cool||0)) return;              // the momentum tail of the swipe that just opened/closed it
+    if(now-w.at>250) w.dx=0;                 // a pause means a new gesture
     w.at=now; w.dx-=e.deltaX;                // fingers right → positive, like a swipe right
-    if(w.dx>80&&!sideOpen){ w.dx=0; setSideOpen(true); }
-    else if(w.dx<-80&&sideOpen){ w.dx=0; setSideOpen(false); }
+    if(w.dx>120&&!sideOpen){ w.dx=0; w.cool=now+700; setSideOpen(true); }
+    else if(w.dx<-120&&sideOpen){ w.dx=0; w.cool=now+700; setSideOpen(false); }
   };
 
   // Swipe anywhere on the sidebar itself: drag right = open, drag left = collapse.
@@ -805,9 +812,10 @@ export default function Freely() {
     // No user_id filter — RLS limits delivery to rows we can see (own + shared), so shared edits arrive live both ways.
     const ch=supabase.channel("fs-tasks")
       .on("postgres_changes",{event:"*",schema:"public",table:"tasks"},({eventType,new:n,old:o})=>{
-        if(eventType==="INSERT") setTasks(ts=>ts.some(t=>t.id===n.id)?ts:[fromDbTask(n),...ts]);
-        if(eventType==="UPDATE") setTasks(ts=>ts.map(t=>t.id===n.id?fromDbTask(n):t));
-        if(eventType==="DELETE") setTasks(ts=>ts.filter(t=>t.id!==o.id));
+        if(eventType==="INSERT"||eventType==="UPDATE"){ const t=fromDbTask(n);
+          if(t.deletedAt){ setTasks(ts=>ts.filter(x=>x.id!==t.id)); setTrash(tr=>[t,...tr.filter(x=>x.id!==t.id)]); }
+          else { setTrash(tr=>tr.filter(x=>x.id!==t.id)); setTasks(ts=>ts.some(x=>x.id===t.id)?ts.map(x=>x.id===t.id?t:x):[t,...ts]); } }   // restored, or newly visible to you
+        if(eventType==="DELETE"){ setTasks(ts=>ts.filter(t=>t.id!==o.id)); setTrash(tr=>tr.filter(t=>t.id!==o.id)); }
       })
       .on("postgres_changes",{event:"*",schema:"public",table:"folder_shares"},()=>{ refreshShares(); db.loadTasks().then(setTasks).catch(()=>{}); })   // a new share brings tasks with it
       .on("postgres_changes",{event:"*",schema:"public",table:"task_shares"},()=>{ refreshShares(); db.loadTasks().then(setTasks).catch(()=>{}); })
@@ -909,7 +917,7 @@ export default function Freely() {
   };
   const addTask=()=>{
     const raw=input.trim(); if(!raw) return;
-    const p=parseNL(raw), over={starred:view==="flagged",mydayDate:view==="myday"?todStr:null,mydayPart:view==="myday"&&!p.time?partNow():null};
+    const p=parseNL(raw), over={starred:view==="flagged",mydayDate:view==="myday"?todStr:null};
     if(view.startsWith("cat:")) over.tag=view.slice(4);
     let upcomingView=view==="upcoming";
     if(view.startsWith("shared:")){
@@ -971,21 +979,51 @@ export default function Freely() {
     if(!task) return true;
     if(task.owner===user?.id) return true;
     if(assigneesOf(task).includes(user?.email?.toLowerCase())) return true;
-    const r=rightsFor(task,sharedWithMe,taskShares);
-    return r.shared ? r.canEdit : true;   // reached you some other way (assigned, a team) → not restricted here
+    // Someone else's task reaches you through a share or an assignment, nothing else. If no live share
+    // covers it, it is only on screen because a share ended moments ago — so it's read-only.
+    return rightsFor(task,sharedWithMe,taskShares).canEdit;
   };
   // Files leave storage only when their task is really gone: after the undo window, or at once for deletes
   // that can't be undone. Before this, every deleted task left its attachments in storage forever.
   const purgeFiles=list=>db.deleteAttachments(list.flatMap(t=>(t.attachments||[]).map(a=>a.path))).catch(()=>{});
+  // Deleting moves a task to Recently deleted (30 days, every device) rather than destroying it. Several
+  // deletes in quick succession share ONE toast whose Undo brings all of them back — a second delete used
+  // to replace the first toast, and with it the only way to undo the first.
+  const undoBatchRef=useRef({tasks:[],until:0});
+  const moveToTrash=list=>{
+    const at=new Date().toISOString(), ids=new Set(list.map(t=>t.id));
+    setTasks(ts=>ts.filter(x=>!ids.has(x.id)));
+    setTrash(tr=>[...list.map(t=>({...t,deletedAt:at})),...tr.filter(x=>!ids.has(x.id))]);
+    setSelTask(s=>s&&ids.has(s.id)?null:s);
+    list.forEach(t=>queueTask({kind:"update",id:t.id,patch:{deletedAt:at}}));
+  };
+  const restoreTasks=list=>{
+    const ids=new Set(list.map(t=>t.id));
+    setTrash(tr=>tr.filter(x=>!ids.has(x.id)));
+    setTasks(ts=>[...list.map(t=>({...t,deletedAt:null})),...ts.filter(x=>!ids.has(x.id))]);
+    list.forEach(t=>queueTask({kind:"update",id:t.id,patch:{deletedAt:null}}));
+  };
+  const announceTrash=list=>{
+    const b=undoBatchRef.current, now=Date.now();
+    b.tasks=now<b.until?[...b.tasks,...list]:[...list]; b.until=now+7000;
+    const batch=b.tasks, n=batch.length;
+    showToast(n===1?"Task moved to Recently deleted":`${n} tasks moved to Recently deleted`,
+      ()=>{ restoreTasks(batch); undoBatchRef.current={tasks:[],until:0}; setToast(null); }, 7000);
+  };
   const deleteTask = id=>{
     const t=tasks.find(x=>x.id===id);
     if(!t) return;
     if(!canDeleteTask(t)){ showToast("You don't have permission to delete this shared task"); return; }
-    setTasks(ts=>ts.filter(x=>x.id!==id)); if(selTask?.id===id)setSelTask(null);
-    queueTask({kind:"delete",id});
-    let undone=false;
-    const purge=setTimeout(()=>{ if(!undone&&user) purgeFiles([t]); },8000);
-    showToast("Task deleted", ()=>{ undone=true; clearTimeout(purge); setTasks(ts=>[t,...ts]); queueTask({kind:"insert",id:t.id,task:t,owner:t.owner||user?.id}); setToast(null); });
+    moveToTrash([t]); announceTrash([t]);
+  };
+  const restoreTask=id=>{ const t=trash.find(x=>x.id===id); if(!t) return; if(!canDeleteTask(t)){ showToast("Only someone allowed to delete this task can restore it"); return; } restoreTasks([t]); showToast(`"${t.title}" is back`); };
+  // For good: only from Recently deleted, and only what you're allowed to delete. Files go with it.
+  const purgeTasks=list=>{
+    const ok=list.filter(t=>canDeleteTask(t)); if(!ok.length) return 0;
+    const ids=new Set(ok.map(t=>t.id));
+    setTrash(tr=>tr.filter(x=>!ids.has(x.id)));
+    ok.forEach(t=>queueTask({kind:"delete",id:t.id})); purgeFiles(ok);
+    return ok.length;
   };
   // A copy stays in the same list and under the same owner — including in a list shared with you.
   const duplicateTask = task=>{ createTask({...task,id:crypto.randomUUID(),done:false,title:task.title+" (copy)",attachments:[]},{xp:false}); showToast("Task duplicated"); };
@@ -1038,11 +1076,10 @@ export default function Freely() {
   const purgeCat=name=>{ persistDeleted(deletedCats.filter(x=>x.name!==name)); };
   // Deletes that can't be undone. Only tasks you may delete: "Clear completed" used to include tasks in
   // lists shared with you, deleting other people's work without asking.
+  // Clearing completed work (or a list with its tasks) goes to Recently deleted too.
   const clearTasks=list=>{
     if(!list.length) return 0;
-    const ids=new Set(list.map(t=>t.id));
-    setTasks(ts=>ts.filter(t=>!ids.has(t.id)));
-    if(user){ list.forEach(t=>queueTask({kind:"delete",id:t.id})); purgeFiles(list); }
+    moveToTrash(list);
     return list.length;
   };
   const clearCompleted=()=>{ const n=clearTasks(myTasks.filter(t=>t.done)); showToast(n?`Cleared ${n} completed`:"No completed tasks"); };
@@ -1115,22 +1152,15 @@ export default function Freely() {
   // In My Day today? Your own tasks carry it on the task itself; other people's tasks can't (the row is
   // theirs — writing it put your My Day into theirs), so those live in `mydayExtra`.
   const inMyDay=t=>t.owner===user?.id?t.mydayDate===todStr:(mydayExtra.date===todStr&&mydayExtra.ids.includes(t.id));
-  // Something added to My Day goes to the top of it, into the part of the day it is now — unless it has a
-  // time of its own, which decides instead.
+  // Something added to My Day goes to the top of it, unplaced — you drag it into a part of the day.
   const setInMyDay=(t,on)=>{
     if(!t) return;
-    const hasTime=!!(t.remindAt&&t.remindAt.includes("T"));
-    if(t.owner===user?.id){
-      updateTask(t.id,on?{mydayDate:todStr,position:edgePosition(),...(!t.mydayPart&&!hasTime?{mydayPart:partNow()}:{})}:{mydayDate:null});
-      return;
-    }
-    setMydayExtra(m=>{ const ids=m.date===todStr?m.ids.filter(x=>x!==t.id):[]; const parts={...(m.parts||{})};
-      if(on&&!parts[t.id]&&!hasTime) parts[t.id]=partNow();
-      return {...m,date:todStr,ids:on?[...ids,t.id]:ids,parts,at:Date.now()}; });
+    if(t.owner===user?.id){ updateTask(t.id,on?{mydayDate:todStr,position:edgePosition()}:{mydayDate:null}); return; }
+    setMydayExtra(m=>{ const ids=m.date===todStr?m.ids.filter(x=>x!==t.id):[]; return {...m,date:todStr,ids:on?[...ids,t.id]:ids,at:Date.now()}; });
   };
   const partOf=t=>partOfTask(t,t.owner===user?.id?t.mydayPart:(mydayExtra.parts||{})[t.id]);
-  const setPart=(t,part)=>{
-    if(!t||!DAY_PARTS.includes(part)) return;
+  const setPart=(t,part)=>{   // part null = back to unplaced
+    if(!t||(part!==null&&!DAY_PARTS.includes(part))) return;
     if(t.owner===user?.id){ updateTask(t.id,{mydayPart:part}); return; }
     setMydayExtra(m=>({...m,parts:{...(m.parts||{}),[t.id]:part},at:Date.now()}));
   };
@@ -1148,7 +1178,7 @@ export default function Freely() {
   const sharedTaskIds=new Set(taskShares.filter(s=>shareActive(s)).map(s=>String(s.task_id)));
   const sharedSingles=tasks.filter(t=>sharedTaskIds.has(String(t.id)));
   // What a share shows: that list of theirs, or — for a shared Upcoming — everything of theirs with a date.
-  const sharedTasks=(owner,folder)=>tasks.filter(t=>t.owner===owner&&(folder===UPCOMING_SHARE?inUpcoming(t):t.tag===folder));
+  const sharedTasks=(owner,folder)=>tasks.filter(t=>t.owner===owner&&(folder===UPCOMING_SHARE?inUpcoming(t):t.tag===folder)&&rightsFor(t,sharedWithMe,taskShares).shared);
   const myDayAllDone=myDay.length>0&&myDay.every(t=>t.done);
   const prevMyDayDone=useRef(false);
   useEffect(()=>{ if(myDayAllDone&&!prevMyDayDone.current) fireConfetti(); prevMyDayDone.current=myDayAllDone; },[myDayAllDone]);
@@ -1383,6 +1413,7 @@ export default function Freely() {
     {id:"all",label:"All Tasks",icon:"layers",badge:null},
     {id:"messages",label:"Messages",icon:"chat",badge:messages.filter(m=>m.recipient_email===user?.email?.toLowerCase()&&!m.read).length||null,tint:"#ef4444"},
     {id:"notes",label:"Notes",icon:"note",badge:null},
+    {id:"trash",label:"Recently deleted",icon:"trash",badge:null},
   ];
   // Unified sidebar items (views + folders + shared) — all reorderable/groupable via SidebarTree.
   const sidebarItems=[
@@ -1631,6 +1662,10 @@ export default function Freely() {
           {view==="habits"&&<HabitsView T={T} habits={habits} setHabits={setHabits} todStr={todStr} showToast={showToast} onCheckin={key=>{awardXp("habit-"+key+"-"+todStr,15);markActiveDay();navigator.vibrate?.(20);}}/>}
           {view==="calendar"&&<CalendarView T={T} tasks={myTasks} cats={cats} todStr={todStr} onToggle={toggleTask} onToggleStep={toggleStep} onQuickAdd={addCalendarTask} onMoveTask={moveTaskDay} onMoveStep={moveStep} onOpenTask={t=>{keepSelRef.current=true;navTo("all");setSelTask(t);}}/>}
           {view==="analytics"&&<AnalyticsView T={T} tasks={myTasks} xp={xp} level={level} streak={streak} habits={habits} dayStats={allStats} todStr={todStr}/>}
+          {view==="trash"&&<TrashView T={T} trash={trash} cats={cats} deletedCats={deletedCats} canDelete={canDeleteTask}
+            onRestore={restoreTask} onPurge={t=>{ const n=purgeTasks([t]); if(n) showToast("Deleted for good"); }}
+            onEmpty={()=>{ const n=purgeTasks(trash); showToast(n?`${n} task${n===1?"":"s"} deleted for good`:"Nothing you can delete here"); }}
+            onRestoreCat={restoreCat} onPurgeCat={purgeCat}/>}
           {view==="settings"&&<SettingsView T={T} dark={dark} setDark={setDark} scheme={scheme} setScheme={setScheme} sound={sound} setSound={setSound} onExport={exportData} onImport={importData} onClearCompleted={clearCompleted} ownedShares={ownedShares} onUnshare={unshareFolder} deletedCats={deletedCats} pomLen={pomLen} onPomLen={m=>{ setPomLen(m); if(!pomRun) setPomSecs(m*60); }} onRestoreCat={restoreCat} onPurgeCat={purgeCat} navTabs={navItems.map(n=>({id:n.id,label:n.label}))} hiddenTabs={hiddenTabs} setHiddenTabs={setHiddenTabs} knownPeople={knownPeople} teams={sGroups} myEmail={meEmail} myId={user?.id} onTeamCreate={createTeam} onTeamAddMember={addTeamMember} onTeamRemoveMember={removeTeamMember} onTeamDelete={deleteTeam} myAvatar={myAvatar} onPickAvatar={pickAvatar} newAtBottom={newAtBottom} setNewAtBottom={setNewAtBottom} onHelp={()=>setHelpOpen(true)}/>}
           {(["myday","flagged","upcoming","all","assigned","sharedtasks"].includes(view)||view.startsWith("cat:")||view.startsWith("shared:"))&&(
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFiles} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} isInMyDay={inMyDay} todStr={todStr} canDeleteFn={canDeleteTask} canEditFn={canEditTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={allGroups} listPeople={collaboratorsOf} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}
@@ -1763,7 +1798,7 @@ function ImgViewer({T,url,onClose}) {
 
 function CmdPalette({T,tasks,notes=[],onClose,onGo,onAdd,onPickTask}) {
   const [q,setQ]=useState("");
-  const PAGES={myday:"My Day",upcoming:"Upcoming",calendar:"Calendar",all:"All Tasks",matrix:"Priority Matrix",habits:"Habits",notes:"Notes",messages:"Messages",analytics:"Analytics",settings:"Settings"};
+  const PAGES={myday:"My Day",upcoming:"Upcoming",calendar:"Calendar",all:"All Tasks",matrix:"Priority Matrix",habits:"Habits",notes:"Notes",messages:"Messages",analytics:"Analytics",settings:"Settings",trash:"Recently deleted"};
   const pages=Object.keys(PAGES);
   const ql=q.toLowerCase();
   const ft=tasks.filter(t=>!t.done&&q&&t.title.toLowerCase().includes(ql)).slice(0,4);
@@ -1841,7 +1876,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   const byParts=view==="myday"&&!!partOf;
   const shownOrder=()=>{
     const open=sortList(show.filter(t=>!t.done));
-    if(byParts) return DAY_PARTS.flatMap(pt=>open.filter(t=>partOf(t)===pt));
+    if(byParts) return [...DAY_PARTS.flatMap(pt=>open.filter(t=>partOf(t)===pt)),...open.filter(t=>!partOf(t))];
     if(!upcomingLike) return open;
     const late=open.filter(isLate);
     return late.length?[...late,...open.filter(t=>!isLate(t))]:open;
@@ -1865,20 +1900,40 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
 
   // A two-finger sideways swipe on a trackpad is a wheel event with sideways movement — the same gesture
   // a finger makes on the phone, so it does the same things: left deletes, right adds to My Day.
-  const wheelRef=useRef({id:null,dx:0,at:0,timer:null});
+  // Two fingers sideways on a trackpad. Right → My Day. Left → shows a Delete button; nothing is deleted
+  // until it's clicked. The decision waits until the trackpad has gone quiet — Macs keep sending "momentum"
+  // after the fingers lift — and is followed by a short cool-down. Acting mid-gesture is what let that
+  // momentum run on into the next card and delete it too, with a second toast hiding the first one's Undo.
+  const wheelRef=useRef({id:null,dx:0,timer:null,cool:0,pend:null});
+  const [revealId,setRevealId]=useState(null);              // the card currently showing its Delete button
+  const [glide,setGlide]=useState(false);                   // a trackpad gesture is moving a card: ease it
+  const REVEAL=92;
   const onWheelSwipe=(e,id)=>{
-    if(Math.abs(e.deltaX)<=Math.abs(e.deltaY)) return;      // that's ordinary scrolling
-    if(canEditFn){ const tk=tasks.find(x=>String(x.id)===String(id)); if(tk&&!canEditFn(tk)) return; }
+    if(Math.abs(e.deltaX)<=Math.abs(e.deltaY)*1.2) return;  // mostly up/down: that's scrolling the list
     const w=wheelRef.current, now=Date.now();
-    if(w.id!==id||now-w.at>500) w.dx=0;                      // a new gesture, or a new card
-    w.id=id; w.at=now; w.dx=Math.max(-110,Math.min(110,w.dx-e.deltaX));   // fingers left → negative, like a swipe left
-    setSwipeId(id); setSwipeX(w.dx);
+    if(now<w.cool) return;                                   // the tail of the last swipe — never a new one
+    const tk=tasks.find(x=>String(x.id)===String(id));
+    if(canEditFn&&tk&&!canEditFn(tk)) return;
+    if(w.id!==id){ w.id=id; w.dx=revealId===id?-REVEAL:0; if(revealId&&revealId!==id) setRevealId(null); }
+    w.dx=Math.max(-130,Math.min(130,w.dx-e.deltaX*0.7));      // fingers left → negative; a little resistance
+    if(!w.pend) w.pend=setTimeout(()=>{ w.pend=null; setGlide(true); setSwipeId(w.id); setSwipeX(w.dx); },16);   // at most one redraw a frame
     clearTimeout(w.timer);
-    const finish=()=>{ const dx=w.dx; w.dx=0; w.id=null; setSwipeId(null); setSwipeX(0);
-      if(dx<=-60) deleteTask(id); else if(dx>=60) onToggleMyDay?.(id); };
-    if(Math.abs(w.dx)>=95) finish();                         // far enough: act without waiting
-    else w.timer=setTimeout(finish,260);                     // fingers lifted: act if it went far enough
+    w.timer=setTimeout(()=>{                                 // quiet for a moment: the gesture is over
+      const dx=w.dx, at=w.id; clearTimeout(w.pend); w.pend=null; w.id=null; w.dx=0; w.cool=Date.now()+450;
+      setSwipeId(null); setSwipeX(0); setTimeout(()=>setGlide(false),150);
+      if(dx>=90){ setRevealId(null); navigator.vibrate?.(15); onToggleMyDay?.(at); }
+      else if(dx<=-70&&(canDeleteFn?canDeleteFn(tk):true)) setRevealId(at);
+      else setRevealId(r=>r===at?null:r);
+    },140);
   };
+  // A shown Delete button goes away when you do anything else.
+  useEffect(()=>{
+    if(!revealId) return;
+    const away=e=>{ if(!e.target.closest?.(`[data-reveal-for="${CSS.escape(String(revealId))}"]`)) setRevealId(null); };
+    const esc=e=>{ if(e.key==="Escape") setRevealId(null); };
+    document.addEventListener("pointerdown",away,true); window.addEventListener("keydown",esc);
+    return ()=>{ document.removeEventListener("pointerdown",away,true); window.removeEventListener("keydown",esc); };
+  },[revealId]);
 
   const canReorder = sort==="manual";
   const beginReorder=id=>{
@@ -1905,12 +1960,12 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
               : ev.clientY<mid;
             hit={id:cid,before};
           } }
-        else { const zone=el&&el.closest("[data-part-drop]"); if(zone) hit={part:zone.getAttribute("data-part-drop")}; }
+        else { const zone=el&&el.closest("[data-part-drop]"); if(zone){ const pt=zone.getAttribute("data-part-drop"); hit={part:pt==="none"?null:pt,zone:pt}; } }
         dropRef.current=hit; setDrop(hit); },
       ()=>{ ghost.remove(); const from=dragIdRef.current,to=dropRef.current;
         if(from!=null&&to){
           const moved=tasks.find(x=>String(x.id)===String(from));
-          if(to.part){ if(moved) onSetPart?.(moved,to.part); }                    // onto a part's heading or empty space
+          if(to.zone){ if(moved) onSetPart?.(moved,to.part); }                    // onto a part's heading, an empty part, or "not placed"
           else {
             reorderTasks(from,to.id,to.before,shownOrder());
             // …and dropped among another part's cards, it joins that part
@@ -2104,7 +2159,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>🚩 Your shortlist. Open any task and tap the flag to add or remove it here.</div>
         )}
         {view==="myday"&&(
-          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>☀️ Today only, in three parts — drag a task between them{COARSE?"":" or right-click it"}. Anything unfinished carries over to tomorrow in the same part, and suggestions for what to pull in are at the bottom.</div>
+          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>☀️ Today only. New tasks wait at the bottom — drag each into morning, afternoon or evening{COARSE?"":" (or right-click it)"} and it stays there, even when it carries over to tomorrow unfinished. Suggestions for what to pull in are at the very bottom.</div>
         )}
         {(
           <div style={{display:"flex",gap:5,marginBottom:12}}>
@@ -2134,7 +2189,8 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             const card=task=>(
               <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id}
                 dropEdge={drop?.id===String(task.id)?(drop.before?"top":"bottom"):null} canReorder={canReorder}
-                onDown={onCardDown} onGrip={gripDown} onMenu={openMenu} onWheelSwipe={onWheelSwipe} swipeX={swipeId===task.id?swipeX:0} canDelete={canDeleteFn?canDeleteFn(task):true} canEdit={canEditFn?canEditFn(task):true} inMyDay={isInMyDay?.(task)} onToggleMyDay={onToggleMyDay} myEmail={myEmail}/>
+                onDown={onCardDown} onGrip={gripDown} onMenu={openMenu} onWheelSwipe={onWheelSwipe} swipeX={swipeId===task.id?swipeX:0} glide={glide}
+                revealed={revealId===task.id} onRevealDelete={id=>{ setRevealId(null); deleteTask(id); }} canDelete={canDeleteFn?canDeleteFn(task):true} canEdit={canEditFn?canEditFn(task):true} inMyDay={isInMyDay?.(task)} onToggleMyDay={onToggleMyDay} myEmail={myEmail}/>
             );
             return (<>
               {late.length>0&&<>
@@ -2146,15 +2202,23 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
                 <div style={{height:1,background:T.border,margin:"8px 2px 4px"}}/>
               </>}
               {byParts
-                ? DAY_PARTS.map(pt=>{ const items=rest.filter(t=>partOf(t)===pt), over=drop?.part===pt; return (
+                ? <>{DAY_PARTS.map(pt=>{ const items=rest.filter(t=>partOf(t)===pt), over=drop?.zone===pt; return (
                     <div key={pt} style={{display:"flex",flexDirection:"column",gap:4,marginBottom:6}}>
                       <div data-part-drop={pt} style={{fontSize:10,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:over?T.accent:T.textMuted,padding:"6px 4px 3px",borderRadius:7,background:over?T.accentGlow:"transparent",display:"flex",alignItems:"center",gap:6}}>
                         {PART_LABEL[pt]} <span style={{fontWeight:600,opacity:.7}}>· {items.length}</span>
                       </div>
                       {items.map(card)}
-                      {items.length===0&&<div data-part-drop={pt} style={{fontSize:10,color:over?T.accent:T.textMuted,opacity:over?1:.5,padding:"8px 10px",border:`1px dashed ${over?T.accent:T.border}`,borderRadius:9,background:over?T.accentGlow:"transparent"}}>{dragId?"Drop here":"Nothing here — drag a task in"}</div>}
+                      {items.length===0&&<div data-part-drop={pt} style={{fontSize:10,color:over?T.accent:T.textMuted,opacity:over?1:.45,padding:"6px 10px",border:`1px dashed ${over?T.accent:T.border}`,borderRadius:9,background:over?T.accentGlow:"transparent"}}>{dragId?"Drop here":"Drag a task here"}</div>}
                     </div>
-                  ); })
+                  ); })}
+                  {(()=>{ const items=rest.filter(t=>!partOf(t)), over=drop?.zone==="none"; return (items.length>0||dragId)&&(
+                    <div style={{display:"flex",flexDirection:"column",gap:4,marginTop:4}}>
+                      <div data-part-drop="none" style={{fontSize:10,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:over?T.accent:T.textMuted,padding:"6px 4px 3px",borderRadius:7,background:over?T.accentGlow:"transparent",borderTop:`1px solid ${T.border}`}}>
+                        Not placed yet <span style={{fontWeight:600,opacity:.7}}>· {items.length}</span> <span style={{fontWeight:500,textTransform:"none",letterSpacing:0,opacity:.75}}>— drag into a part of the day</span>
+                      </div>
+                      {items.map(card)}
+                    </div>
+                  ); })()}</>
                 : rest.map(card)}
             </>);
           })()}
@@ -2215,7 +2279,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
               {row("🌤 Due tomorrow",()=>updateTask(t.id,moveDuePatch(t,addDays(1))))}
               {row(isInMyDay?.(t)?"☀️ Remove from My Day":"☀️ Add to My Day",()=>onToggleMyDay?.(t.id))}
               {byParts&&<div style={{display:"flex",gap:4,padding:"3px 9px 5px"}}>
-                {DAY_PARTS.map(pt=><button key={pt} onClick={()=>{ onSetPart?.(t,pt); setMenu(null); }} title={`Move to ${pt}`}
+                {DAY_PARTS.map(pt=><button key={pt} onClick={()=>{ onSetPart?.(t,partOf(t)===pt?null:pt); setMenu(null); }} title={partOf(t)===pt?`Take out of ${pt}`:`Move to ${pt}`}
                   style={{flex:1,padding:"4px 0",borderRadius:7,border:`1px solid ${partOf(t)===pt?T.accent:T.border}`,background:partOf(t)===pt?T.accentGlow:"transparent",color:partOf(t)===pt?T.accent:T.textMuted,cursor:"pointer",fontSize:13}}>{pt==="morning"?"🌅":pt==="afternoon"?"☀️":"🌙"}</button>)}
               </div>}
               {row(t.starred?"🚩 Remove flag":"🚩 Flag it",()=>updateTask(t.id,{starred:!t.starred}))}
@@ -2285,7 +2349,9 @@ function TaskReadOnly({task,T,cats,onClose,ownerNick}) {
   );
 }
 
-function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,dropEdge=null,canReorder=true,onDown,onGrip,onMenu,onWheelSwipe,swipeX=0,canDelete=true,canEdit=true,inMyDay=false,onToggleMyDay,myEmail}) {
+function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,dropEdge=null,canReorder=true,onDown,onGrip,onMenu,onWheelSwipe,swipeX:liveX=0,glide=false,revealed=false,onRevealDelete,canDelete=true,canEdit=true,inMyDay=false,onToggleMyDay,myEmail}) {
+  // Where the card sits: following a swipe, or parked open on its Delete button.
+  const swipeX=liveX!==0?liveX:(revealed?-92:0);
   const assignees=assigneesOf(task);
   const assignedToMe=assignees.includes(myEmail);
   const [hov,setHov]=useState(false);
@@ -2294,16 +2360,23 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
   const catColor=catMeta?.color||"#6b7280";
   const qColor=QUAD[task.quadrant]?.color;
   return (
-    <div style={{position:"relative",borderRadius:11,overflow:"hidden"}}>
+    <div data-reveal-for={revealed?task.id:undefined} style={{position:"relative",borderRadius:11,overflow:"hidden"}}>
     {dropEdge&&<div style={{position:"absolute",left:4,right:4,[dropEdge]:0,height:3,borderRadius:2,background:T.accent,boxShadow:`0 0 8px ${T.accent}`,zIndex:6,pointerEvents:"none"}}/>}
-    {swipeX>0&&(
-      <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",gap:6,paddingLeft:16,background:`linear-gradient(90deg,${T.warning}44,transparent)`,color:T.warning,fontWeight:700,fontSize:12,pointerEvents:"none"}}>
-        <Ico n="sun" s={16} c={T.warning}/>{swipeX>=95?"Release for My Day ☀️ · move ↕ too to drag":swipeX>60?"Release for My Day ☀️":"My Day"}
+    {revealed&&liveX===0&&(
+      <div style={{position:"absolute",top:0,bottom:0,right:0,width:92,display:"flex",alignItems:"center",justifyContent:"center",background:T.danger,zIndex:1}}>
+        <button onClick={e=>{ e.stopPropagation(); onRevealDelete?.(task.id); }} style={{background:"none",border:"none",color:"#fff",cursor:"pointer",fontSize:12,fontWeight:800,display:"flex",flexDirection:"column",alignItems:"center",gap:2,fontFamily:"'DM Sans',sans-serif"}}>
+          <Ico n="trash" s={16} c="#fff"/>Delete
+        </button>
       </div>
     )}
-    {swipeX<0&&(
+    {swipeX>0&&(
+      <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",gap:6,paddingLeft:16,background:`linear-gradient(90deg,${T.warning}44,transparent)`,color:T.warning,fontWeight:700,fontSize:12,pointerEvents:"none"}}>
+        <Ico n="sun" s={16} c={T.warning}/>{glide?(swipeX>=90?"My Day ☀️ ✓":"My Day"):swipeX>=95?"Release for My Day ☀️ · move ↕ too to drag":swipeX>60?"Release for My Day ☀️":"My Day"}
+      </div>
+    )}
+    {swipeX<0&&!(revealed&&liveX===0)&&(
       <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"flex-end",gap:6,paddingRight:16,background:`linear-gradient(270deg,${T.danger}44,transparent)`,color:T.danger,fontWeight:700,fontSize:12,pointerEvents:"none"}}>
-        {swipeX<=-95?"Release to delete 🗑 · move ↕ too to drag":swipeX<-60?"Release to delete 🗑":"Delete"}<Ico n="trash" s={16} c={T.danger}/>
+        {glide?"Delete":swipeX<=-95?"Release to delete 🗑 · move ↕ too to drag":swipeX<-60?"Release to delete 🗑":"Delete"}<Ico n="trash" s={16} c={T.danger}/>
       </div>
     )}
     <div className={entering?"te":""} data-task-id={task.id}
@@ -2311,7 +2384,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
       onContextMenu={onMenu?e=>onMenu(e,task):undefined}
       onWheel={onWheelSwipe?e=>onWheelSwipe(e,task.id):undefined}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)} onClick={()=>onSel(task)}
-      style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:swipeX!==0?T.bg:(sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent"),border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:swipeX!==0?"none":"all .12s",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:swipeX!==0?`translateX(${swipeX}px)`:dragging?"scale(.98)":"scale(1)",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none",touchAction:"pan-y"}}>
+      style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:swipeX!==0?T.bg:(sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent"),border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:liveX!==0?(glide?"transform .09s ease-out":"none"):"all .16s ease-out",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:swipeX!==0?`translateX(${swipeX}px)`:dragging?"scale(.98)":"scale(1)",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none",touchAction:"pan-y"}}>
       {task.color&&<div style={{position:"absolute",left:0,top:8,bottom:8,width:3,borderRadius:2,background:task.color}}/>}
       {onGrip&&<div data-grip onPointerDown={e=>onGrip(e,task.id)} onClick={e=>e.stopPropagation()} title={canReorder?"Drag to reorder":"Switch the sort to “My order” to drag tasks around"} style={{color:T.textMuted,opacity:canReorder?(hov?.7:.35):.12,transition:"opacity .15s",flexShrink:0,alignSelf:"center",cursor:"grab",padding:"6px 2px",margin:"-6px 0",paddingLeft:task.color?4:2,touchAction:"none"}}><Ico n="grip" s={16} c={T.textMuted}/></div>}
       <button onClick={e=>{e.stopPropagation();if(canEdit)onToggle(task.id);}} title={canEdit?undefined:"View only"} style={{width:19,height:19,borderRadius:5,opacity:canEdit?1:.45,border:`2px solid ${task.done?T.success:qColor||T.border}`,background:task.done?T.success:"transparent",cursor:"pointer",flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s"}}>
@@ -4012,6 +4085,56 @@ function TaskShareBox({T,task,shares=[],onShare,onUnshare,onClose,showToast}) {
   );
 }
 
+// Recently deleted: every deleted task for 30 days (on all your devices), and deleted lists. Restore puts a
+// task back exactly where it was — same list, same place, same My Day part.
+function TrashView({T,trash=[],cats={},deletedCats=[],canDelete,onRestore,onPurge,onEmpty,onRestoreCat,onPurgeCat}) {
+  const narrow=useNarrow();
+  const items=[...trash].sort((a,b)=>(b.deletedAt||"").localeCompare(a.deletedAt||""));
+  const ago=t=>{ const m=Math.max(0,Math.round((Date.now()-new Date(t.deletedAt).getTime())/60000));
+    return m<1?"just now":m<60?`${m} min ago`:m<1440?`${Math.round(m/60)} h ago`:`${Math.round(m/1440)} d ago`; };
+  const left=t=>Math.max(0,30-Math.floor((Date.now()-new Date(t.deletedAt).getTime())/86400000));
+  const btn=(label,onClick,color)=>(<button onClick={onClick} style={{padding:"4px 11px",borderRadius:7,border:`1px solid ${color}`,background:color+"18",color,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}>{label}</button>);
+  return (
+    <div style={{flex:1,overflowY:"auto",padding:narrow?"16px 13px 80px":"22px 26px 80px"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:4}}>
+        <h1 style={{fontFamily:"'Sora',sans-serif",fontSize:narrow?19:22,fontWeight:700,letterSpacing:"-.5px",flexGrow:1}}>🗑 Recently deleted</h1>
+        {items.length>0&&btn("Empty now",()=>{ if(window.confirm("Delete everything here for good? This can't be undone.")) onEmpty(); },T.danger)}
+      </div>
+      <div style={{fontSize:11,color:T.textMuted,lineHeight:1.5,marginBottom:14}}>Deleted tasks wait here for 30 days — on every device — then go for good. Restore puts a task back exactly where it was.</div>
+      {items.length===0
+        ? <div style={{fontSize:12,color:T.textMuted,opacity:.7,padding:"18px 0"}}>Nothing deleted in the last 30 days.</div>
+        : <div style={{display:"flex",flexDirection:"column",gap:5,marginBottom:18}}>
+            {items.map(t=>{ const meta=cats[t.tag]; return (
+              <div key={t.id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 11px",borderRadius:10,background:T.surface,border:`1px solid ${T.border}`,flexWrap:"wrap"}}>
+                <div style={{flex:1,minWidth:150}}>
+                  <div style={{fontSize:13,fontWeight:600,color:T.text,overflowWrap:"anywhere",textDecoration:t.done?"line-through":"none",opacity:t.done?.6:1}}>{t.title}</div>
+                  <div style={{fontSize:10,color:T.textMuted,display:"flex",gap:6,flexWrap:"wrap",marginTop:2}}>
+                    {t.tag&&<span style={{textTransform:"capitalize",display:"inline-flex",alignItems:"center",gap:3}}>{meta&&<CatIcon icon={meta.icon} size={10}/>}{t.tag}</span>}
+                    <span>Deleted {ago(t)}</span><span>· gone in {left(t)} day{left(t)===1?"":"s"}</span>
+                  </div>
+                </div>
+                {canDelete?.(t)!==false&&btn("Restore",()=>onRestore(t.id),T.accent)}
+                {canDelete?.(t)!==false&&btn("Delete now",()=>onPurge(t),T.danger)}
+              </div>
+            ); })}
+          </div>}
+      {deletedCats.length>0&&(<>
+        <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,margin:"6px 0 8px"}}>Deleted lists</div>
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          {deletedCats.map(d=>(
+            <div key={d.name} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 11px",borderRadius:10,background:T.surface,border:`1px solid ${T.border}`}}>
+              <CatIcon icon={d.icon} size={14}/>
+              <span style={{fontSize:12,fontWeight:600,color:T.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textTransform:"capitalize"}}>{d.name}</span>
+              {btn("Restore",()=>onRestoreCat(d.name),T.accent)}
+              <button onClick={()=>onPurgeCat(d.name)} title="Forget it" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0}}><Ico n="x" s={12}/></button>
+            </div>
+          ))}
+        </div>
+      </>)}
+    </div>
+  );
+}
+
 // Popup to create a new list (name + auto/pick icon + color) or a new folder — opened from the sidebar's New buttons.
 function SidebarCreate({T,mode,onClose,onCreateList,onCreateGroup,onUploadIcon}) {
   const isGroup=mode==="group";
@@ -4163,7 +4286,11 @@ function SidebarManage({T,target,isGroup,childLists,shares,meta,onClose,onRename
           {shares.map(s=>(
             <div key={s.id} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
               {isGroup&&<span style={{fontSize:9,color:T.textMuted,fontWeight:700,textTransform:"capitalize"}}>{s.folder}</span>}
-              <span style={{fontSize:11,color:T.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {s.shared_with_email}</span>
+              <span title={s.shared_with_email} style={{flex:1,minWidth:0,overflow:"hidden"}}>
+                <span style={{display:"block",fontSize:11,fontWeight:600,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {nickOf(s.shared_with_email)}</span>
+                {nickOf(s.shared_with_email)!==s.shared_with_email&&<span style={{display:"block",fontSize:9,color:T.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",userSelect:"text"}}>{s.shared_with_email}</span>}
+              </span>
+              <CopyMail email={s.shared_with_email} T={T}/>
               <span style={{fontSize:8,fontWeight:700,color:s.can_delete?T.danger:T.textMuted,background:(s.can_delete?T.danger:T.textMuted)+"22",padding:"1px 5px",borderRadius:8}}>{s.can_edit===false?"view only":s.can_delete?"can delete":"edit"}</span>
               {shareEndLabel(s)&&<span style={{fontSize:8,fontWeight:700,color:shareActive(s)?T.warning:T.danger,background:(shareActive(s)?T.warning:T.danger)+"22",padding:"1px 5px",borderRadius:8,whiteSpace:"nowrap"}}>{shareActive(s)?shareEndLabel(s):"ended"}</span>}
               <button onClick={()=>onUnshare(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:10,fontWeight:700}}>✕</button>
@@ -4536,21 +4663,7 @@ function SettingsView({T,dark,setDark,scheme,setScheme,sound,setSound,onExport,o
 
       {/* Lists are created, renamed, shared and deleted from the sidebar (⋯ next to a list). What's left here
           is what has no other home: restoring a deleted list, and one overview of everything you share. */}
-      {deletedCats&&deletedCats.length>0&&(
-        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 16px 14px",marginBottom:14}}>
-          <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,marginBottom:8}}>Recently deleted lists</div>
-          <div style={{display:"flex",flexDirection:"column",gap:5}}>
-            {deletedCats.map(d=>(
-              <div key={d.name} style={{display:"flex",alignItems:"center",gap:7,padding:"5px 9px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`}}>
-                <CatIcon icon={d.icon} size={14}/>
-                <span style={{fontSize:12,fontWeight:600,color:T.textMuted,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</span>
-                <button onClick={()=>onRestoreCat(d.name)} style={{padding:"3px 10px",borderRadius:6,border:`1px solid ${T.accent}`,background:T.accentGlow,color:T.accent,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'DM Sans',sans-serif",flexShrink:0}}>Restore</button>
-                <button onClick={()=>onPurgeCat(d.name)} title="Forget it" style={{background:"none",border:"none",cursor:"pointer",color:T.textMuted,display:"flex",flexShrink:0}}><Ico n="x" s={12}/></button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Deleted lists now sit with deleted tasks, in the Recently deleted tab. */}
       <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 16px 14px",marginBottom:14}}>
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".6px",textTransform:"uppercase",color:T.textMuted,marginBottom:4}}>Sharing 🤝</div>
         <div style={{fontSize:11,color:T.textMuted,marginBottom:10,lineHeight:1.5}}>To share a list, tap 🤝 Share next to its name — or at the top of Upcoming to share everything you've given a date. Everything you share is listed here.</div>

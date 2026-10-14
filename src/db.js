@@ -21,12 +21,13 @@ export const fromDbTask = r => ({
   mydayDate: r.myday_date ? String(r.myday_date).slice(0, 10) : null,
   doneAt: r.done_at || null,                 // when it was ticked off — orders the Completed section
   mydayPart: r.myday_part || null,           // "morning" | "afternoon" | "evening" in My Day
+  deletedAt: r.deleted_at || null,           // in Recently deleted since then
 });
 
 // Columns added to tasks after an account's database was first set up. Until supabase/setup.sql has been
 // run, the database rejects them — so they are dropped from that write and the rest of it still saves
 // (the task is still ticked off; only the time it was ticked isn't kept). Learned once per session.
-const LATE_TASK_COLS = ["done_at", "myday_part"];
+const LATE_TASK_COLS = ["done_at", "myday_part", "deleted_at"];
 const missingTaskCols = new Set();
 const withoutMissing = row => { const r = { ...row }; for (const c of missingTaskCols) delete r[c]; return r; };
 async function writeTask(send, row) {
@@ -98,7 +99,7 @@ export const db = {
       attachments: t.attachments || [], position: t.position != null ? t.position : Date.now(),
       myday_date: t.mydayDate || null, time_end: t.endTime || null,
       assigned_to: t.assignedTo || null, assign_private: !!t.assignPrivate,
-      done_at: t.doneAt || null, myday_part: t.mydayPart || null,
+      done_at: t.doneAt || null, myday_part: t.mydayPart || null, deleted_at: t.deletedAt || null,
     });
     if (error) throw error;
   },
@@ -117,11 +118,15 @@ export const db = {
     if (p.mydayDate !== undefined) u.myday_date = p.mydayDate || null;
     if (p.doneAt !== undefined) u.done_at = p.doneAt || null;
     if (p.mydayPart !== undefined) u.myday_part = p.mydayPart || null;
+    if (p.deletedAt !== undefined) u.deleted_at = p.deletedAt || null;
     if (!Object.keys(u).length) return { saved: true };
     // A write the database refuses does NOT throw — it simply matches no rows. Ask for the changed
     // row back so a silently-dropped edit can be reported instead of lingering on screen as a lie.
     const { data, error } = await writeTask(row => Object.keys(row).length ? supabase.from("tasks").update(row).eq("id", id).select("id") : Promise.resolve({ data: null, error: null }), u);
     if (error) throw error;
+    // A database without Recently deleted yet: a deletion can't be parked, so it happens for real (the way
+    // it always did) rather than not at all — otherwise the task would come back on the next load.
+    if (p.deletedAt && missingTaskCols.has("deleted_at")) { const r = await db.deleteTask(id); return { saved: r.deleted }; }
     return { saved: !Array.isArray(data) || data.length > 0 };
   },
   async deleteTask(id) {
