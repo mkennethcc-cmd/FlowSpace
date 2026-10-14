@@ -755,12 +755,12 @@ export default function Freely() {
     const t=e.target;
     if(t.closest?.("[data-task-id],[data-mnote-id],[data-habit-id],input,textarea,select")) return;
     for(let el=t; el&&el!==e.currentTarget; el=el.parentElement){ const cs=getComputedStyle(el); if(/auto|scroll/.test(cs.overflowX)&&el.scrollWidth>el.clientWidth+2) return; }
-    const w=sideWheelRef.current, now=Date.now();
-    if(now<(w.cool||0)) return;              // the momentum tail of the swipe that just opened/closed it
-    if(now-w.at>250) w.dx=0;                 // a pause means a new gesture
-    w.at=now; w.dx-=e.deltaX;                // fingers right → positive, like a swipe right
-    if(w.dx>120&&!sideOpen){ w.dx=0; w.cool=now+700; setSideOpen(true); }
-    else if(w.dx<-120&&sideOpen){ w.dx=0; w.cool=now+700; setSideOpen(false); }
+    const w=sideWheelRef.current;
+    clearTimeout(w.quietT); w.quietT=setTimeout(()=>{ w.swallow=false; w.dx=0; },150);   // quiet = a new gesture next time
+    if(w.swallow) return;                    // the momentum after it already opened/closed
+    w.dx-=e.deltaX;                          // fingers right → positive, like a swipe right
+    if(w.dx>110&&!sideOpen){ w.swallow=true; setSideOpen(true); }
+    else if(w.dx<-110&&sideOpen){ w.swallow=true; setSideOpen(false); }
   };
 
   // Swipe anywhere on the sidebar itself: drag right = open, drag left = collapse.
@@ -1898,33 +1898,51 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
     return ()=>{ window.removeEventListener("resize",close); window.removeEventListener("scroll",close,true); window.removeEventListener("keydown",esc); };
   },[menu]);
 
-  // A two-finger sideways swipe on a trackpad is a wheel event with sideways movement — the same gesture
-  // a finger makes on the phone, so it does the same things: left deletes, right adds to My Day.
-  // Two fingers sideways on a trackpad. Right → My Day. Left → shows a Delete button; nothing is deleted
-  // until it's clicked. The decision waits until the trackpad has gone quiet — Macs keep sending "momentum"
-  // after the fingers lift — and is followed by a short cool-down. Acting mid-gesture is what let that
-  // momentum run on into the next card and delete it too, with a second toast hiding the first one's Undo.
-  const wheelRef=useRef({id:null,dx:0,timer:null,cool:0,pend:null});
+  // Two fingers sideways on a trackpad. Right → My Day. Left → a Delete button; nothing is deleted until
+  // it's clicked. The card follows the fingers directly (moved on the page, not redrawn by React, so it
+  // keeps up), acts the moment it crosses the line and springs straight back. Whatever the trackpad sends
+  // after that — Macs keep sending "momentum" once the fingers lift — is swallowed until it goes quiet, so
+  // it can never run on into the next card. (Waiting for the momentum to end before acting left the card
+  // parked sideways for half a second; acting without swallowing it deleted the next card too.)
+  const wheelRef=useRef({id:null,el:null,dx:0,dir:null,swallow:false,quietT:null});
   const [revealId,setRevealId]=useState(null);              // the card currently showing its Delete button
-  const [glide,setGlide]=useState(false);                   // a trackpad gesture is moving a card: ease it
+  const revealIdRef=useRef(null); revealIdRef.current=revealId;
+  const [swipeLayer,setSwipeLayer]=useState(null);          // {id,dir}: which coloured layer shows behind a moving card
   const REVEAL=92;
+  const springTo=(el,x)=>{ if(!el) return; el.style.transition="transform .22s cubic-bezier(.2,.8,.2,1)"; el.style.transform=x?`translateX(${x}px)`:""; };
   const onWheelSwipe=(e,id)=>{
     if(Math.abs(e.deltaX)<=Math.abs(e.deltaY)*1.2) return;  // mostly up/down: that's scrolling the list
-    const w=wheelRef.current, now=Date.now();
-    if(now<w.cool) return;                                   // the tail of the last swipe — never a new one
+    const w=wheelRef.current;
+    clearTimeout(w.quietT);
+    w.quietT=setTimeout(()=>{                                // quiet: the gesture, momentum and all, is over
+      const acted=w.swallow; w.swallow=false;
+      if(!acted&&w.el){                                      // let go before the line → back to rest (or stay open)
+        const keepOpen=revealIdRef.current===w.id&&w.dx<=-REVEAL/2;
+        springTo(w.el,keepOpen?-REVEAL:0);
+        if(!keepOpen&&revealIdRef.current===w.id) setRevealId(null);
+      }
+      w.id=null; w.el=null; w.dx=0; if(w.dir){ w.dir=null; setSwipeLayer(null); }
+    },120);
+    if(w.swallow) return;                                    // the tail of a swipe that already did its thing
     const tk=tasks.find(x=>String(x.id)===String(id));
     if(canEditFn&&tk&&!canEditFn(tk)) return;
-    if(w.id!==id){ w.id=id; w.dx=revealId===id?-REVEAL:0; if(revealId&&revealId!==id) setRevealId(null); }
-    w.dx=Math.max(-130,Math.min(130,w.dx-e.deltaX*0.7));      // fingers left → negative; a little resistance
-    if(!w.pend) w.pend=setTimeout(()=>{ w.pend=null; setGlide(true); setSwipeId(w.id); setSwipeX(w.dx); },16);   // at most one redraw a frame
-    clearTimeout(w.timer);
-    w.timer=setTimeout(()=>{                                 // quiet for a moment: the gesture is over
-      const dx=w.dx, at=w.id; clearTimeout(w.pend); w.pend=null; w.id=null; w.dx=0; w.cool=Date.now()+450;
-      setSwipeId(null); setSwipeX(0); setTimeout(()=>setGlide(false),150);
-      if(dx>=90){ setRevealId(null); navigator.vibrate?.(15); onToggleMyDay?.(at); }
-      else if(dx<=-70&&(canDeleteFn?canDeleteFn(tk):true)) setRevealId(at);
-      else setRevealId(r=>r===at?null:r);
-    },140);
+    const el=e.currentTarget;
+    if(w.id!==id){
+      if(w.el&&w.el!==el) springTo(w.el,0);
+      w.id=id; w.el=el; w.dx=revealIdRef.current===id?-REVEAL:0;
+      if(revealIdRef.current&&revealIdRef.current!==id) setRevealId(null);
+    }
+    w.dx=Math.max(-150,Math.min(150,w.dx-e.deltaX));        // fingers left → negative, like a swipe left
+    el.style.transition="none"; el.style.transform=`translateX(${w.dx}px)`;
+    const dir=w.dx>6?"right":w.dx<-6?"left":null;
+    if(dir!==w.dir){ w.dir=dir; setSwipeLayer(dir?{id,dir}:null); }   // one redraw per change of direction, for the colour
+    if(w.dx>=80){
+      w.swallow=true; springTo(el,0); w.dir=null; setSwipeLayer(null);
+      if(revealIdRef.current===id) setRevealId(null);
+      navigator.vibrate?.(15); onToggleMyDay?.(id);
+    } else if(w.dx<=-72&&revealIdRef.current!==id&&(canDeleteFn?canDeleteFn(tk):true)){
+      w.swallow=true; springTo(el,-REVEAL); w.dir=null; setSwipeLayer(null); setRevealId(id);
+    }
   };
   // A shown Delete button goes away when you do anything else.
   useEffect(()=>{
@@ -2189,7 +2207,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             const card=task=>(
               <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} entering={newAnim===task.id} dragging={dragId===task.id}
                 dropEdge={drop?.id===String(task.id)?(drop.before?"top":"bottom"):null} canReorder={canReorder}
-                onDown={onCardDown} onGrip={gripDown} onMenu={openMenu} onWheelSwipe={onWheelSwipe} swipeX={swipeId===task.id?swipeX:0} glide={glide}
+                onDown={onCardDown} onGrip={gripDown} onMenu={openMenu} onWheelSwipe={onWheelSwipe} swipeX={swipeId===task.id?swipeX:0} layer={swipeLayer?.id===task.id?swipeLayer.dir:null}
                 revealed={revealId===task.id} onRevealDelete={id=>{ setRevealId(null); deleteTask(id); }} canDelete={canDeleteFn?canDeleteFn(task):true} canEdit={canEditFn?canEditFn(task):true} inMyDay={isInMyDay?.(task)} onToggleMyDay={onToggleMyDay} myEmail={myEmail}/>
             );
             return (<>
@@ -2349,7 +2367,7 @@ function TaskReadOnly({task,T,cats,onClose,ownerNick}) {
   );
 }
 
-function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,dropEdge=null,canReorder=true,onDown,onGrip,onMenu,onWheelSwipe,swipeX:liveX=0,glide=false,revealed=false,onRevealDelete,canDelete=true,canEdit=true,inMyDay=false,onToggleMyDay,myEmail}) {
+function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTarget,dropEdge=null,canReorder=true,onDown,onGrip,onMenu,onWheelSwipe,swipeX:liveX=0,layer=null,revealed=false,onRevealDelete,canDelete=true,canEdit=true,inMyDay=false,onToggleMyDay,myEmail}) {
   // Where the card sits: following a swipe, or parked open on its Delete button.
   const swipeX=liveX!==0?liveX:(revealed?-92:0);
   const assignees=assigneesOf(task);
@@ -2362,21 +2380,21 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
   return (
     <div data-reveal-for={revealed?task.id:undefined} style={{position:"relative",borderRadius:11,overflow:"hidden"}}>
     {dropEdge&&<div style={{position:"absolute",left:4,right:4,[dropEdge]:0,height:3,borderRadius:2,background:T.accent,boxShadow:`0 0 8px ${T.accent}`,zIndex:6,pointerEvents:"none"}}/>}
-    {revealed&&liveX===0&&(
+    {revealed&&liveX===0&&!layer&&(
       <div style={{position:"absolute",top:0,bottom:0,right:0,width:92,display:"flex",alignItems:"center",justifyContent:"center",background:T.danger,zIndex:1}}>
         <button onClick={e=>{ e.stopPropagation(); onRevealDelete?.(task.id); }} style={{background:"none",border:"none",color:"#fff",cursor:"pointer",fontSize:12,fontWeight:800,display:"flex",flexDirection:"column",alignItems:"center",gap:2,fontFamily:"'DM Sans',sans-serif"}}>
           <Ico n="trash" s={16} c="#fff"/>Delete
         </button>
       </div>
     )}
-    {swipeX>0&&(
+    {(liveX>0||layer==="right")&&(
       <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",gap:6,paddingLeft:16,background:`linear-gradient(90deg,${T.warning}44,transparent)`,color:T.warning,fontWeight:700,fontSize:12,pointerEvents:"none"}}>
-        <Ico n="sun" s={16} c={T.warning}/>{glide?(swipeX>=90?"My Day ☀️ ✓":"My Day"):swipeX>=95?"Release for My Day ☀️ · move ↕ too to drag":swipeX>60?"Release for My Day ☀️":"My Day"}
+        <Ico n="sun" s={16} c={T.warning}/>{layer?"My Day":swipeX>=95?"Release for My Day ☀️ · move ↕ too to drag":swipeX>60?"Release for My Day ☀️":"My Day"}
       </div>
     )}
-    {swipeX<0&&!(revealed&&liveX===0)&&(
+    {(liveX<0||layer==="left")&&(
       <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"flex-end",gap:6,paddingRight:16,background:`linear-gradient(270deg,${T.danger}44,transparent)`,color:T.danger,fontWeight:700,fontSize:12,pointerEvents:"none"}}>
-        {glide?"Delete":swipeX<=-95?"Release to delete 🗑 · move ↕ too to drag":swipeX<-60?"Release to delete 🗑":"Delete"}<Ico n="trash" s={16} c={T.danger}/>
+        {layer?"Delete":swipeX<=-95?"Release to delete 🗑 · move ↕ too to drag":swipeX<-60?"Release to delete 🗑":"Delete"}<Ico n="trash" s={16} c={T.danger}/>
       </div>
     )}
     <div className={entering?"te":""} data-task-id={task.id}
@@ -2384,7 +2402,7 @@ function TCard({task,T,cats,onToggle,onDelete,onSel,sel,entering,dragging,dropTa
       onContextMenu={onMenu?e=>onMenu(e,task):undefined}
       onWheel={onWheelSwipe?e=>onWheelSwipe(e,task.id):undefined}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)} onClick={()=>onSel(task)}
-      style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:swipeX!==0?T.bg:(sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent"),border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:liveX!==0?(glide?"transform .09s ease-out":"none"):"all .16s ease-out",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:swipeX!==0?`translateX(${swipeX}px)`:dragging?"scale(.98)":"scale(1)",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none",touchAction:"pan-y"}}>
+      style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:11,background:(swipeX!==0||layer)?T.bg:(sel?T.accentGlow:dragging?"rgba(192,132,252,.06)":hov?"rgba(255,255,255,0.04)":"transparent"),border:`1px solid ${dropTarget?T.accent:sel?T.accent+"44":T.border}`,cursor:"pointer",transition:liveX!==0?"none":"all .16s ease-out",position:"relative",opacity:task.done?.5:dragging?.4:1,transform:swipeX!==0?`translateX(${swipeX}px)`:dragging?"scale(.98)":"scale(1)",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none",touchAction:"pan-y"}}>
       {task.color&&<div style={{position:"absolute",left:0,top:8,bottom:8,width:3,borderRadius:2,background:task.color}}/>}
       {onGrip&&<div data-grip onPointerDown={e=>onGrip(e,task.id)} onClick={e=>e.stopPropagation()} title={canReorder?"Drag to reorder":"Switch the sort to “My order” to drag tasks around"} style={{color:T.textMuted,opacity:canReorder?(hov?.7:.35):.12,transition:"opacity .15s",flexShrink:0,alignSelf:"center",cursor:"grab",padding:"6px 2px",margin:"-6px 0",paddingLeft:task.color?4:2,touchAction:"none"}}><Ico n="grip" s={16} c={T.textMuted}/></div>}
       <button onClick={e=>{e.stopPropagation();if(canEdit)onToggle(task.id);}} title={canEdit?undefined:"View only"} style={{width:19,height:19,borderRadius:5,opacity:canEdit?1:.45,border:`2px solid ${task.done?T.success:qColor||T.border}`,background:task.done?T.success:"transparent",cursor:"pointer",flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s"}}>
