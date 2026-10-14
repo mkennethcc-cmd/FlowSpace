@@ -99,6 +99,11 @@ alter table public.messages alter column recipient_email drop not null;
 -- Private assignment: hidden from the rest of the list, visible to the assignee
 alter table public.tasks add column if not exists assign_private boolean default false;
 
+-- When a task was ticked off, so "Completed" lists the most recent first. Empty for older tasks.
+alter table public.tasks add column if not exists done_at timestamptz;
+-- Which part of My Day a task sits in: 'morning', 'afternoon' or 'evening'. Empty = decided by its time.
+alter table public.tasks add column if not exists myday_part text;
+
 -- View-only sharing: they see the list, they can't change it. Older rows have no value → editable.
 alter table public.folder_shares add column if not exists can_edit boolean default true;
 

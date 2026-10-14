@@ -1,5 +1,11 @@
 import { supabase } from "./supabase";
 
+// Older messages can carry an address with capitals or a stray space. Folded here, so one person is always
+// one conversation — never a nickname in one row and the same email in another.
+export const normMessage = m => ({ ...m,
+  sender_email: String(m.sender_email || "").trim().toLowerCase(),
+  recipient_email: m.recipient_email ? String(m.recipient_email).trim().toLowerCase() : m.recipient_email });
+
 // "YYYY-MM-DD" in the device's own time zone. A timestamp's UTC date is a day ahead every evening in New York.
 const localDay = ts => { if (!ts) return ""; const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 
@@ -13,7 +19,25 @@ export const fromDbTask = r => ({
   attachments: r.attachments || [], owner: r.user_id,
   position: r.position != null ? r.position : (r.created_at ? new Date(r.created_at).getTime() : Date.now()),
   mydayDate: r.myday_date ? String(r.myday_date).slice(0, 10) : null,
+  doneAt: r.done_at || null,                 // when it was ticked off — orders the Completed section
+  mydayPart: r.myday_part || null,           // "morning" | "afternoon" | "evening" in My Day
 });
+
+// Columns added to tasks after an account's database was first set up. Until supabase/setup.sql has been
+// run, the database rejects them — so they are dropped from that write and the rest of it still saves
+// (the task is still ticked off; only the time it was ticked isn't kept). Learned once per session.
+const LATE_TASK_COLS = ["done_at", "myday_part"];
+const missingTaskCols = new Set();
+const withoutMissing = row => { const r = { ...row }; for (const c of missingTaskCols) delete r[c]; return r; };
+async function writeTask(send, row) {
+  let r = withoutMissing(row), res = await send(r);
+  for (let i = 0; i < LATE_TASK_COLS.length && res.error; i++) {
+    const col = LATE_TASK_COLS.find(c => !missingTaskCols.has(c) && (res.error.message || "").includes(c));
+    if (!col) break;
+    missingTaskCols.add(col); r = withoutMissing(r); res = await send(r);
+  }
+  return res;
+}
 
 // Canonical icons for the built-in folders. Used to heal old accounts whose rows
 // predate the icon feature (they were stamped with a placeholder). Keep in sync with App's DEFAULT_CATS.
@@ -65,7 +89,7 @@ export const db = {
     return (data || []).map(fromDbTask);
   },
   async insertTask(t, uid) {
-    const { error } = await supabase.from("tasks").insert({
+    const { error } = await writeTask(row => supabase.from("tasks").insert(row), {
       id: t.id, user_id: uid, title: t.title, done: t.done,
       priority: t.priority, tag: t.tag, due: t.due || null,
       starred: t.starred, notes: t.notes || "", color: t.color || null,
@@ -74,6 +98,7 @@ export const db = {
       attachments: t.attachments || [], position: t.position != null ? t.position : Date.now(),
       myday_date: t.mydayDate || null, time_end: t.endTime || null,
       assigned_to: t.assignedTo || null, assign_private: !!t.assignPrivate,
+      done_at: t.doneAt || null, myday_part: t.mydayPart || null,
     });
     if (error) throw error;
   },
@@ -90,10 +115,12 @@ export const db = {
     if (p.attachments !== undefined) u.attachments = p.attachments;
     if (p.position !== undefined) u.position = p.position;
     if (p.mydayDate !== undefined) u.myday_date = p.mydayDate || null;
+    if (p.doneAt !== undefined) u.done_at = p.doneAt || null;
+    if (p.mydayPart !== undefined) u.myday_part = p.mydayPart || null;
     if (!Object.keys(u).length) return { saved: true };
     // A write the database refuses does NOT throw — it simply matches no rows. Ask for the changed
     // row back so a silently-dropped edit can be reported instead of lingering on screen as a lie.
-    const { data, error } = await supabase.from("tasks").update(u).eq("id", id).select("id");
+    const { data, error } = await writeTask(row => Object.keys(row).length ? supabase.from("tasks").update(row).eq("id", id).select("id") : Promise.resolve({ data: null, error: null }), u);
     if (error) throw error;
     return { saved: !Array.isArray(data) || data.length > 0 };
   },
@@ -238,7 +265,7 @@ export const db = {
   async loadMessages() {
     const { data, error } = await supabase.from("messages").select("*").order("created_at", { ascending: true });
     if (error) throw error;
-    return data || [];
+    return (data || []).map(normMessage);
   },
   async sendMessage(senderId, senderEmail, recipientEmail, body, groupId) {
     const { data, error } = await supabase.from("messages").insert({

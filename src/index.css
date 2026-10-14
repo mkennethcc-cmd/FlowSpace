@@ -10,6 +10,9 @@ body {
   padding-right: env(safe-area-inset-right);
 }
 body { overflow: hidden; }
+/* Two fingers sideways on a Mac trackpad means "browser back" unless the page claims the gesture.
+   Freely uses it (sidebar, delete, My Day), so the browser must not navigate away on it. */
+html, body { overscroll-behavior-x: none; }
 
 /* Prevent iOS Safari from auto-zooming when focusing an input (it zooms when font-size < 16px and never zooms back out). */
 @media (max-width: 640px) {

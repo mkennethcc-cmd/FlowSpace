@@ -22,6 +22,20 @@ export async function run(report, section) {
   const seed = rows => { store.tables = { notes: rows.map(r => ({ id: r.id, title: r.title, body: r.body, pinned: false, color: r.color, drawing: null, task_id: null, user_id: U })) }; store.failAt = null; };
   const titles = () => store.tables.notes.map(n => n.title).sort().join(", ");
 
+  section("Saving tasks on a database that is one step behind");
+  {
+    // Freely was pushed before supabase/setup.sql was run: done_at and myday_part don't exist yet.
+    store.tables = { tasks: [] }; store.failAt = null; store.missingCols = ["done_at", "myday_part"];
+    const t = { id: "t1", title: "Pay rent", done: false, priority: "medium", tag: null, due: null, starred: false, notes: "", subtasks: [], attachments: [], position: 1, mydayPart: "evening" };
+    let err = null;
+    try { await db.insertTask(t, U); } catch (e) { err = e; }
+    report(!err && store.tables.tasks.length === 1, "a new task failed to save because a newer column was missing: " + (err && err.message));
+    const res = await db.updateTask("t1", { done: true, doneAt: "2026-09-16T10:00:00Z" });
+    report(res.saved && store.tables.tasks[0].done === true, "ticking a task off was lost because done_at doesn't exist yet");
+    report(!("done_at" in store.tables.tasks[0]), "a column the database doesn't have was written anyway");
+    store.missingCols = [];
+  }
+
   section("Sync — notes, lists, habits");
   seed([note("a", "Groceries"), note("b", "Ideas")]);
   {

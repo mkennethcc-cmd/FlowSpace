@@ -151,6 +151,90 @@ export const reorderPosition = (list, fromId, toId, before) => {
   return (pos(nb) + pos(to)) / 2;
 };
 
+// My Day comes in three parts. A task you placed yourself stays where you put it; otherwise its time
+// decides (before noon = morning, before 5pm = afternoon); with neither, it's in the morning.
+export const DAY_PARTS = ["morning", "afternoon", "evening"];
+export const dayPartOfTime = hm => {
+  if (!hm) return null;
+  const h = parseInt(String(hm).split("T").pop().split(":")[0], 10);
+  return isNaN(h) ? null : h < 12 ? "morning" : h < 17 ? "afternoon" : "evening";
+};
+export const partNow = (d = new Date()) => dayPartOfTime(String(d.getHours()));
+export const partOfTask = (t, chosen) => (DAY_PARTS.includes(chosen) ? chosen : null) || dayPartOfTime(t && t.remindAt) || "morning";
+// Completed work, most recently finished first. Tasks finished before the time was recorded follow, in
+// their list order.
+export const byRecentlyDone = (a, b) => (b.doneAt || "").localeCompare(a.doneAt || "") || ((b.position || 0) - (a.position || 0));
+
+// ── Combining a fresh load with what's on screen (notes, canvas, habits, lists) ─────────────────────────
+// `base` is what this device last knew the server had; `local` is what's on screen; `server` is the fresh
+// load. Decided row by row: a row you changed here (or added) is yours and wins; a row you didn't touch
+// takes the server's copy, which may be newer from another device; a row gone from the server that you
+// didn't touch was deleted elsewhere; a row you deleted here stays deleted; a row that's new on the server
+// is added. Before 2026-10 this was decided for the whole list at once, so changing ONE note offline kept
+// this device's old copy of every other note — rolling back edits made on another device meanwhile.
+export const mergeLoaded = (base, local, server) => {
+  if (local === base) return server;                                  // nothing touched here: the server's copy
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  if (Array.isArray(server)) {
+    const key = x => String(x.id);
+    const B = new Map((base || []).map(x => [key(x), x])), L = new Set((local || []).map(key)), S = new Map(server.map(x => [key(x), x]));
+    const out = [];
+    for (const x of local || []) {
+      const k = key(x);
+      if (!B.has(k) || !same(B.get(k), x)) out.push(x);             // added or edited here
+      else if (S.has(k)) out.push(S.get(k));                          // untouched here → the server's copy
+    }
+    for (const x of server) if (!L.has(key(x)) && !B.has(key(x))) out.push(x);   // new on another device
+    return out;
+  }
+  const out = {}, b = base || {};
+  for (const [k, v] of Object.entries(local || {})) {
+    if (!(k in b) || !same(b[k], v)) out[k] = v;
+    else if (k in server) out[k] = server[k];
+  }
+  for (const [k, v] of Object.entries(server)) if (!(k in (local || {})) && !(k in b)) out[k] = v;
+  return out;
+};
+
+// ── Offline: task changes waiting to be sent ──────────────────────────────────────────────────────────
+// A queue of {kind:"insert", id, task, owner} · {kind:"update", id, patch} · {kind:"delete", id}, sent in
+// order once there's a connection. Adding to it folds changes to the same task together, so a task made
+// and edited ten times offline is one insert when the signal returns — and one made and deleted offline
+// is nothing at all, since the server never knew about it.
+export const queueOp = (queue, op) => {
+  const q = [...(queue || [])], same = o => String(o.id) === String(op.id);
+  if (op.kind === "update") {
+    const ins = q.findIndex(o => o.kind === "insert" && same(o));
+    if (ins >= 0) { q[ins] = { ...q[ins], task: { ...q[ins].task, ...op.patch } }; return q; }
+    const up = q.findIndex(o => o.kind === "update" && same(o));
+    if (up >= 0) { q[up] = { ...q[up], patch: { ...q[up].patch, ...op.patch } }; return q; }
+    return [...q, op];
+  }
+  if (op.kind === "delete") {
+    const hadInsert = q.some(o => o.kind === "insert" && same(o));
+    const rest = q.filter(o => !(same(o) && (o.kind === "update" || o.kind === "insert")));
+    return hadInsert ? rest : [...rest, op];
+  }
+  return [...q, op];
+};
+// The server's list with everything still waiting laid over it, so a reload — or a load that lands before
+// the queue is sent — never shows a task you deleted coming back, or an edit you made undone.
+export const applyQueued = (tasks, queue) => {
+  let out = [...(tasks || [])];
+  for (const o of queue || []) {
+    const i = out.findIndex(t => String(t.id) === String(o.id));
+    if (o.kind === "insert") { if (i < 0) out = [o.task, ...out]; else out[i] = { ...out[i], ...o.task }; }
+    else if (o.kind === "update") { if (i >= 0) out[i] = { ...out[i], ...o.patch }; }
+    else if (o.kind === "delete") { if (i >= 0) out.splice(i, 1); }
+  }
+  return out;
+};
+// No connection, as opposed to the server saying no. Only these are worth waiting and retrying for.
+export const isNetworkError = e => {
+  const m = String((e && (e.message || e.details || e.hint)) || e || "");
+  return /failed to fetch|networkerror|network request failed|load failed|fetch failed|network error|timed? ?out|ERR_INTERNET|ERR_NETWORK|ECONNREFUSED|ENOTFOUND|offline/i.test(m);
+};
+
 // Which sort a view uses: your choice for that particular list if you made one, otherwise My Day is hand-
 // arranged (that's what a day plan is) and everything else falls back to your last overall choice.
 export const sortFor = (view, sorts, fallback) =>
@@ -160,6 +244,30 @@ export const shareCovers = (share, t) =>
   share.owner_id === t.owner && (share.folder === t.tag || (share.folder === UPCOMING_SHARE && !!t.due));
 // A share can be given an end date. Once it passes the share grants nothing — the same rule the database
 // applies, so the screen and the server always agree about what someone may still do.
+// One spelling per person. "Sam@Example.com " and "sam@example.com" are the same inbox, and treating them
+// as two strings is what made one person appear twice — once under their nickname, once as a bare email.
+export const normEmail = e => String(e || "").trim().toLowerCase();
+export const isEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || "").trim());
+// A list of addresses with every spelling folded together, blanks and non-addresses dropped, order kept.
+export const uniquePeople = (list, exclude = []) => {
+  const skip = new Set(exclude.map(normEmail)), seen = new Set(), out = [];
+  for (const e of list || []) { const n = normEmail(e); if (!isEmail(n) || skip.has(n) || seen.has(n)) continue; seen.add(n); out.push(n); }
+  return out;
+};
+// What someone typed where an address goes: an email as-is, or a saved nickname turned back into its email.
+export const resolvePerson = (raw, contacts = {}) => {
+  const t = String(raw || "").trim(); if (!t) return null;
+  if (isEmail(t)) return normEmail(t);
+  const hit = Object.entries(contacts).find(([, nick]) => nick && nick.trim().toLowerCase() === t.toLowerCase());
+  return hit ? normEmail(hit[0]) : null;
+};
+// Nickname book with its keys folded the same way, so a nickname saved against "Sam@x.com" still applies.
+export const foldContacts = c => {
+  const out = {};
+  for (const [k, v] of Object.entries(c || {})) { const n = normEmail(k); if (!n) continue; if (!(n in out) || (!out[n] && v)) out[n] = v || ""; }
+  return out;
+};
+
 export const shareActive = (s, now = Date.now()) => {
   if (!s || !s.expires_at) return true;
   const t = new Date(s.expires_at).getTime();
@@ -377,7 +485,9 @@ export const tidyTitle=s=>s.replace(/[•*·]/g," ").replace(/\(\s*\)|\[\s*\]|\{
   .replace(/\b(on|at|by|from|in|due)\s*([,.]|$)/gi,"$2").replace(/\s{2,}/g," ").replace(/^[\s,;:.\-–—]+|[\s,;:.\-–—]+$/g,"").trim();
 // Labelled fields in a pasted blurb ("Club Fest · Dates: … · Time: …"). Pasting into an input flattens
 // the newlines, so we split on the labels themselves rather than on line breaks.
-export const FIELD_RE=/\s*[•*\-–—]?\s*\b(dates?|time|times|when|hours?|location|where|place|venue|room|cost|price|rsvp|contact|notes?|details?|info)\s*:\s*/gi;
+export const FIELD_RE=/\s*[•*\-–—]?\s*\b(date\s*(?:&|and|\/)\s*time|dates?|times?|when|hours?|starts?|begins?|what|event|location|where|place|venue|room|cost|price|rsvp|contact|notes?|details?|info)\s*:\s*/gi;
+// Which labels hold what. A listing can put the date in any of these, so all of them are searched.
+const DATE_LAB=/^(dates?|date\s*(?:&|and|\/)\s*time)$/, TIME_LAB=/^(times?|when|hours?|starts?|begins?)$/, NAME_LAB=/^(what|event)$/;
 
 export const parseNL = raw => {
   // Pasted listings carry exotic punctuation: zero-width spaces, and dashes that aren't the plain hyphen
@@ -388,27 +498,45 @@ export const parseNL = raw => {
     .replace(/[‐-―−⁃﹘﹣－]/g,"-")
     .replace(/[\r\n]+/g," • ").trim(), fixes);
 
-  // ── Structured paste: title first, then "Dates:" / "Time:" / "Location:" fields ──
+  // ── Structured paste: "Club Fest · Date: … · Time: … · Location: …" ──
+  // Event listings put the date wherever they like: a "Date:" field, a "When:" field ("When: Monday,
+  // October 19, 10:00 a.m.–3:00 p.m. ET"), the opening sentence, or tacked onto the location. So every
+  // one of them is searched, in that order, and within each piece digits are read before the clock, so
+  // "10/19" or "2026-10-19" can never be taken for a time. (Until 2026-10 a date inside "When:" was never
+  // looked for at all — only its time was — and the date of a pasted event was silently dropped.)
   const segs=[]; let last=0, lab=null, mm; FIELD_RE.lastIndex=0;
-  while((mm=FIELD_RE.exec(src))!==null){ segs.push({lab,text:src.slice(last,mm.index)}); lab=mm[1].toLowerCase(); last=FIELD_RE.lastIndex; }
+  while((mm=FIELD_RE.exec(src))!==null){ segs.push({lab,text:src.slice(last,mm.index)}); lab=mm[1].toLowerCase().replace(/\s+/g," "); last=FIELD_RE.lastIndex; }
   segs.push({lab,text:src.slice(last)});
-  if(segs.length>1 && segs[0].text.trim()){
-    const pick=re=>segs.filter(s=>s.lab&&re.test(s.lab)).map(s=>s.text).join(" ").trim();
-    const dateTxt=pick(/^dates?$/), timeTxt=pick(/^(times?|when|hours?)$/);
-    let titleTxt=segs[0].text, time=null, endTime=null, due=null, spanEnd=null;
-    if(timeTxt){ const r=grabTime(timeTxt); time=r.time; endTime=r.endTime; }
-    else { const r=grabTime(titleTxt); time=r.time; endTime=r.endTime; titleTxt=r.rest; }
-    if(dateTxt){
-      const n1=grabNumericDate(dateTxt); const d1=n1.due?n1:grabDate(dateTxt); due=d1.due;
-      if(due){ // "Sept 14 – Sept 17" or "Sept 14–17" → remember the closing day
-        const d2=grabDate(d1.rest,{allowRelative:false});
-        if(d2.due&&d2.due>due) spanEnd=d2.due;
-        else { const dm=d1.rest.match(/^\s*(?:[-–—]|to|through|thru|until)\s*(\d{1,2})(?!\d)/i);
-               if(dm&&d1.mon!=null){ const dd=+dm[1]; if(dd>d1.day&&dd<=31) spanEnd=ymd(new Date(d1.yr,d1.mon,dd)); } }
-      }
-    } else { const n=grabNumericDate(titleTxt); if(n.due){ due=n.due; titleTxt=n.rest; } else { const r=grabDate(titleTxt); due=r.due; titleTxt=r.rest; } }
-    const extra=segs.filter(s=>s.lab&&!/^(dates?|times?|when|hours?)$/.test(s.lab)&&s.text.trim())
-      .map(s=>`${s.lab.charAt(0).toUpperCase()+s.lab.slice(1)}: ${unfix(tidyTitle(s.text),fixes)}`).join("\n");
+  const hasWhen=segs.some(sg=>sg.lab&&(DATE_LAB.test(sg.lab)||TIME_LAB.test(sg.lab)));
+  // A paste that opens with "When:" is still a listing; one that opens with "Note:" is a sentence.
+  if(segs.length>1 && (segs[0].text.trim()||hasWhen)){
+    const pick=re=>segs.filter(sg=>sg.lab&&re.test(sg.lab)).map(sg=>sg.text).join(" ").trim();
+    const dateTxt=pick(DATE_LAB), timeTxt=pick(TIME_LAB);
+    let titleTxt=segs[0].text.trim()?segs[0].text:pick(NAME_LAB);
+    const findDate=(txt,rel=true)=>{ const n=grabNumericDate(txt); return n.due?n:grabDate(txt,{allowRelative:rel}); };
+    let due=null, spanEnd=null, d1=null, dateRest=dateTxt, timeRest=timeTxt;
+    if(dateTxt){ d1=findDate(dateTxt); if(d1.due) dateRest=d1.rest; }
+    if(!d1?.due&&timeTxt){ const w=findDate(timeTxt); if(w.due){ d1=w; timeRest=w.rest; } }
+    if(d1?.due){
+      due=d1.due;
+      // "Sept 14 – Sept 17" or "Sept 14–17" → remember the closing day
+      const d2=grabDate(d1.rest,{allowRelative:false});
+      if(d2.due&&d2.due>due) spanEnd=d2.due;
+      else { const dm=d1.rest.match(/^\s*(?:[-–—]|to|through|thru|until)\s*(\d{1,2})(?!\d)/i);
+             if(dm&&d1.mon!=null){ const dd=+dm[1]; if(dd>d1.day&&dd<=31) spanEnd=ymd(new Date(d1.yr,d1.mon,dd)); } }
+    }
+    // The clock: the time field first, then whatever the date field had left over, then the sentence.
+    let time=null, endTime=null;
+    for(const piece of [timeRest,dateRest]){ if(!piece) continue; const r=grabTime(piece); if(r.time){ time=r.time; endTime=r.endTime; break; } }
+    if(!due){ const n=grabNumericDate(titleTxt); if(n.due){ due=n.due; titleTxt=n.rest; } }
+    if(!time){ const r=grabTime(titleTxt); time=r.time; endTime=r.endTime; titleTxt=r.rest; }
+    if(!due){ const r=grabDate(titleTxt); due=r.due; titleTxt=r.rest; }
+    // Last resort: a calendar date written into another field ("Location: Kimmel Center, Oct 30").
+    // Only an explicit date counts here — "3rd floor" in a location is not the 3rd of the month.
+    const others=segs.filter(sg=>sg.lab&&!DATE_LAB.test(sg.lab)&&!TIME_LAB.test(sg.lab)&&!NAME_LAB.test(sg.lab)).map(sg=>({...sg}));
+    if(!due) for(const sg of others){ const r=findDate(sg.text,false); if(r.due){ due=r.due; sg.text=r.rest; break; } }
+    const extra=others.filter(sg=>sg.text.trim())
+      .map(sg=>`${sg.lab.charAt(0).toUpperCase()+sg.lab.slice(1)}: ${unfix(tidyTitle(sg.text),fixes)}`).join("\n");
     return {title:unfix(tidyTitle(titleTxt),fixes)||String(raw).trim(), due, time, endTime, spanEnd, extra, recurring:null};
   }
 

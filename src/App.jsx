@@ -1,13 +1,16 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { supabase } from "./supabase";
-import { db, fromDbTask } from "./db";
+import { db, fromDbTask, normMessage } from "./db";
 import AuthScreen, { SignupSuccess, ResetPassword } from "./AuthScreen";
 import { saveWidgetSnapshot } from "./native";
+import { createOutbox, readOutbox } from "./outbox";
 import {
   stripListName, matchListName, guessCat, ymd, tod, addDays, DUE_TBD, isTbd,
   dueKey, fmtDate, fmtClock, parseNL, cleanTitle, titleEditPatch, guessIcon, nextDue,
   mergeGami, gamiRowDiffers, moveDuePatch, whenPatch, inUpcoming, UPCOMING_SHARE, shareLabel, shareCovers,
   edgeScrollStep, reorderPosition, sortFor, rightsFor, shareActive, shareEndLabel,
+  normEmail, uniquePeople, resolvePerson, foldContacts,
+  DAY_PARTS, partNow, partOfTask, byRecentlyDone, applyQueued, isNetworkError, mergeLoaded,
 } from "./logic";
 
 const FontLink = () => (
@@ -190,8 +193,8 @@ const SYS_MARK = "⁣sys⁣";
 // Nicknames for people, kept on the device AND in your synced preferences, so a name you give someone on
 // the laptop shows on the phone too. Every screen that edits them goes through useContacts, and the
 // "fs-contacts" event tells the others (and App, which saves them) that they changed.
-const readContacts = () => { try { return JSON.parse(localStorage.getItem("fs_contacts") || "{}"); } catch { return {}; } };
-const writeContacts = c => { try { localStorage.setItem("fs_contacts", JSON.stringify(c || {})); } catch {} window.dispatchEvent(new Event("fs-contacts")); };
+const readContacts = () => { try { return foldContacts(JSON.parse(localStorage.getItem("fs_contacts") || "{}")); } catch { return {}; } };
+const writeContacts = c => { try { localStorage.setItem("fs_contacts", JSON.stringify(foldContacts(c))); } catch {} window.dispatchEvent(new Event("fs-contacts")); };
 function useContacts() {
   const [c, setC] = useState(readContacts);
   useEffect(() => { const f = () => setC(readContacts()); window.addEventListener("fs-contacts", f); return () => window.removeEventListener("fs-contacts", f); }, []);
@@ -220,7 +223,7 @@ function CopyMail({ email, T, onDone }) {
   );
 }
 // Display a person by their saved nickname (fs_contacts) when there is one, else their email.
-const nickOf = email => { if(!email) return ""; try{ const c=JSON.parse(localStorage.getItem("fs_contacts")||"{}"); return (c[email]&&c[email].trim())||email; }catch{ return email; } };
+const nickOf = email => { if(!email) return ""; const c=readContacts(), k=normEmail(email); return (c[k]&&c[k].trim())||email; };
 const initialOf = email => (nickOf(email)||"?").trim().charAt(0).toUpperCase();
 // Stable-ish color for an avatar from the email string.
 const AVATAR_COLORS = ["#c084fc","#818cf8","#fda4af","#6ee7b7","#fcd34d","#93c5fd","#fb7185","#14b8a6"];
@@ -429,6 +432,13 @@ export default function Freely() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  // Is there a connection, and how many task changes are waiting for one? Drives the small status pill.
+  const [online, setOnline] = useState(()=>typeof navigator==="undefined"||navigator.onLine!==false);
+  const [pendingOps, setPendingOps] = useState(0);
+  useEffect(()=>{ const up=()=>setOnline(true), down=()=>setOnline(false);
+    window.addEventListener("online",up); window.addEventListener("offline",down);
+    return ()=>{ window.removeEventListener("online",up); window.removeEventListener("offline",down); }; },[]);
+  const outboxRef = useRef(null);
   const [tasks, setTasks] = useState([]);
   const [ownedShares, setOwnedShares] = useState([]);
   const [taskShares, setTaskShares] = useState([]);        // single tasks other people handed to me
@@ -467,7 +477,10 @@ export default function Freely() {
   const [sortBy, setSortBy] = useState(()=>{ try{ const v=JSON.parse(localStorage.getItem("fs_sorts")||"{}"); return v&&typeof v==="object"&&!Array.isArray(v)?v:{}; }catch{ return {}; } });
   useEffect(()=>{ try{ localStorage.setItem("fs_sorts",JSON.stringify(sortBy)); }catch{} },[sortBy]);
   // New tasks join the END of the list, the way a to-do list is normally written. Settings can flip it back.
-  const [newAtBottom, setNewAtBottom] = useState(()=>localStorage.getItem("fs_new_bottom")!=="0");
+  // New work goes on top. It went to the bottom by default for a while; that's switched back once for
+  // everyone (fs_new_top_v2) — stamped as a fresh preference change, so a device that hasn't updated yet
+  // can't sync the old setting back — and anyone who wants the bottom can still choose it in Settings.
+  const [newAtBottom, setNewAtBottom] = useState(()=>{ try{ if(!localStorage.getItem("fs_new_top_v2")){ localStorage.setItem("fs_new_top_v2","1"); localStorage.setItem("fs_prefs_at",String(Date.now())); return false; } return localStorage.getItem("fs_new_bottom")==="1"; }catch{ return false; } });
   useEffect(()=>{ try{ localStorage.setItem("fs_new_bottom",newAtBottom?"1":"0"); }catch{} },[newAtBottom]);
   const prefsAtRef = useRef(Number(localStorage.getItem("fs_prefs_at")||0));
   useEffect(()=>{ try{ localStorage.setItem("fs_hidden_tabs",JSON.stringify(hiddenTabs)); }catch{} },[hiddenTabs]);
@@ -578,20 +591,15 @@ export default function Freely() {
   useEffect(()=>{ scheduleSave("cats"); },[cats]);
   // Everything waiting to save goes now; anything already saving finishes first.
   const flushSaves=()=>Promise.all(Object.keys(SAVERS).map(n=>saveTimerRef.current[n]?runSave(n):(saveChainRef.current[n]||Promise.resolve())));
-  // Combine a fresh load with what's on screen. If nothing was touched here since the load began, the
-  // server's copy is simply shown. Otherwise: this device's edits win, rows that only exist on the server
-  // (added on another device) are kept, and rows deleted here stay deleted.
-  const mergeLoaded=(start,local,server)=>{
-    if(local===start) return server;
-    if(Array.isArray(server)){ const had=new Set((start||[]).map(x=>String(x.id))), mine=new Set(local.map(x=>String(x.id)));
-      return [...local,...server.filter(x=>!mine.has(String(x.id))&&!had.has(String(x.id)))]; }
-    const out={...local}; for(const k of Object.keys(server)) if(!(k in local)&&!(start&&k in start)) out[k]=server[k]; return out;
-  };
+  // Combining a fresh load with what's on screen: mergeLoaded in logic.js, decided row by row.
   const loadAll=async initial=>{
     const u=userRef.current; if(!u) return;
     clearTimeout(reloadTimerRef.current);
-    if(!initial) await flushSaves();
-    const start={...latestRef.current};
+    if(!initial){ await flushSaves(); await outboxRef.current?.flush(); }
+    // The first load after opening from the device's copy merges against what the server last confirmed,
+    // so changes made offline in an earlier session are kept rather than replaced (see hydrateStartRef).
+    const start={...latestRef.current,...(initial?hydrateStartRef.current:null)};
+    hydrateStartRef.current=null;
     if(initial) setSyncing(true);
     const [t,c,n,h,k,os,sm,ots,ts]=await Promise.allSettled([db.loadTasks(),db.loadCanvas(u.id),db.loadNotes(u.id),db.loadHabits(u.id),db.loadCats(u.id),db.loadOwnedShares(u.id),db.loadSharedWithMe(u.email),db.loadOwnedTaskShares(u.id),db.loadTaskShares(u.email)]);
     if(initial) setSyncing(false);
@@ -603,7 +611,7 @@ export default function Freely() {
       // existing account signs in on, just because it happens to have no tasks.
       const newAccount=u.created_at&&Date.now()-new Date(u.created_at).getTime()<86400000;
       if(initial&&!list.length&&newAccount){ try{ if(!localStorage.getItem("fs_seed_"+u.id)){ localStorage.setItem("fs_seed_"+u.id,"1"); list=sampleTasks(u.id); list.forEach(s=>db.insertTask(s,u.id).catch(()=>{})); } }catch{} }
-      setTasks(list); tasksLoadedRef.current=true;
+      setTasks(applyQueued(list,readOutbox(u.id))); tasksLoadedRef.current=true;   // anything not yet sent stays as you left it
     }
     const adopt=(name,res,set)=>{
       if(!ok(res)) return;
@@ -621,22 +629,91 @@ export default function Freely() {
     if(ok(ots)) setOwnedTaskShares(ots.value);
     if(ok(ts)) setTaskShares(ts.value);
     if([t,c,n,h,k].some(r=>!ok(r))){
-      showToast("Couldn't load everything — retrying in a moment…");
-      reloadTimerRef.current=setTimeout(()=>loadAll(false),10000);
+      // No connection is not an error worth a pop-up: the pill says "offline" and the device's copy is shown.
+      const offline=navigator.onLine===false||[t,c,n,h,k].some(r=>!ok(r)&&isNetworkError(r.reason));
+      if(!offline) showToast("Couldn't load everything — retrying in a moment…");
+      reloadTimerRef.current=setTimeout(()=>loadAll(false),offline?20000:10000);
     }
   };
 
+  // The device keeps a copy of everything, so Freely opens — with your data — with no connection at all.
+  const cacheKey=uid=>"fs_cache_"+uid;
+  const hydrateStartRef=useRef(null);
+  const hydrate=u=>{
+    try{
+      const c=JSON.parse(localStorage.getItem(cacheKey(u.id))||"null");
+      if(!c||c.v!==1) return false;
+      const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+      const local={notes:c.notes||[],canvas:c.canvas||[],habits:c.habits||[],cats:c.cats||DEFAULT_CATS};
+      const synced=c.synced||{};
+      setTasks(applyQueued(c.tasks||[],readOutbox(u.id))); tasksLoadedRef.current=true;
+      setNotes(local.notes); setCanvasNotes(local.canvas); setHabits(local.habits); setCats(local.cats);
+      setOwnedShares(c.ownedShares||[]); setSharedWithMe(c.sharedWithMe||[]); setTaskShares(c.taskShares||[]); setOwnedTaskShares(c.ownedTaskShares||[]);
+      if(Array.isArray(c.profRows)) setProfRows(c.profRows);
+      // What the server last confirmed — saving works offline as a diff against it, exactly as online.
+      syncedRef.current={notes:synced.notes??null,canvas:synced.canvas??null,habits:synced.habits??null,cats:synced.cats??null};
+      latestRef.current={...local};
+      // For the first server load: where nothing changed offline, take the server's version; where
+      // something did, merge against the last confirmed copy so the offline change survives.
+      hydrateStartRef.current=Object.fromEntries(Object.keys(local).map(k=>[k,(synced[k]!=null&&!same(local[k],synced[k]))?synced[k]:local[k]]));
+      return true;
+    }catch{ return false; }
+  };
+
   useEffect(()=>{
-    syncedRef.current={notes:null,canvas:null,habits:null,cats:null}; tasksLoadedRef.current=false;
+    syncedRef.current={notes:null,canvas:null,habits:null,cats:null}; tasksLoadedRef.current=false; hydrateStartRef.current=null;
     if(!user){setTasks([]);setCanvasNotes([]);setNotes([]);setHabits([]);setCats(DEFAULT_CATS);setOwnedShares([]);setSharedWithMe([]);setTaskShares([]);setOwnedTaskShares([]);setMessages([]);setSGroups([]);setChatReqs([]);return;}
     db.loadMessages().then(setMessages).catch(()=>{});
     db.loadChatReqs(user.email).then(setChatReqs).catch(()=>{});
     db.loadProfiles().then(rows=>{ setProfRows(rows); try{ localStorage.setItem("fs_avatars",JSON.stringify(Object.fromEntries(rows.map(r=>[r.email,r.avatar||""])))); }catch{} }).catch(()=>{});
     db.upsertProfile(user.id,user.email,myAvatar||undefined).catch(()=>{});
     refreshGroups();
+    hydrate(user);
     loadAll(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[user]);
+
+  // Every task change is queued on the device and sent from there — immediately when there's a
+  // connection, the moment it comes back when there isn't. See outbox.js and queueOp in logic.js.
+  useEffect(()=>{
+    if(!user) return;
+    const send=async op=>{
+      if(op.kind==="insert"){
+        try{ await db.insertTask(op.task,op.owner); }
+        catch(e){ if(/duplicate key|23505|already exists/i.test(e?.message||"")) return; throw e; }   // it did arrive last time; only the reply was lost
+      } else if(op.kind==="update"){
+        const r=await db.updateTask(op.id,op.patch);
+        if(r&&r.saved===false) reportDroppedWrite("That change didn't save — you may not have permission to edit this shared task.");
+      } else if(op.kind==="delete"){
+        const r=await db.deleteTask(op.id);
+        if(r&&r.deleted===false&&!op.retried) reportDroppedWrite("That task didn't delete — you may not have permission to remove it.");
+      }
+    };
+    const rejected=(op,e)=>{
+      const msg=e?.message||String(e);
+      if(op.kind==="insert"){ setTasks(ts=>ts.filter(x=>x.id!==op.id)); showToast(`Couldn't save "${op.task?.title||"a task"}" — ${msg}`); }
+      else reportDroppedWrite(`A change couldn't be saved — ${msg}`);
+    };
+    const ob=createOutbox(user.id,send,{onRejected:rejected,onChange:setPendingOps});
+    outboxRef.current=ob; setPendingOps(ob.pending().length); ob.flush();
+    const back=()=>ob.flush();
+    window.addEventListener("online",back);
+    return ()=>{ ob.stop(); window.removeEventListener("online",back); if(outboxRef.current===ob) outboxRef.current=null; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[user]);
+  const queueTask=op=>{ if(user) outboxRef.current?.add(op); };
+
+  // Keep the device's copy current (a moment after things settle), so the next open — online or not —
+  // starts from exactly what you last saw.
+  useEffect(()=>{
+    if(!user||!tasksLoadedRef.current) return;
+    const h=setTimeout(()=>{
+      try{ localStorage.setItem(cacheKey(user.id),JSON.stringify({v:1,at:Date.now(),tasks,notes,canvas:canvasNotes,habits,cats,
+        synced:syncedRef.current,ownedShares,sharedWithMe,taskShares,ownedTaskShares,profRows})); }catch{}   // a full device just means no offline copy
+    },800);
+    return ()=>clearTimeout(h);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[user,tasks,notes,canvasNotes,habits,cats,ownedShares,sharedWithMe,taskShares,ownedTaskShares,profRows]);
 
   // Leaving the app saves anything pending at once; coming back picks up what other devices changed.
   useEffect(()=>{
@@ -662,6 +739,22 @@ export default function Freely() {
   // "open on your first tab" rule would snap straight back to that tab.
   const navTo=v=>{ viewPickedRef.current=true; setView(v); };
   const goView=v=>{ navTo(v); setSideOpen(false); };
+
+  // Two fingers sideways on a trackpad — the laptop version of swiping the sidebar open or shut. A card
+  // under the fingers has its own meaning for the gesture (delete / My Day), and anything that scrolls
+  // sideways keeps it, so those are left alone.
+  const sideWheelRef=useRef({dx:0,at:0});
+  const sideWheel=e=>{
+    if(Math.abs(e.deltaX)<=Math.abs(e.deltaY)||!e.deltaX) return;
+    const t=e.target;
+    if(t.closest?.("[data-task-id],[data-mnote-id],[data-habit-id],input,textarea,select")) return;
+    for(let el=t; el&&el!==e.currentTarget; el=el.parentElement){ const cs=getComputedStyle(el); if(/auto|scroll/.test(cs.overflowX)&&el.scrollWidth>el.clientWidth+2) return; }
+    const w=sideWheelRef.current, now=Date.now();
+    if(now-w.at>350) w.dx=0;                 // a pause means a new gesture
+    w.at=now; w.dx-=e.deltaX;                // fingers right → positive, like a swipe right
+    if(w.dx>80&&!sideOpen){ w.dx=0; setSideOpen(true); }
+    else if(w.dx<-80&&sideOpen){ w.dx=0; setSideOpen(false); }
+  };
 
   // Swipe anywhere on the sidebar itself: drag right = open, drag left = collapse.
   // The rail is always visible (60px), so it's always grabbable — no fiddly screen-edge needed.
@@ -700,8 +793,8 @@ export default function Freely() {
         // A team has full members (they read the chat) and guests, invited only to assign work to it.
         const withM=gs.map(g=>{ const rows=ms.filter(m=>m.group_id===g.id);
           return {...g,
-            members:rows.filter(r=>(r.role||"member")==="member").map(r=>r.email),
-            guests: rows.filter(r=>r.role==="assigner").map(r=>r.email)}; });
+            members:uniquePeople(rows.filter(r=>(r.role||"member")==="member").map(r=>r.email)),
+            guests: uniquePeople(rows.filter(r=>r.role==="assigner").map(r=>r.email))}; });
         setAllGroups(withM);                                                     // everything I may assign to
         setSGroups(withM.filter(g=>g.members.includes(me)||g.created_by===user.id)); }) // teams I'm really in
       .catch(()=>{});
@@ -718,7 +811,7 @@ export default function Freely() {
       })
       .on("postgres_changes",{event:"*",schema:"public",table:"folder_shares"},()=>{ refreshShares(); db.loadTasks().then(setTasks).catch(()=>{}); })   // a new share brings tasks with it
       .on("postgres_changes",{event:"*",schema:"public",table:"task_shares"},()=>{ refreshShares(); db.loadTasks().then(setTasks).catch(()=>{}); })
-      .on("postgres_changes",{event:"INSERT",schema:"public",table:"messages"},({new:m})=>{ setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,m]); }) // RLS only delivers rows we may see (own DMs + our team chats)
+      .on("postgres_changes",{event:"INSERT",schema:"public",table:"messages"},({new:m})=>{ setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,normMessage(m)]); }) // RLS only delivers rows we may see (own DMs + our team chats)
       .on("postgres_changes",{event:"*",schema:"public",table:"group_members"},()=>{ refreshGroups(); })
       .on("postgres_changes",{event:"*",schema:"public",table:"groups"},()=>{ refreshGroups(); })
       .on("postgres_changes",{event:"*",schema:"public",table:"chat_requests"},()=>{ db.loadChatReqs(user.email).then(setChatReqs).catch(()=>{}); })
@@ -788,15 +881,20 @@ export default function Freely() {
   // ── Creating tasks ────────────────────────────────────────────────────────────────────────────────
   // Every new task is built and saved here, so defaults, placement and failure handling can't drift apart
   // between the different add boxes (list, matrix, calendar, canvas, repeats, duplicates).
-  const newTask=fields=>{
+  // Where something new lands: the top of the list, or the bottom if that's your setting.
+  const edgePosition=()=>{
     const open=tasks.filter(x=>!x.done).map(x=>x.position||0);
+    if(newAtBottom&&open.length) return Math.min(...open)-1000;
+    return Math.max(Date.now(),open.length?Math.max(...open)+1:0);
+  };
+  const newTask=fields=>{
     return {id:crypto.randomUUID(),title:"",done:false,priority:"medium",tag:null,due:null,starred:false,notes:"",color:null,
       subtasks:[],recurring:null,quadrant:null,remindAt:null,endTime:null,attachments:[],assignedTo:null,assignPrivate:false,
-      owner:user?.id,mydayDate:null,position:(newAtBottom&&open.length)?Math.min(...open)-1000:Date.now(),...fields};
+      owner:user?.id,mydayDate:null,mydayPart:null,doneAt:null,position:edgePosition(),...fields};
   };
   const createTask=(t,{xp=true}={})=>{
     setTasks(ts=>[t,...ts]); if(xp) awardXp("add-"+t.id,10);
-    if(user) db.insertTask(t,t.owner||user.id).catch(e=>{ setTasks(ts=>ts.filter(x=>x.id!==t.id)); showToast(`Couldn't save "${t.title}" — ${e.message||e}`); });
+    queueTask({kind:"insert",id:t.id,task:t,owner:t.owner||user?.id});
     return t;
   };
   // "writing essay" → the task "essay" in your Writing list; otherwise the list is guessed from the words.
@@ -811,7 +909,7 @@ export default function Freely() {
   };
   const addTask=()=>{
     const raw=input.trim(); if(!raw) return;
-    const p=parseNL(raw), over={starred:view==="flagged",mydayDate:view==="myday"?todStr:null};
+    const p=parseNL(raw), over={starred:view==="flagged",mydayDate:view==="myday"?todStr:null,mydayPart:view==="myday"&&!p.time?partNow():null};
     if(view.startsWith("cat:")) over.tag=view.slice(4);
     let upcomingView=view==="upcoming";
     if(view.startsWith("shared:")){
@@ -846,7 +944,7 @@ export default function Freely() {
     if(!task) return;
     if(!canEditTask(task)){ showToast("View only — ask the owner for edit access 👀"); return; }
     const done=!task.done;
-    updateTask(id,{done});
+    updateTask(id,{done,doneAt:done?new Date().toISOString():null});   // Completed lists the newest first
     countCompletion(id,done);
     if(!done) return;
     awardXp("done-"+id,20); markActiveDay(); navigator.vibrate?.(30); playComplete(sound);
@@ -884,12 +982,10 @@ export default function Freely() {
     if(!t) return;
     if(!canDeleteTask(t)){ showToast("You don't have permission to delete this shared task"); return; }
     setTasks(ts=>ts.filter(x=>x.id!==id)); if(selTask?.id===id)setSelTask(null);
-    if(user)db.deleteTask(id)
-      .then(r=>{ if(r&&r.deleted===false) reportDroppedWrite("That task didn't delete — you may not have permission to remove it."); })
-      .catch(console.error);
+    queueTask({kind:"delete",id});
     let undone=false;
     const purge=setTimeout(()=>{ if(!undone&&user) purgeFiles([t]); },8000);
-    showToast("Task deleted", ()=>{ undone=true; clearTimeout(purge); setTasks(ts=>[t,...ts]); if(user) db.insertTask(t,t.owner||user.id).catch(console.error); setToast(null); });
+    showToast("Task deleted", ()=>{ undone=true; clearTimeout(purge); setTasks(ts=>[t,...ts]); queueTask({kind:"insert",id:t.id,task:t,owner:t.owner||user?.id}); setToast(null); });
   };
   // A copy stays in the same list and under the same owner — including in a list shared with you.
   const duplicateTask = task=>{ createTask({...task,id:crypto.randomUUID(),done:false,title:task.title+" (copy)",attachments:[]},{xp:false}); showToast("Task duplicated"); };
@@ -901,7 +997,7 @@ export default function Freely() {
     const seeds=sampleTasks(user.id).filter(s=>!have.has(s.title));
     if(!seeds.length){ showToast("The starter tasks are already in your list ✓"); return; }
     setTasks(ts=>[...seeds,...ts]);
-    seeds.forEach(s=>db.insertTask(s,user.id).catch(()=>{}));
+    seeds.forEach(sd=>queueTask({kind:"insert",id:sd.id,task:sd,owner:user.id}));
     navTo("myday");
     showToast(`Added ${seeds.length} starter task${seeds.length===1?"":"s"} — delete them whenever you're done 👋`);
   };
@@ -946,7 +1042,7 @@ export default function Freely() {
     if(!list.length) return 0;
     const ids=new Set(list.map(t=>t.id));
     setTasks(ts=>ts.filter(t=>!ids.has(t.id)));
-    if(user){ list.forEach(t=>db.deleteTask(t.id).catch(()=>{})); purgeFiles(list); }
+    if(user){ list.forEach(t=>queueTask({kind:"delete",id:t.id})); purgeFiles(list); }
     return list.length;
   };
   const clearCompleted=()=>{ const n=clearTasks(myTasks.filter(t=>t.done)); showToast(n?`Cleared ${n} completed`:"No completed tasks"); };
@@ -965,7 +1061,7 @@ export default function Freely() {
       const d=JSON.parse(reader.result);
       const isUuid=id=>/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id));
       const missing=(list,cur)=>{ const have=new Set(cur.map(x=>String(x.id))); return list.filter(x=>x&&!have.has(String(x.id))); };
-      if(Array.isArray(d.tasks)){ const inc=missing(d.tasks,tasks).filter(t=>isUuid(t.id)).map(t=>({...t,owner:user?.id})); setTasks(ts=>[...inc,...ts]); if(user) inc.forEach(t=>db.insertTask(t,user.id).catch(()=>{})); }
+      if(Array.isArray(d.tasks)){ const inc=missing(d.tasks,tasks).filter(t=>isUuid(t.id)).map(t=>({...t,owner:user?.id})); setTasks(ts=>[...inc,...ts]); inc.forEach(t=>queueTask({kind:"insert",id:t.id,task:t,owner:user?.id})); }
       if(Array.isArray(d.notes)) setNotes(ns=>[...missing(d.notes,ns).map(n=>isUuid(n.id)?n:{...n,id:crypto.randomUUID()}),...ns]);
       if(Array.isArray(d.canvasNotes)) setCanvasNotes(ns=>[...ns,...missing(d.canvasNotes,ns).map(n=>isUuid(n.id)?n:{...n,id:crypto.randomUUID()})]);
       if(Array.isArray(d.habits)) setHabits(hs=>[...hs,...missing(d.habits,hs).map((h,i)=>Number.isSafeInteger(Number(h.id))?{...h,id:Number(h.id)}:{...h,id:Date.now()+i})]);
@@ -993,9 +1089,7 @@ export default function Freely() {
     // Decide from the CURRENT selection, not this render's copy: an update that lands after the panel
     // closed (a finished upload, a title flushed on close) used to reopen it with a half-empty ghost task.
     setSelTask(s=>s&&s.id===id?{...s,...patch}:s);
-    if(user)db.updateTask(id,patch)
-      .then(r=>{ if(r&&r.saved===false) reportDroppedWrite("That change didn't save — you may not have permission to edit this shared task."); })
-      .catch(console.error);
+    queueTask({kind:"update",id,patch});
   };
   // Drop-position aware reorder: `before` says whether the card lands above or below the target
   // (from the pointer's position over the target's midpoint) — so first/last slots work too.
@@ -1021,10 +1115,24 @@ export default function Freely() {
   // In My Day today? Your own tasks carry it on the task itself; other people's tasks can't (the row is
   // theirs — writing it put your My Day into theirs), so those live in `mydayExtra`.
   const inMyDay=t=>t.owner===user?.id?t.mydayDate===todStr:(mydayExtra.date===todStr&&mydayExtra.ids.includes(t.id));
+  // Something added to My Day goes to the top of it, into the part of the day it is now — unless it has a
+  // time of its own, which decides instead.
   const setInMyDay=(t,on)=>{
     if(!t) return;
-    if(t.owner===user?.id){ updateTask(t.id,{mydayDate:on?todStr:null}); return; }
-    setMydayExtra(m=>{ const ids=m.date===todStr?m.ids.filter(x=>x!==t.id):[]; return {date:todStr,ids:on?[...ids,t.id]:ids,at:Date.now()}; });
+    const hasTime=!!(t.remindAt&&t.remindAt.includes("T"));
+    if(t.owner===user?.id){
+      updateTask(t.id,on?{mydayDate:todStr,position:edgePosition(),...(!t.mydayPart&&!hasTime?{mydayPart:partNow()}:{})}:{mydayDate:null});
+      return;
+    }
+    setMydayExtra(m=>{ const ids=m.date===todStr?m.ids.filter(x=>x!==t.id):[]; const parts={...(m.parts||{})};
+      if(on&&!parts[t.id]&&!hasTime) parts[t.id]=partNow();
+      return {...m,date:todStr,ids:on?[...ids,t.id]:ids,parts,at:Date.now()}; });
+  };
+  const partOf=t=>partOfTask(t,t.owner===user?.id?t.mydayPart:(mydayExtra.parts||{})[t.id]);
+  const setPart=(t,part)=>{
+    if(!t||!DAY_PARTS.includes(part)) return;
+    if(t.owner===user?.id){ updateTask(t.id,{mydayPart:part}); return; }
+    setMydayExtra(m=>({...m,parts:{...(m.parts||{}),[t.id]:part},at:Date.now()}));
   };
   const myDay=tasks.filter(inMyDay);
   const upcoming=myTasks.filter(inUpcoming);
@@ -1066,7 +1174,7 @@ export default function Freely() {
     const own=tasks.filter(t=>t.owner===user.id&&!t.done&&t.mydayDate&&t.mydayDate<todStr);
     own.forEach(t=>updateTask(t.id,{mydayDate:todStr}));
     let others=[];
-    if(mydayExtra.date&&mydayExtra.date<todStr){ others=mydayExtra.ids.filter(id=>{ const t=tasks.find(x=>x.id===id); return t&&!t.done; }); setMydayExtra({date:todStr,ids:others,at:Date.now()}); }
+    if(mydayExtra.date&&mydayExtra.date<todStr){ others=mydayExtra.ids.filter(id=>{ const t=tasks.find(x=>x.id===id); return t&&!t.done; }); setMydayExtra(m=>({...m,date:todStr,ids:others,at:Date.now()})); }
     const ids=[...own.map(t=>t.id),...others];
     if(ids.length) setCarriedIds(ids);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1136,13 +1244,13 @@ export default function Freely() {
   const meEmail=user?.email?.toLowerCase();
   // People I'm properly linked to: folder shares (both directions, via profiles for owner emails) + teammates.
   const idEmail=Object.fromEntries(profRows.map(r=>[r.id,r.email]));
-  const trusted=[...new Set([
+  const trusted=uniquePeople([
     ...(ownedShares||[]).map(s=>s.shared_with_email),
     ...sharedWithMe.map(s=>idEmail[s.owner_id]).filter(Boolean),
     ...sGroups.flatMap(g=>g.members||[]),
-  ])].filter(e=>e&&e!==meEmail);
+  ],[meEmail]);
   // Everyone pickable in assign/chat lists = trusted + anyone I've exchanged DMs with.
-  const knownPeople=[...new Set([...trusted,...messages.filter(m=>!m.group_id).map(m=>m.sender_email===meEmail?m.recipient_email:m.sender_email)])].filter(e=>e&&e!==meEmail);
+  const knownPeople=uniquePeople([...trusted,...messages.filter(m=>!m.group_id).map(m=>m.sender_email===meEmail?m.recipient_email:m.sender_email)],[meEmail]);
   // Everyone who can already see a given list — the people you'd hand its work to.
   // Works both ways: lists I share out, and lists shared with me (then it's the owner + the other guests).
   const collaboratorsOf=tag=>{
@@ -1163,12 +1271,12 @@ export default function Freely() {
     try{
       if(typeof peer==="string"&&peer.startsWith("g:")){
         const m=await db.sendMessage(user.id,user.email,null,body.trim(),parseInt(peer.slice(2),10));
-        setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,m]); return;
+        setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,normMessage(m)]); return;
       }
       const firstContact=!chatLinked(peer);
       if(firstContact) await db.sendChatReq(user.email,peer).catch(()=>{}); // file the request first so it lands as "a new person"
       const m=await db.sendMessage(user.id,user.email,peer,body.trim());
-      setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,m]);
+      setMessages(ms=>ms.some(x=>x.id===m.id)?ms:[...ms,normMessage(m)]);
       if(firstContact) showToast(`Friend request sent to ${nickOf(peer).split("@")[0]} 🤝 — they'll see it as a new chat.`);
     }catch(e){ showToast(setupError(e)?"⚙️ One-time setup needed: open Supabase → SQL Editor and run supabase/setup.sql, then reload.":/policy|violates/i.test(e.message||"")?"They haven't accepted your request yet — one message at a time until they do.":"Message failed: "+(e.message||e)); }
   };
@@ -1184,8 +1292,8 @@ export default function Freely() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[messages,view,dmPeer]);
   // Message anyone with a Freely account: look the email up in profiles first.
-  const startChat=async raw=>{ const em=(raw||"").trim().toLowerCase();
-    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ showToast("Enter a valid email like name@example.com"); return; }
+  const startChat=async raw=>{ const em=resolvePerson(raw,readContacts());
+    if(!em){ showToast("Enter an email like name@example.com — or the nickname you saved for them"); return; }
     if(em===meEmail){ showToast("That's you 😄"); return; }
     // Just open the thread. Your first message files a friend request; no confusing account-lookup message.
     openDM(em);
@@ -1330,7 +1438,7 @@ export default function Freely() {
   if(!user) return <AuthScreen/>;
 
   return (
-    <div style={{fontFamily:"'DM Sans',sans-serif",background:T.bg,color:T.text,height:"100%",display:"flex",overflow:"hidden",transition:"background .3s,color .3s"}}>
+    <div onWheel={sideWheel} style={{fontFamily:"'DM Sans',sans-serif",background:T.bg,color:T.text,height:"100%",display:"flex",overflow:"hidden",transition:"background .3s,color .3s"}}>
       <FontLink/>
       {focusTask&&zenOpen&&(
         <div style={{position:"fixed",inset:0,zIndex:1500,background:"linear-gradient(160deg,#0c0e16,#1b1038)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:14,color:"#eef0fa",padding:20}}>
@@ -1499,6 +1607,12 @@ export default function Freely() {
             <span style={{background:T.surface3,border:`1px solid ${T.border}`,padding:"1px 6px",borderRadius:4,fontSize:10,fontWeight:600}}>⌘K</span>
             <span>Command Palette</span>
           </button>
+          {(!online||pendingOps>0)&&(
+            <span title={!online?"No connection. Everything you do is kept on this device and sent the moment you're back online.":"Sending your changes…"}
+              style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:10,fontWeight:700,padding:"2px 9px",borderRadius:10,color:!online?T.warning:T.accent,background:(!online?T.warning:T.accent)+"22",whiteSpace:"nowrap"}}>
+              {!online?"☁️ Offline":"⟳ Syncing"}{pendingOps>0?` · ${pendingOps} waiting`:""}
+            </span>
+          )}
           <span style={{marginLeft:"auto",fontSize:11,color:T.textMuted}}>{myTasks.filter(t=>!t.done).length} tasks remaining</span>
         </div>
         {showSearch&&(
@@ -1522,6 +1636,7 @@ export default function Freely() {
             <TaskPanel T={T} tasks={getViewTasks()} view={view} input={input} setInput={setInput} inputRef={inputRef} addTask={addTask} toggleTask={toggleTask} deleteTask={deleteTask} updateTask={updateTask} reorderTasks={reorderTasks} duplicateTask={duplicateTask} selTask={selTask} setSelTask={setSelTask} newAnim={newAnim} cats={cats} onUndoCarry={undoCarry} carriedCount={carriedIds.length} suggestions={mydaySuggestions} onAddToMyDay={addToMyDay} onAttach={attachFiles} onRemoveAttach={removeAttach} onSetReminder={setReminder} onToggleMyDay={toggleMyDay} isInMyDay={inMyDay} todStr={todStr} canDeleteFn={canDeleteTask} canEditFn={canEditTask} onClearDone={clearDone} onViewImage={setImgView} onFocusTask={startFocus} mydayHabits={habitsToday} onHabitToggle={toggleHabitToday} onRenameList={renameCat} myEmail={meEmail} people={knownPeople} peopleGroups={allGroups} listPeople={collaboratorsOf} onAssign={(id,list)=>updateTask(id,{assignedTo:(list&&list.length)?[...new Set(list.map(e=>e.toLowerCase()))].join(","):null})}
               sortMode={viewSort} setSortMode={pickSort} showToast={showToast} onHelp={()=>setHelpOpen(true)}
               myId={user?.id} myTaskShares={ownedTaskShares} onShareTask={shareTask} onUnshareTask={unshareTask}
+              partOf={partOf} onSetPart={setPart}
               sharedInfo={sharedViewInfo} onLeaveShare={sharedViewInfo?()=>leaveShare(sharedViewInfo.owner,sharedViewInfo.folder):null}
               listManage={{ownedShares, onShare:shareFolder, onUnshare:unshareFolder, onDelete:deleteCat, setCats, onAssignAll:assignAllInLists, assignGroups:allGroups, onUploadIcon:uploadCatIcon}}/>
           )}
@@ -1683,7 +1798,7 @@ const CR=({icon,label,sub,T,onClick})=>(
   </div>
 );
 
-function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,myId,myTaskShares=[],onShareTask,onUnshareTask,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],listPeople=null,sharedInfo=null,onLeaveShare=null,listManage=null,sortMode="due",setSortMode,showToast,onHelp,canEditFn=null,isInMyDay}) {
+function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,deleteTask,updateTask,reorderTasks,duplicateTask,selTask,setSelTask,newAnim,cats,myId,myTaskShares=[],onShareTask,onUnshareTask,partOf,onSetPart,onUndoCarry,carriedCount,suggestions,onAddToMyDay,onAttach,onRemoveAttach,onSetReminder,onToggleMyDay,todStr,canDeleteFn,onClearDone,onViewImage,onFocusTask,mydayHabits=[],onHabitToggle,onRenameList,myEmail,people=[],onAssign,peopleGroups=[],listPeople=null,sharedInfo=null,onLeaveShare=null,listManage=null,sortMode="due",setSortMode,showToast,onHelp,canEditFn=null,isInMyDay}) {
   const narrow=useNarrow();
   const readOnly=!!(sharedInfo&&sharedInfo.canEdit===false);   // a view-only share: no add box, no ticking, no swiping
   const [manageMode,setManageMode]=useState(null); // "edit" (name/icon/color) | "share" (share/assign)
@@ -1723,8 +1838,10 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
   // The order the cards are actually in, top to bottom — overdue first in Upcoming, then the rest.
   // The render below and a dropped card both read this, so they can never disagree about neighbours.
   const isLate=t=>t.due&&!isTbd(t.due)&&t.due<todStr;
+  const byParts=view==="myday"&&!!partOf;
   const shownOrder=()=>{
     const open=sortList(show.filter(t=>!t.done));
+    if(byParts) return DAY_PARTS.flatMap(pt=>open.filter(t=>partOf(t)===pt));
     if(!upcomingLike) return open;
     const late=open.filter(isLate);
     return late.length?[...late,...open.filter(t=>!isLate(t))]:open;
@@ -1788,9 +1905,19 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
               : ev.clientY<mid;
             hit={id:cid,before};
           } }
+        else { const zone=el&&el.closest("[data-part-drop]"); if(zone) hit={part:zone.getAttribute("data-part-drop")}; }
         dropRef.current=hit; setDrop(hit); },
       ()=>{ ghost.remove(); const from=dragIdRef.current,to=dropRef.current;
-        if(from!=null&&to) reorderTasks(from,to.id,to.before,shownOrder());
+        if(from!=null&&to){
+          const moved=tasks.find(x=>String(x.id)===String(from));
+          if(to.part){ if(moved) onSetPart?.(moved,to.part); }                    // onto a part's heading or empty space
+          else {
+            reorderTasks(from,to.id,to.before,shownOrder());
+            // …and dropped among another part's cards, it joins that part
+            const target=tasks.find(x=>String(x.id)===String(to.id));
+            if(byParts&&moved&&target&&partOf(target)!==partOf(moved)) onSetPart?.(moved,partOf(target));
+          }
+        }
         dragIdRef.current=null; dropRef.current=null; setDragId(null); setDrop(null); },
       {scroll:true,from:fromEl}
     );
@@ -1977,7 +2104,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
           <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>🚩 Your shortlist. Open any task and tap the flag to add or remove it here.</div>
         )}
         {view==="myday"&&(
-          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>☀️ Today only. Anything left unfinished is carried over tomorrow — and suggestions for what to pull in are at the bottom.</div>
+          <div style={{fontSize:10,color:T.textMuted,opacity:.55,marginBottom:10,lineHeight:1.5}}>☀️ Today only, in three parts — drag a task between them{COARSE?"":" or right-click it"}. Anything unfinished carries over to tomorrow in the same part, and suggestions for what to pull in are at the bottom.</div>
         )}
         {(
           <div style={{display:"flex",gap:5,marginBottom:12}}>
@@ -2000,6 +2127,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
             const shown=shownOrder();
             const late=upcomingLike?shown.filter(isLate):[];
             const rest=late.length?shown.filter(t=>!isLate(t)):shown;
+            const PART_LABEL={morning:"🌅 Morning",afternoon:"☀️ Afternoon",evening:"🌙 Evening"};
             // The drop marker is drawn ON the card it points at, not inserted between cards.
             // Inserting it used to push every card below it down by its own height, which moved
             // the card under your finger, which moved the marker — the list jittered as you held it.
@@ -2017,7 +2145,17 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
                 {late.map(card)}
                 <div style={{height:1,background:T.border,margin:"8px 2px 4px"}}/>
               </>}
-              {rest.map(card)}
+              {byParts
+                ? DAY_PARTS.map(pt=>{ const items=rest.filter(t=>partOf(t)===pt), over=drop?.part===pt; return (
+                    <div key={pt} style={{display:"flex",flexDirection:"column",gap:4,marginBottom:6}}>
+                      <div data-part-drop={pt} style={{fontSize:10,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase",color:over?T.accent:T.textMuted,padding:"6px 4px 3px",borderRadius:7,background:over?T.accentGlow:"transparent",display:"flex",alignItems:"center",gap:6}}>
+                        {PART_LABEL[pt]} <span style={{fontWeight:600,opacity:.7}}>· {items.length}</span>
+                      </div>
+                      {items.map(card)}
+                      {items.length===0&&<div data-part-drop={pt} style={{fontSize:10,color:over?T.accent:T.textMuted,opacity:over?1:.5,padding:"8px 10px",border:`1px dashed ${over?T.accent:T.border}`,borderRadius:9,background:over?T.accentGlow:"transparent"}}>{dragId?"Drop here":"Nothing here — drag a task in"}</div>}
+                    </div>
+                  ); })
+                : rest.map(card)}
             </>);
           })()}
           {show.filter(t=>t.done).length>0&&<>
@@ -2025,7 +2163,7 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
               <Ico n="check" s={11} c={T.textMuted}/> Completed · {show.filter(t=>t.done).length}
               <button onClick={()=>onClearDone?.(show.filter(t=>t.done).map(t=>t.id))} style={{marginLeft:"auto",background:"none",border:"none",cursor:"pointer",color:T.danger,fontSize:10,fontWeight:700,letterSpacing:".3px",fontFamily:"'DM Sans',sans-serif",textTransform:"none"}}>Clear all</button>
             </div>
-            {show.filter(t=>t.done).map(task=>(
+            {show.filter(t=>t.done).sort(byRecentlyDone).map(task=>(
               <TCard key={task.id} task={task} T={T} cats={cats} onToggle={toggleTask} onDelete={deleteTask} onSel={selectCard} sel={selTask?.id===task.id} canDelete={canDeleteFn?canDeleteFn(task):true} inMyDay={isInMyDay?.(task)} onToggleMyDay={onToggleMyDay}/>
             ))}
           </>}
@@ -2076,6 +2214,10 @@ function TaskPanel({T,tasks,view,input,setInput,inputRef,addTask,toggleTask,dele
               {row("📅 Due today",()=>updateTask(t.id,moveDuePatch(t,todStr)))}
               {row("🌤 Due tomorrow",()=>updateTask(t.id,moveDuePatch(t,addDays(1))))}
               {row(isInMyDay?.(t)?"☀️ Remove from My Day":"☀️ Add to My Day",()=>onToggleMyDay?.(t.id))}
+              {byParts&&<div style={{display:"flex",gap:4,padding:"3px 9px 5px"}}>
+                {DAY_PARTS.map(pt=><button key={pt} onClick={()=>{ onSetPart?.(t,pt); setMenu(null); }} title={`Move to ${pt}`}
+                  style={{flex:1,padding:"4px 0",borderRadius:7,border:`1px solid ${partOf(t)===pt?T.accent:T.border}`,background:partOf(t)===pt?T.accentGlow:"transparent",color:partOf(t)===pt?T.accent:T.textMuted,cursor:"pointer",fontSize:13}}>{pt==="morning"?"🌅":pt==="afternoon"?"☀️":"🌙"}</button>)}
+              </div>}
               {row(t.starred?"🚩 Remove flag":"🚩 Flag it",()=>updateTask(t.id,{starred:!t.starred}))}
               {row(t.done?"↩️ Mark unfinished":"✓ Mark done",()=>toggleTask(t.id))}
               {(canDeleteFn?canDeleteFn(t):true)&&row("🗑 Delete",()=>deleteTask(t.id),true)}
@@ -2417,7 +2559,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
         const cur=assigneesOf(task);
         const toggle=em=>{ em=em.toLowerCase(); onAssign(task.id, cur.includes(em)?cur.filter(x=>x!==em):[...cur,em]); };
         const addGroup=g=>{ const merged=[...new Set([...cur,...g.members.map(m=>m.toLowerCase())])]; onAssign(task.id,merged); };
-        const quick=[...new Set([...(myEmail?[myEmail]:[]),...people])];
+        const quick=uniquePeople([...(myEmail?[myEmail]:[]),...people]);
         const mates=(listPeople?listPeople(task.tag):[]).filter(Boolean);
         const allMates=mates.length>0&&mates.every(m=>cur.includes(m));
         return (
@@ -2453,7 +2595,7 @@ function TDetail({task,T,cats,onUpdate,onDelete,onDuplicate,onAttach,onRemoveAtt
             </div>
           </>}
           <div style={{display:"flex",gap:5,marginTop:7}}>
-            <input value={assignInput} onChange={e=>setAssignInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){const em=assignInput.trim().toLowerCase();if(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){toggle(em);setAssignInput("");}else alert("Enter a valid email.");}}} placeholder="add by email…" style={{flex:1,minWidth:0,padding:"5px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:11,outline:"none"}}/>
+            <input value={assignInput} onChange={e=>setAssignInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){const em=resolvePerson(assignInput,readContacts());if(em){toggle(em);setAssignInput("");}else alert("Enter an email, or a nickname you've saved.");}}} placeholder="add by email…" style={{flex:1,minWidth:0,padding:"5px 8px",borderRadius:7,border:`1px solid ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:11,outline:"none"}}/>
           </div>
           {cur.length>0&&(
             <button onClick={()=>onUpdate(task.id,{assignPrivate:!task.assignPrivate})}
@@ -4126,7 +4268,7 @@ function MessagesView({T,myEmail,messages,people=[],groups=[],reqs=[],trusted=[]
       </div>
       <p style={{fontSize:12,color:T.textMuted,marginBottom:12}}>Chat with teammates and collaborators — or message any Freely user by email (they get a request; you can send one message until they accept or reply).</p>
       <div style={{display:"flex",gap:6,marginBottom:16}}>
-        <input value={newChat} onChange={e=>setNewChat(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&newChat.trim()){onStartChat(newChat);setNewChat("");}}} placeholder="Start a chat — type any Freely user's email…" style={{flex:1,minWidth:0,padding:"9px 12px",borderRadius:10,border:`1px dashed ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
+        <input value={newChat} onChange={e=>setNewChat(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&newChat.trim()){onStartChat(newChat);setNewChat("");}}} placeholder="Start a chat — an email, or a nickname you've saved…" style={{flex:1,minWidth:0,padding:"9px 12px",borderRadius:10,border:`1px dashed ${T.border}`,background:T.surface2,color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none"}}/>
         <button onClick={()=>{ if(newChat.trim()){onStartChat(newChat);setNewChat("");} }} disabled={!newChat.trim()} style={{padding:"0 16px",borderRadius:10,border:"none",cursor:newChat.trim()?"pointer":"default",background:newChat.trim()?T.grad:T.surface3,color:"#fff",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif",opacity:newChat.trim()?1:.5}}>Chat</button>
       </div>
       {(()=>{ const incoming=reqs.filter(r=>r.to_email===myEmail&&r.status==="pending"); if(!incoming.length) return null;

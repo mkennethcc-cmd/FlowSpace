@@ -10,6 +10,10 @@ function builder(table) {
   const run = async () => {
     store.requests++;
     if (store.failAt != null && store.requests >= store.failAt) { store.failAt = null; return { data: null, error: { message: "network error (simulated)" } }; }
+    // A database that predates a column refuses any write that names it (store.missingCols).
+    const named = st.op === "update" ? Object.keys(st.rows || {}) : (st.op === "insert" || st.op === "upsert") ? st.rows.flatMap(Object.keys) : [];
+    const absent = (store.missingCols || []).find(c => named.includes(c));
+    if (absent) return { data: null, error: { message: `Could not find the '${absent}' column of '${table}' in the schema cache` } };
     const rows = tbl(table);
     const match = r => st.filters.every(([k, op, v]) => op === "eq" ? String(r[k]) === String(v) : op === "in" ? v.map(String).includes(String(r[k])) : true);
     if (st.op === "select") {
@@ -27,7 +31,7 @@ function builder(table) {
       }
       return { data: null, error: null };
     }
-    if (st.op === "update") { rows.filter(match).forEach(r => Object.assign(r, st.rows)); return { data: null, error: null }; }
+    if (st.op === "update") { const hit = rows.filter(match); hit.forEach(r => Object.assign(r, st.rows)); return { data: st.wantRows ? hit.map(r => ({ id: r.id })) : null, error: null }; }
   };
   const b = {
     select() { if (st.op !== "select") st.wantRows = true; return b; },
